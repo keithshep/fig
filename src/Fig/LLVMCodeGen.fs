@@ -128,7 +128,7 @@ let rec genInstructions
             match instStack with
             | stackHead :: stackTail ->
                 buildStore bldr stackHead args.[int i] |> ignore
-                goNext instStack
+                goNext stackTail
             | _ ->
                 failwith "instruction stack too low"
         | I_stind _ ->  //of  ILAlignment * ILVolatility * ILBasicType
@@ -323,23 +323,6 @@ let rec genCode
             iprintfn (depth + 1) "filterCatchBlock TODO"
 
 let genAlloca (bldr : BuilderRef) (depth : int) (t : ILType) =
-    let tyStr =
-        match t with
-        | ILType.Void -> "void"
-        | ILType.Array (ilArrayShape, ilType) -> "array"
-        | ILType.Value typeSpec ->
-            match typeSpec.tspecTypeRef.trefName with
-            | "System.Int32" ->
-                "int32 value"
-            | _ -> failwith (sprintf "unknown value type %A" typeSpec)
-        | ILType.Boxed ilTypeSpec -> "boxed"
-        | ILType.Ptr ilType -> "ptr"
-        | ILType.Byref ilType -> "byref"
-        | ILType.FunctionPointer ilCallingSignature -> "funPtr"
-        | ILType.TypeVar ui -> "typevar"
-        | ILType.Modified (required, modifierRef, ilType) -> "modified"
-    iprintfn depth "%s" tyStr
-    
     match t with
     | ILType.Void
     | ILType.Array _ -> failwith "unsuported local type"
@@ -357,6 +340,23 @@ let genAlloca (bldr : BuilderRef) (depth : int) (t : ILType) =
     | ILType.Modified _ -> failwith "unsuported local type"
 
 let genLocal (bldr : BuilderRef) (depth : int) (l : ILLocal) =
+    let tyStr =
+        match l.Type with
+        | ILType.Void -> "void"
+        | ILType.Array (ilArrayShape, ilType) -> "array"
+        | ILType.Value typeSpec ->
+            match typeSpec.tspecTypeRef.trefName with
+            | "System.Int32" ->
+                "int32 value"
+            | _ -> failwith (sprintf "unknown value type %A" typeSpec)
+        | ILType.Boxed ilTypeSpec -> "boxed"
+        | ILType.Ptr ilType -> "ptr"
+        | ILType.Byref ilType -> "byref"
+        | ILType.FunctionPointer ilCallingSignature -> "funPtr"
+        | ILType.TypeVar ui -> "typevar"
+        | ILType.Modified (required, modifierRef, ilType) -> "modified"
+    iprintfn depth "%s" tyStr
+    
     genAlloca bldr depth l.Type
 
 let genParam (bldr : BuilderRef) (depth : int) (p : ILParameter) =
@@ -365,7 +365,7 @@ let genParam (bldr : BuilderRef) (depth : int) (p : ILParameter) =
 let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
     let rec go (c : ILCode) =
         match c with
-        | ILBasicBlock bb -> [(bb.Label, appendBasicBlock methodVal (string bb.Label))]
+        | ILBasicBlock bb -> [(bb.Label, appendBasicBlock methodVal ("block_" + string bb.Label))]
         | GroupBlock (debugMappings, codes) -> List.collect go codes
         | RestrictBlock (codeLabels, code) -> go code
         | TryBlock (tCode, exceptionBlock) -> failwith "TryBlock not yet implemented"
@@ -373,8 +373,6 @@ let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
     go c
 
 let genMethodBody (methodVal : ValueRef) (depth : int) (md : ILMethodDef) (mb : ILMethodBody) =
-    iprintfn (depth + 1) "locals"
-
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
 
@@ -382,6 +380,7 @@ let genMethodBody (methodVal : ValueRef) (depth : int) (md : ILMethodDef) (mb : 
     for i = 0 to args.Length - 1 do
         buildStore bldr (getParam methodVal (uint32 i)) args.[i] |> ignore
     
+    iprintfn (depth + 1) "locals"
     let locals = List.map (genLocal bldr (depth + 2)) mb.Locals
     let blockDecs = addBlockDecs methodVal mb.Code
 
@@ -445,19 +444,4 @@ let rec genTypeDef (moduleRef : ModuleRef) (depth : int) (td : ILTypeDef) =
 
 let genTypeDefs (moduleRef : ModuleRef) (typeDefs : ILTypeDefs) =
     Seq.iter (genTypeDef moduleRef 0) typeDefs
-
-//[<EntryPoint>]
-//let main args =
-//    match args with
-//    | [| inFile |] ->
-//        let il = OpenILModuleReader inFile defaults
-//        let moduleRef = moduleCreateWithName "myModule"
-//        
-//        genTypeDefs moduleRef il.ILModuleDef.TypeDefs
-//        LLVM.Generated.BitWriter.writeBitcodeToFile moduleRef (inFile + ".bc") |> ignore
-//
-//    | _ -> failwith (sprintf "bad options %A" args)
-//
-//    // exit success
-//    0
 
