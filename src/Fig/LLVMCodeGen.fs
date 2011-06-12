@@ -114,7 +114,7 @@ let rec genInstructions
             | ILConst.R8 r -> noImpl ()
         | I_ldarg i ->
             printInst ()
-            goNext (getParam methodVal (uint32 i) :: instStack)
+            goNext (buildLoad bldr args.[int i] "tmpArg" :: instStack)
         | I_ldarga _    //of uint16
         | I_ldind _ ->  //of ILAlignment * ILVolatility * ILBasicType
             noImpl ()
@@ -379,6 +379,9 @@ let genMethodBody (methodVal : ValueRef) (depth : int) (md : ILMethodDef) (mb : 
     use bldr = new Builder(appendBasicBlock methodVal "entry")
 
     let args = List.map (genParam bldr (depth + 2)) md.Parameters
+    for i = 0 to args.Length - 1 do
+        buildStore bldr (getParam methodVal (uint32 i)) args.[i] |> ignore
+    
     let locals = List.map (genLocal bldr (depth + 2)) mb.Locals
     let blockDecs = addBlockDecs methodVal mb.Code
 
