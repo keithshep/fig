@@ -6,17 +6,32 @@ open Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader
 open LLVM.Generated.Core
 open LLVM.Core
 
+let rec splitAt i xs =
+    if i = 0 then
+        ([], xs)
+    else
+        match xs with
+        | [] -> failwith "not enough elements for split"
+        | x :: xt ->
+            let splitFst, splitSnd = splitAt (i - 1) xt
+            (x :: splitFst, splitSnd)
+
 let inline ifprintfn depth out fmt =
     for i = 0 to depth - 1 do
         fprintf out "  "
     fprintfn out fmt
 let inline iprintfn depth fmt = ifprintfn depth stdout fmt
 
+type ValAnno =
+    | Unsigned
+    | Signed
+
 let rec genInstructions
         (bldr : BuilderRef)
+        (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (args : ValueRef list)
-        (locals : ValueRef list)
+        (args : (ValueRef * ValAnno) list)
+        (locals : (ValueRef * ValAnno) list)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : ILBasicBlock)
         (instStack : ValueRef list)
@@ -30,7 +45,7 @@ let rec genInstructions
         | None      -> ()
     | inst :: instTail ->
         let goNext (instStack : ValueRef list) =
-            genInstructions bldr methodVal args locals blockMap ilBB instStack depth instTail
+            genInstructions bldr moduleRef methodVal args locals blockMap ilBB instStack depth instTail
         let printInst () = iprintfn depth "%A" inst
         let noImpl () =
             //failwith (sprintf "instruction <<%A>> not implemented" inst)
@@ -114,20 +129,20 @@ let rec genInstructions
             | ILConst.R8 r -> noImpl ()
         | I_ldarg i ->
             printInst ()
-            goNext (buildLoad bldr args.[int i] "tmpArg" :: instStack)
+            goNext (buildLoad bldr (fst args.[int i]) "tmpArg" :: instStack)
         | I_ldarga _    //of uint16
         | I_ldind _ ->  //of ILAlignment * ILVolatility * ILBasicType
             noImpl ()
         | I_ldloc loc ->
             printInst ()
-            let loadResult = buildLoad bldr locals.[int loc] "tmp"
+            let loadResult = buildLoad bldr (fst locals.[int loc]) "tmp"
             goNext (loadResult :: instStack)
         | I_ldloca _ -> noImpl ()   //of uint16
         | I_starg i ->  //of uint16
             printInst ()
             match instStack with
             | stackHead :: stackTail ->
-                buildStore bldr stackHead args.[int i] |> ignore
+                buildStore bldr stackHead (fst args.[int i]) |> ignore
                 goNext stackTail
             | _ ->
                 failwith "instruction stack too low"
@@ -183,12 +198,15 @@ let rec genInstructions
             | _ ->
                 failwith "instruction stack too low"
          // Method call
-        | I_call (tailCall, methodSpec, varArgs) ->
+        | I_call (tailCall, methodSpec, varArgs) -> // TODO do something w/ tailcall
             iprintfn depth "call: %s::%s GenArgs=%A" methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
-            // TODO
-            goNext instStack
+            let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
+            let funRef = getNamedFunction moduleRef methodSpec.Name // TODO this naming lookup is too weak (prone to collisions)
+            let callResult = buildCall bldr funRef (Array.ofList args) "callResult"
+            goNext (callResult :: stackTail)
+            //goNext instStack
         | I_callvirt (tailCall, methodSpec, varArgs) ->
-            iprintfn depth "callvirt: %s::%s GenArgs=%A"  methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
+            iprintfn depth "callvirt: %s::%s GenArgs=%A <-- TODO"  methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
             // TODO
             goNext instStack
         | I_callconstraint _ //of ILTailcall * ILType * ILMethodSpec * ILVarArgs
@@ -276,9 +294,10 @@ let rec genInstructions
         | I_other _ -> noImpl ()   //of IlxExtensionInstr
 
 let genBasicBlock
+        (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (args : ValueRef list)
-        (locals : ValueRef list)
+        (args : (ValueRef * ValAnno) list)
+        (locals : (ValueRef * ValAnno) list)
         (blockMap : Map<int, BasicBlockRef>)
         (depth : int)
         (ilBB : ILBasicBlock) =
@@ -287,21 +306,22 @@ let genBasicBlock
     | None      -> iprintfn depth "basicblock (%i)" ilBB.Label
 
     use bldr = new Builder(blockMap.[ilBB.Label])
-    genInstructions bldr methodVal args locals blockMap ilBB [] (depth + 1) (List.ofArray ilBB.Instructions)
+    genInstructions bldr moduleRef methodVal args locals blockMap ilBB [] (depth + 1) (List.ofArray ilBB.Instructions)
 
 let rec genCode
+        (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (args : ValueRef list)
-        (locals : ValueRef list)
+        (args : (ValueRef * ValAnno) list)
+        (locals : (ValueRef * ValAnno) list)
         (blockMap : Map<int, BasicBlockRef>)
         (depth : int)
         (c : ILCode) =
 
-    let genNextCode = genCode methodVal args locals blockMap
+    let genNextCode = genCode moduleRef methodVal args locals blockMap
     
     iprintfn depth "code"
     match c with
-    | ILBasicBlock bb -> genBasicBlock methodVal args locals blockMap (depth + 1) bb
+    | ILBasicBlock bb -> genBasicBlock moduleRef methodVal args locals blockMap (depth + 1) bb
     | GroupBlock (debugMappings, codes) ->
         iprintfn depth "groupblock"
         for c in codes do
@@ -328,8 +348,10 @@ let genAlloca (bldr : BuilderRef) (depth : int) (t : ILType) =
     | ILType.Array _ -> failwith "unsuported local type"
     | ILType.Value typeSpec ->
         match typeSpec.tspecTypeRef.trefName with
-        | "System.Int32" ->
-            buildAlloca bldr (int32Type ()) "localInteger"
+        | "System.Int32"  ->
+            (buildAlloca bldr (int32Type ()) "int32Var", Signed)
+        | "System.UInt32" ->
+            (buildAlloca bldr (int32Type ()) "uint32Var", Unsigned)
         | _ ->
             failwith (sprintf "unknown value type %A" typeSpec)
     | ILType.Boxed _
@@ -348,6 +370,8 @@ let genLocal (bldr : BuilderRef) (depth : int) (l : ILLocal) =
             match typeSpec.tspecTypeRef.trefName with
             | "System.Int32" ->
                 "int32 value"
+            | "System.UInt32" ->
+                "uint32 value"
             | _ -> failwith (sprintf "unknown value type %A" typeSpec)
         | ILType.Boxed ilTypeSpec -> "boxed"
         | ILType.Ptr ilType -> "ptr"
@@ -372,13 +396,13 @@ let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
 
     go c
 
-let genMethodBody (methodVal : ValueRef) (depth : int) (md : ILMethodDef) (mb : ILMethodBody) =
+let genMethodBody (moduleRef : ModuleRef) (methodVal : ValueRef) (depth : int) (md : ILMethodDef) (mb : ILMethodBody) =
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
 
     let args = List.map (genParam bldr (depth + 2)) md.Parameters
     for i = 0 to args.Length - 1 do
-        buildStore bldr (getParam methodVal (uint32 i)) args.[i] |> ignore
+        buildStore bldr (getParam methodVal (uint32 i)) (fst args.[i]) |> ignore
     
     iprintfn (depth + 1) "locals"
     let locals = List.map (genLocal bldr (depth + 2)) mb.Locals
@@ -388,7 +412,7 @@ let genMethodBody (methodVal : ValueRef) (depth : int) (md : ILMethodDef) (mb : 
     | [] -> failwith ("empty method body: " + md.Name)
     | (_, fstBlockDec) :: _ ->
         buildBr bldr fstBlockDec |> ignore
-        genCode methodVal args locals (Map.ofList blockDecs) (depth + 1) mb.Code
+        genCode moduleRef methodVal args locals (Map.ofList blockDecs) (depth + 1) mb.Code
 
 let paramType (param : ILParameter) =
     match param.Type with
@@ -396,7 +420,8 @@ let paramType (param : ILParameter) =
     | ILType.Array (ilArrayShape, ilType) -> failwith "array param"
     | ILType.Value typeSpec ->
         match typeSpec.tspecTypeRef.trefName with
-        | "System.Int32" -> int32Type ()
+        | "System.Int32"
+        | "System.UInt32" -> int32Type ()
         | _ -> failwith (sprintf "unknown param value type %A" typeSpec)
     | ILType.Boxed ilTypeSpec -> failwith "boxed param"
     | ILType.Ptr ilType -> failwith "ptr param"
@@ -411,7 +436,8 @@ let returnType (retTy : ILReturn) =
     | ILType.Array (ilArrayShape, ilType) -> failwith "array return"
     | ILType.Value typeSpec ->
         match typeSpec.tspecTypeRef.trefName with
-        | "System.Int32" -> int32Type ()
+        | "System.Int32"
+        | "System.UInt32" -> int32Type ()
         | _ -> failwith (sprintf "unknown return value type %A" typeSpec)
     | ILType.Boxed ilTypeSpec -> failwith "boxed return"
     | ILType.Ptr ilType -> failwith "ptr return"
@@ -428,7 +454,12 @@ let genMethodDef (moduleRef : ModuleRef) (depth : int) (md : ILMethodDef) =
     match md.mdBody.Contents with
     | MethodBody.IL mb ->
         let fn = addFunction moduleRef md.Name funcTy
-        genMethodBody fn depth md mb
+        for i = 0 to md.Parameters.Length - 1 do
+            match md.Parameters.[i].Name with
+            | Some name -> setValueName (getParam fn (uint32 i)) name |> ignore
+            | None -> setValueName (getParam fn (uint32 i)) ("arg" + string i) |> ignore
+
+        genMethodBody moduleRef fn depth md mb
     | MethodBody.PInvoke pInvokeMethod -> iprintfn depth "PInvoke: %s" pInvokeMethod.Name
     | MethodBody.Abstract -> iprintfn (depth + 1) "abstract"
     | MethodBody.Native -> iprintfn (depth + 1) "native"
