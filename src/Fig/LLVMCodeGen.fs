@@ -22,16 +22,22 @@ let inline ifprintfn depth out fmt =
     fprintfn out fmt
 let inline iprintfn depth fmt = ifprintfn depth stdout fmt
 
-type ValAnno =
-    | Unsigned
-    | Signed
+type AnnoVal =
+    | UIntVal of ValueRef
+    | IntVal of ValueRef
+    with
+        member x.Val
+            with get () =
+                match x with
+                | UIntVal v -> v
+                | IntVal v -> v
 
 let rec genInstructions
         (bldr : BuilderRef)
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (args : (ValueRef * ValAnno) list)
-        (locals : (ValueRef * ValAnno) list)
+        (args : AnnoVal list)
+        (locals : AnnoVal list)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : ILBasicBlock)
         (instStack : ValueRef list)
@@ -55,10 +61,13 @@ let rec genInstructions
         match inst with
         // Basic
         | AI_add ->
+            // The add instruction adds value2 to value1 and pushes the result
+            // on the stack. Overflow is not detected for integral operations
+            // (but see add.ovf); floating-point overflow returns +inf or -inf.
             printInst ()
             match instStack with
-            | leftSide :: rightSide :: stackTail ->
-                let addResult = buildAdd bldr leftSide rightSide "tmpAdd"
+            | value2 :: value1 :: stackTail ->
+                let addResult = buildAdd bldr value1 value2 "tmpAdd"
                 goNext (addResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
@@ -82,12 +91,17 @@ let rec genInstructions
         | AI_rem_un
         | AI_shl
         | AI_shr
-        | AI_shr_un
+        | AI_shr_un -> noImpl ()
         | AI_sub ->
+            // The sub instruction subtracts value2 from value1 and pushes the
+            // result on the stack. Overflow is not detected for the integral
+            // operations (see sub.ovf); for floating-point operands, sub
+            // returns +inf on positive overflow inf on negative overflow, and
+            // zero on floating-point underflow.
             printInst ()
             match instStack with
-            | leftSide :: rightSide :: stackTail ->
-                let subResult = buildSub bldr leftSide rightSide "tmpSub"
+            | value2 :: value1 :: stackTail ->
+                let subResult = buildSub bldr value1 value2 "tmpSub"
                 goNext (subResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
@@ -124,31 +138,58 @@ let rec genInstructions
                 | DT_I
                 | DT_U
                 | DT_REF -> noImpl ()
-            | ILConst.I8 i -> noImpl ()
+            | ILConst.I8 i ->
+                match basicType with
+                | DT_R
+                | DT_I1
+                | DT_U1
+                | DT_I2
+                | DT_U2
+                | DT_I4
+                | DT_U4 -> noImpl ()
+                | DT_I8 ->
+                    printInst ()
+                    let constResult = constInt (int64Type ()) (uint64 i) false // TODO correct me!!
+                    goNext (constResult :: instStack)
+                | DT_U8
+                | DT_R4
+                | DT_R8
+                | DT_I
+                | DT_U
+                | DT_REF -> noImpl ()
             | ILConst.R4 r -> noImpl ()
             | ILConst.R8 r -> noImpl ()
         | I_ldarg i ->
             printInst ()
-            goNext (buildLoad bldr (fst args.[int i]) "tmpArg" :: instStack)
+            let name = "tmp_" + getValueName args.[int i].Val
+            goNext (buildLoad bldr args.[int i].Val name :: instStack)
         | I_ldarga _    //of uint16
         | I_ldind _ ->  //of ILAlignment * ILVolatility * ILBasicType
             noImpl ()
         | I_ldloc loc ->
             printInst ()
-            let loadResult = buildLoad bldr (fst locals.[int loc]) "tmp"
+            let loadResult = buildLoad bldr locals.[int loc].Val "tmp"
             goNext (loadResult :: instStack)
         | I_ldloca _ -> noImpl ()   //of uint16
         | I_starg i ->  //of uint16
             printInst ()
             match instStack with
             | stackHead :: stackTail ->
-                buildStore bldr stackHead (fst args.[int i]) |> ignore
+                buildStore bldr stackHead args.[int i].Val |> ignore
                 goNext stackTail
             | _ ->
                 failwith "instruction stack too low"
         | I_stind _ ->  //of  ILAlignment * ILVolatility * ILBasicType
             noImpl ()
-        | I_stloc loc -> noImpl ()
+        | I_stloc loc ->
+            printInst ()
+            match instStack with
+            | stackHead :: stackTail ->
+                buildStore bldr stackHead locals.[int loc].Val |> ignore
+                goNext stackTail
+            | _ ->
+                failwith "instruction stack too low"
+        
         // Control transfer
         | I_br i ->    //of  ILCodeLabel
             buildBr bldr blockMap.[i] |> ignore
@@ -157,15 +198,15 @@ let rec genInstructions
         | I_brcmp (comparisonInstr, codeLabel, fallThroughCodeLabel) ->
             printInst ()
             match instStack with
-            | leftSide :: rightSide :: stackTail ->
+            //| leftSide :: rightSide :: stackTail ->
+            | value2 :: value1 :: stackTail ->
                 let isIntCmp = true
                 if isIntCmp then
                     
                     let brWith op =
-                        let brTest = buildICmp bldr op leftSide rightSide "brTest"
+                        //let brTest = buildICmp bldr op leftSide rightSide "brTest"
+                        let brTest = buildICmp bldr op value1 value2 "brTest"
                         buildCondBr bldr brTest blockMap.[codeLabel] blockMap.[fallThroughCodeLabel] |> ignore
-                    let uncondBr blockLbl =
-                        buildBr bldr blockMap.[blockLbl] |> ignore
                     
                     match comparisonInstr with
                     | BI_beq     -> brWith IntPredicate.IntEQ
@@ -178,8 +219,8 @@ let rec genInstructions
                     | BI_blt     -> brWith IntPredicate.IntSLT
                     | BI_blt_un  -> brWith IntPredicate.IntULT
                     | BI_bne_un  -> brWith IntPredicate.IntNE
-                    | BI_brfalse -> uncondBr fallThroughCodeLabel
-                    | BI_brtrue  -> uncondBr codeLabel
+                    | BI_brfalse -> noImpl ()
+                    | BI_brtrue  -> noImpl ()
                 else
                      // TODO float comparison else
                     failwith "not yet implemented"
@@ -187,9 +228,17 @@ let rec genInstructions
             | _ ->
                 failwith "instruction stack too low"
 
-            
-        | I_switch _ ->    //of (ILCodeLabel list * ILCodeLabel) (* last label is fallthrough *)
-            noImpl ()
+        | I_switch (codeLabels, fallThroughCodeLabel) ->    //of (ILCodeLabel list * ILCodeLabel) (* last label is fallthrough *)
+            printInst ()
+            match instStack with
+            | [] -> failwith "empty instruction stack"
+            | value :: stackTail ->
+                let caseInts =
+                    [for i in 0 .. codeLabels.Length - 1 ->
+                        constInt (int32Type ()) (uint64 i) false]
+                let caseBlocks = [for l in codeLabels -> blockMap.[l]]
+                buildSwitchWithCases bldr value (List.zip caseInts caseBlocks) blockMap.[fallThroughCodeLabel]
+        
         | I_ret ->
             printInst ()
             match instStack with
@@ -201,6 +250,7 @@ let rec genInstructions
         | I_call (tailCall, methodSpec, varArgs) -> // TODO do something w/ tailcall
             iprintfn depth "call: %s::%s GenArgs=%A" methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
             let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
+            let args = List.rev args
             let funRef = getNamedFunction moduleRef methodSpec.Name // TODO this naming lookup is too weak (prone to collisions)
             let callResult = buildCall bldr funRef (Array.ofList args) "callResult"
             goNext (callResult :: stackTail)
@@ -296,8 +346,8 @@ let rec genInstructions
 let genBasicBlock
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (args : (ValueRef * ValAnno) list)
-        (locals : (ValueRef * ValAnno) list)
+        (args : AnnoVal list)
+        (locals : AnnoVal list)
         (blockMap : Map<int, BasicBlockRef>)
         (depth : int)
         (ilBB : ILBasicBlock) =
@@ -311,8 +361,8 @@ let genBasicBlock
 let rec genCode
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (args : (ValueRef * ValAnno) list)
-        (locals : (ValueRef * ValAnno) list)
+        (args : AnnoVal list)
+        (locals : AnnoVal list)
         (blockMap : Map<int, BasicBlockRef>)
         (depth : int)
         (c : ILCode) =
@@ -342,16 +392,22 @@ let rec genCode
         | FilterCatchBlock filterCatchList ->
             iprintfn (depth + 1) "filterCatchBlock TODO"
 
-let genAlloca (bldr : BuilderRef) (depth : int) (t : ILType) =
+let genAlloca (bldr : BuilderRef) (depth : int) (t : ILType) (name : string) =
     match t with
     | ILType.Void
     | ILType.Array _ -> failwith "unsuported local type"
     | ILType.Value typeSpec ->
         match typeSpec.tspecTypeRef.trefName with
         | "System.Int32"  ->
-            (buildAlloca bldr (int32Type ()) "int32Var", Signed)
+            IntVal <| buildAlloca bldr (int32Type ()) (name + "Alloca")
         | "System.UInt32" ->
-            (buildAlloca bldr (int32Type ()) "uint32Var", Unsigned)
+            UIntVal <| buildAlloca bldr (int32Type ()) (name + "Alloca")
+        | "System.Int64"  ->
+            IntVal <| buildAlloca bldr (int64Type ()) (name + "Alloca")
+        | "System.UInt64" ->
+            UIntVal <| buildAlloca bldr (int64Type ()) (name + "Alloca")
+        | "System.SByte"  ->
+            IntVal <| buildAlloca bldr (int8Type ()) (name + "Alloca")
         | _ ->
             failwith (sprintf "unknown value type %A" typeSpec)
     | ILType.Boxed _
@@ -372,6 +428,12 @@ let genLocal (bldr : BuilderRef) (depth : int) (l : ILLocal) =
                 "int32 value"
             | "System.UInt32" ->
                 "uint32 value"
+            | "System.Int64" ->
+                "int64 value"
+            | "System.UInt64" ->
+                "uint64 value"
+            | "System.SByte" ->
+                "int8 value"
             | _ -> failwith (sprintf "unknown value type %A" typeSpec)
         | ILType.Boxed ilTypeSpec -> "boxed"
         | ILType.Ptr ilType -> "ptr"
@@ -381,10 +443,10 @@ let genLocal (bldr : BuilderRef) (depth : int) (l : ILLocal) =
         | ILType.Modified (required, modifierRef, ilType) -> "modified"
     iprintfn depth "%s" tyStr
     
-    genAlloca bldr depth l.Type
+    genAlloca bldr depth l.Type "local"
 
 let genParam (bldr : BuilderRef) (depth : int) (p : ILParameter) =
-    genAlloca bldr depth p.Type
+    genAlloca bldr depth p.Type (match p.Name with Some n -> n | None -> "param")
 
 let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
     let rec go (c : ILCode) =
@@ -402,7 +464,7 @@ let genMethodBody (moduleRef : ModuleRef) (methodVal : ValueRef) (depth : int) (
 
     let args = List.map (genParam bldr (depth + 2)) md.Parameters
     for i = 0 to args.Length - 1 do
-        buildStore bldr (getParam methodVal (uint32 i)) (fst args.[i]) |> ignore
+        buildStore bldr (getParam methodVal (uint32 i)) args.[i].Val |> ignore
     
     iprintfn (depth + 1) "locals"
     let locals = List.map (genLocal bldr (depth + 2)) mb.Locals
@@ -422,6 +484,9 @@ let paramType (param : ILParameter) =
         match typeSpec.tspecTypeRef.trefName with
         | "System.Int32"
         | "System.UInt32" -> int32Type ()
+        | "System.Int64"
+        | "System.UInt64" -> int64Type ()
+        | "System.SByte"  -> int8Type ()
         | _ -> failwith (sprintf "unknown param value type %A" typeSpec)
     | ILType.Boxed ilTypeSpec -> failwith "boxed param"
     | ILType.Ptr ilType -> failwith "ptr param"
@@ -438,6 +503,9 @@ let returnType (retTy : ILReturn) =
         match typeSpec.tspecTypeRef.trefName with
         | "System.Int32"
         | "System.UInt32" -> int32Type ()
+        | "System.Int64"
+        | "System.UInt64" -> int64Type ()
+        | "System.SByte"  -> int8Type ()
         | _ -> failwith (sprintf "unknown return value type %A" typeSpec)
     | ILType.Boxed ilTypeSpec -> failwith "boxed return"
     | ILType.Ptr ilType -> failwith "ptr return"

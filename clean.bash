@@ -5,11 +5,5 @@ set -o errexit
 set -o nounset
 set -x
 
-rm -f \
-    LLVMCodeGen.exe \
-    fig.dll \
-    SimpleFunctions.dll \
-    SimpleFunctions.dll.bc \
-    SimpleFunctions.dll.ll \
-    test.exe
+rm -rf ./build/
 

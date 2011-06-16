@@ -5,6 +5,9 @@ set -o errexit
 set -o nounset
 set -x
 
-fsc --nologo --target:library --out:fig.dll -r CIL.dll -r LLVMFSharp.dll \
+mkdir -p build
+ln -s ../CIL.dll build/CIL.dll
+ln -s ../LLVMFSharp.dll build/LLVMFSharp.dll
+fsc --nologo --target:library --out:build/fig.dll -r CIL.dll -r LLVMFSharp.dll \
     src/Fig/LLVMCodeGen.fs
 
