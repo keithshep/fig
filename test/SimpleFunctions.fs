@@ -15,3 +15,11 @@ let rec fib = function
     | 1 -> 1
     | n -> fib (n - 1) + fib (n - 2)
 
+// simple example of mutual recursion
+let rec isEven = function
+    | 0u -> true
+    | n  -> isOdd (n - 1u)
+and isOdd = function
+    | 0u -> false
+    | n  -> isEven (n - 1u)
+

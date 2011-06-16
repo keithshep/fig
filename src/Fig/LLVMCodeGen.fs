@@ -55,7 +55,7 @@ let rec genInstructions
         let printInst () = iprintfn depth "%A" inst
         let noImpl () =
             //failwith (sprintf "instruction <<%A>> not implemented" inst)
-            iprintfn depth "%A <-- TODO: implement me" inst
+            iprintfn depth "%A <-- TODO: IMPLEMENT ME" inst
             goNext instStack
         
         match inst with
@@ -483,10 +483,11 @@ let paramType (param : ILParameter) =
     | ILType.Value typeSpec ->
         match typeSpec.tspecTypeRef.trefName with
         | "System.Int32"
-        | "System.UInt32" -> int32Type ()
+        | "System.UInt32"   -> int32Type ()
         | "System.Int64"
-        | "System.UInt64" -> int64Type ()
-        | "System.SByte"  -> int8Type ()
+        | "System.UInt64"   -> int64Type ()
+        | "System.SByte"    -> int8Type ()
+        | "System.Boolean"  -> int1Type ()
         | _ -> failwith (sprintf "unknown param value type %A" typeSpec)
     | ILType.Boxed ilTypeSpec -> failwith "boxed param"
     | ILType.Ptr ilType -> failwith "ptr param"
@@ -502,10 +503,11 @@ let returnType (retTy : ILReturn) =
     | ILType.Value typeSpec ->
         match typeSpec.tspecTypeRef.trefName with
         | "System.Int32"
-        | "System.UInt32" -> int32Type ()
+        | "System.UInt32"   -> int32Type ()
         | "System.Int64"
-        | "System.UInt64" -> int64Type ()
-        | "System.SByte"  -> int8Type ()
+        | "System.UInt64"   -> int64Type ()
+        | "System.SByte"    -> int8Type ()
+        | "System.Boolean"  -> int1Type ()
         | _ -> failwith (sprintf "unknown return value type %A" typeSpec)
     | ILType.Boxed ilTypeSpec -> failwith "boxed return"
     | ILType.Ptr ilType -> failwith "ptr return"
