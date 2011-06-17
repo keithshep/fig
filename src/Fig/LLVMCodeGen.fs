@@ -248,12 +248,25 @@ let rec genInstructions
                 failwith "instruction stack too low"
          // Method call
         | I_call (tailCall, methodSpec, varArgs) -> // TODO do something w/ tailcall
-            iprintfn depth "call: %s::%s GenArgs=%A" methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
+            match tailCall with
+            | Tailcall ->
+                iprintfn depth "tailcall: %s::%s GenArgs=%A" methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
+            | Normalcall ->
+                iprintfn depth "call: %s::%s GenArgs=%A" methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
             let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
             let args = List.rev args
             let funRef = getNamedFunction moduleRef methodSpec.Name // TODO this naming lookup is too weak (prone to collisions)
             let callResult = buildCall bldr funRef (Array.ofList args) "callResult"
-            goNext (callResult :: stackTail)
+            
+            match tailCall with
+            | Normalcall ->
+                goNext (callResult :: stackTail)
+            | Tailcall ->
+                // TODO confirm with CIL docs that tail call includes implicit return
+                setTailCall callResult true
+                buildRet bldr callResult |> ignore
+                goNext stackTail // TODO can probably dump this
+            
             //goNext instStack
         | I_callvirt (tailCall, methodSpec, varArgs) ->
             iprintfn depth "callvirt: %s::%s GenArgs=%A <-- TODO"  methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
@@ -517,18 +530,10 @@ let returnType (retTy : ILReturn) =
     | ILType.Modified (required, modifierRef, ilType) -> failwith "modified return"
 
 let genMethodDef (moduleRef : ModuleRef) (depth : int) (md : ILMethodDef) =
-    let paramTys = [|for p in md.Parameters -> paramType p|]
-    let retTy = returnType md.Return
-    let funcTy = functionType retTy paramTys
     iprintfn depth "%s" md.Name
     match md.mdBody.Contents with
     | MethodBody.IL mb ->
-        let fn = addFunction moduleRef md.Name funcTy
-        for i = 0 to md.Parameters.Length - 1 do
-            match md.Parameters.[i].Name with
-            | Some name -> setValueName (getParam fn (uint32 i)) name |> ignore
-            | None -> setValueName (getParam fn (uint32 i)) ("arg" + string i) |> ignore
-
+        let fn = getNamedFunction moduleRef md.Name
         genMethodBody moduleRef fn depth md mb
     | MethodBody.PInvoke pInvokeMethod -> iprintfn depth "PInvoke: %s" pInvokeMethod.Name
     | MethodBody.Abstract -> iprintfn (depth + 1) "abstract"
@@ -543,6 +548,28 @@ let rec genTypeDef (moduleRef : ModuleRef) (depth : int) (td : ILTypeDef) =
         iprintfn (depth + 1) "Nested Method Defs:"
         Seq.iter (genMethodDef moduleRef (depth + 2)) td.Methods
 
+let declareMethodDef (moduleRef : ModuleRef) (md : ILMethodDef) =
+    let paramTys = [|for p in md.Parameters -> paramType p|]
+    let retTy = returnType md.Return
+    let funcTy = functionType retTy paramTys
+    match md.mdBody.Contents with
+    | MethodBody.IL mb ->
+        let fn = addFunction moduleRef md.Name funcTy
+        for i = 0 to md.Parameters.Length - 1 do
+            match md.Parameters.[i].Name with
+            | Some name -> setValueName (getParam fn (uint32 i)) name |> ignore
+            | None -> setValueName (getParam fn (uint32 i)) ("arg" + string i) |> ignore
+    | MethodBody.PInvoke _
+    | MethodBody.Abstract
+    | MethodBody.Native -> failwith "unsupported method body type"
+
+let rec declareTypeDef (moduleRef : ModuleRef) (td : ILTypeDef) =
+    if not (Seq.isEmpty td.NestedTypes) then
+        Seq.iter (declareTypeDef moduleRef) td.NestedTypes
+    if not (Seq.isEmpty td.Methods) then
+        Seq.iter (declareMethodDef moduleRef) td.Methods
+
 let genTypeDefs (moduleRef : ModuleRef) (typeDefs : ILTypeDefs) =
+    Seq.iter (declareTypeDef moduleRef) typeDefs
     Seq.iter (genTypeDef moduleRef 0) typeDefs
 
