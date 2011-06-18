@@ -192,6 +192,7 @@ let rec genInstructions
         
         // Control transfer
         | I_br i ->    //of  ILCodeLabel
+            printInst ()
             buildBr bldr blockMap.[i] |> ignore
         | I_jmp _ ->  //of ILMethodSpec
             noImpl ()
