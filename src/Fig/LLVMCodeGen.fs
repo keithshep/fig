@@ -520,7 +520,10 @@ let returnType (retTy : ILReturn) =
         | "System.Int64"
         | "System.UInt64"   -> int64Type ()
         | "System.SByte"    -> int8Type ()
-        | "System.Boolean"  -> int1Type ()
+        
+        // TODO compiler seems to be generating boolean as I4 but the CIL docs
+        // say that a single byte should be used to represent a boolean
+        | "System.Boolean"  -> int32Type ()
         | _ -> failwith (sprintf "unknown return value type %A" typeSpec)
     | ILType.Boxed ilTypeSpec -> failwith "boxed return"
     | ILType.Ptr ilType -> failwith "ptr return"

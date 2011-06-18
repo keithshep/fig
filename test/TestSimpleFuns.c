@@ -4,8 +4,8 @@
 extern int gcd(int, int);
 extern int add(int, int);
 extern int fib(int);
-extern int isEven(int);
-extern int isOdd(int);
+extern int isEven(unsigned int);
+extern int isOdd(unsigned int);
 
 int main(int argc, const char* argv[])
 {

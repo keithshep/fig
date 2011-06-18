@@ -17,16 +17,9 @@ let rec fib = function
 
 // simple example of mutual recursion
 let rec isEven = function
-    | 0 -> 1
-    | n -> isOdd (n - 1)
+    | 0u -> true
+    | n  -> isOdd (n - 1u)
 and isOdd = function
-    | 0 -> 0
-    | n -> isEven (n - 1)
-
-//let rec isEven = function
-//    | 0u -> true
-//    | n  -> isOdd (n - 1u)
-//and isOdd = function
-//    | 0u -> false
-//    | n  -> isEven (n - 1u)
+    | 0u -> false
+    | n  -> isEven (n - 1u)
 
