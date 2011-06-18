@@ -23,3 +23,9 @@ and isOdd = function
     | 0u -> false
     | n  -> isEven (n - 1u)
 
+[<ReferenceEquality>]
+type Point = {x : float; y : float; z : float}
+
+let distSq p = p.x * p.y * p.z
+
+let distSqOf789 = distSq {x = 7.0; y = 8.0; z = 9.0}
