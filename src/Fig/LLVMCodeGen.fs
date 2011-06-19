@@ -16,12 +16,6 @@ let rec splitAt i xs =
             let splitFst, splitSnd = splitAt (i - 1) xt
             (x :: splitFst, splitSnd)
 
-let inline ifprintfn depth out fmt =
-    for i = 0 to depth - 1 do
-        fprintf out "  "
-    fprintfn out fmt
-let inline iprintfn depth fmt = ifprintfn depth stdout fmt
-
 type AnnoVal =
     | UIntVal of ValueRef
     | IntVal of ValueRef
@@ -41,7 +35,6 @@ let rec genInstructions
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : ILBasicBlock)
         (instStack : ValueRef list)
-        (depth : int)
         (insts : ILInstr list) =
 
     match insts with
@@ -51,12 +44,8 @@ let rec genInstructions
         | None      -> ()
     | inst :: instTail ->
         let goNext (instStack : ValueRef list) =
-            genInstructions bldr moduleRef methodVal args locals blockMap ilBB instStack depth instTail
-        let printInst () = iprintfn depth "%A" inst
-        let noImpl () =
-            //failwith (sprintf "instruction <<%A>> not implemented" inst)
-            iprintfn depth "%A <-- TODO: IMPLEMENT ME" inst
-            goNext instStack
+            genInstructions bldr moduleRef methodVal args locals blockMap ilBB instStack instTail
+        let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst)
         
         match inst with
         // Basic
@@ -64,7 +53,6 @@ let rec genInstructions
             // The add instruction adds value2 to value1 and pushes the result
             // on the stack. Overflow is not detected for integral operations
             // (but see add.ovf); floating-point overflow returns +inf or -inf.
-            printInst ()
             match instStack with
             | value2 :: value1 :: stackTail ->
                 let addResult = buildAdd bldr value1 value2 "tmpAdd"
@@ -98,7 +86,6 @@ let rec genInstructions
             // operations (see sub.ovf); for floating-point operands, sub
             // returns +inf on positive overflow inf on negative overflow, and
             // zero on floating-point underflow.
-            printInst ()
             match instStack with
             | value2 :: value1 :: stackTail ->
                 let subResult = buildSub bldr value1 value2 "tmpSub"
@@ -127,7 +114,6 @@ let rec genInstructions
                 | DT_I2
                 | DT_U2 -> noImpl ()
                 | DT_I4 ->
-                    printInst ()
                     let constResult = constInt (int32Type ()) (uint64 i) false // TODO correct me!!
                     goNext (constResult :: instStack)
                 | DT_U4
@@ -148,7 +134,6 @@ let rec genInstructions
                 | DT_I4
                 | DT_U4 -> noImpl ()
                 | DT_I8 ->
-                    printInst ()
                     let constResult = constInt (int64Type ()) (uint64 i) false // TODO correct me!!
                     goNext (constResult :: instStack)
                 | DT_U8
@@ -160,19 +145,16 @@ let rec genInstructions
             | ILConst.R4 r -> noImpl ()
             | ILConst.R8 r -> noImpl ()
         | I_ldarg i ->
-            printInst ()
             let name = "tmp_" + getValueName args.[int i].Val
             goNext (buildLoad bldr args.[int i].Val name :: instStack)
         | I_ldarga _    //of uint16
         | I_ldind _ ->  //of ILAlignment * ILVolatility * ILBasicType
             noImpl ()
         | I_ldloc loc ->
-            printInst ()
             let loadResult = buildLoad bldr locals.[int loc].Val "tmp"
             goNext (loadResult :: instStack)
         | I_ldloca _ -> noImpl ()   //of uint16
         | I_starg i ->  //of uint16
-            printInst ()
             match instStack with
             | stackHead :: stackTail ->
                 buildStore bldr stackHead args.[int i].Val |> ignore
@@ -182,7 +164,6 @@ let rec genInstructions
         | I_stind _ ->  //of  ILAlignment * ILVolatility * ILBasicType
             noImpl ()
         | I_stloc loc ->
-            printInst ()
             match instStack with
             | stackHead :: stackTail ->
                 buildStore bldr stackHead locals.[int loc].Val |> ignore
@@ -192,12 +173,10 @@ let rec genInstructions
         
         // Control transfer
         | I_br i ->    //of  ILCodeLabel
-            printInst ()
             buildBr bldr blockMap.[i] |> ignore
         | I_jmp _ ->  //of ILMethodSpec
             noImpl ()
         | I_brcmp (comparisonInstr, codeLabel, fallThroughCodeLabel) ->
-            printInst ()
             match instStack with
             //| leftSide :: rightSide :: stackTail ->
             | value2 :: value1 :: stackTail ->
@@ -230,7 +209,6 @@ let rec genInstructions
                 failwith "instruction stack too low"
 
         | I_switch (codeLabels, fallThroughCodeLabel) ->    //of (ILCodeLabel list * ILCodeLabel) (* last label is fallthrough *)
-            printInst ()
             match instStack with
             | [] -> failwith "empty instruction stack"
             | value :: stackTail ->
@@ -241,7 +219,6 @@ let rec genInstructions
                 buildSwitchWithCases bldr value (List.zip caseInts caseBlocks) blockMap.[fallThroughCodeLabel]
         
         | I_ret ->
-            printInst ()
             match instStack with
             | stackHead :: stackTail ->
                 buildRet bldr stackHead |> ignore
@@ -249,11 +226,6 @@ let rec genInstructions
                 failwith "instruction stack too low"
          // Method call
         | I_call (tailCall, methodSpec, varArgs) -> // TODO do something w/ tailcall
-            match tailCall with
-            | Tailcall ->
-                iprintfn depth "tailcall: %s::%s GenArgs=%A" methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
-            | Normalcall ->
-                iprintfn depth "call: %s::%s GenArgs=%A" methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
             let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
             let args = List.rev args
             let funRef = getNamedFunction moduleRef methodSpec.Name // TODO this naming lookup is too weak (prone to collisions)
@@ -269,10 +241,7 @@ let rec genInstructions
                 goNext stackTail // TODO can probably dump this
             
             //goNext instStack
-        | I_callvirt (tailCall, methodSpec, varArgs) ->
-            iprintfn depth "callvirt: %s::%s GenArgs=%A <-- TODO"  methodSpec.MethodRef.mrefParent.trefName methodSpec.Name methodSpec.GenericArgs
-            // TODO
-            goNext instStack
+        | I_callvirt _ // (tailCall, methodSpec, varArgs) ->
         | I_callconstraint _ //of ILTailcall * ILType * ILMethodSpec * ILVarArgs
         | I_calli _    //of ILTailcall * ILCallingSignature * ILVarArgs
         | I_ldftn _    //of ILMethodSpec
@@ -291,9 +260,8 @@ let rec genInstructions
         | I_ldsflda _     //of ILFieldSpec
         | I_ldflda _      //of ILFieldSpec 
         | I_stsfld _      //of ILVolatility  *  ILFieldSpec
-        | I_stfld _ ->    //of ILAlignment * ILVolatility * ILFieldSpec
-            noImpl ()
-        | I_ldstr s -> noImpl ()
+        | I_stfld _       //of ILAlignment * ILVolatility * ILFieldSpec
+        | I_ldstr _       //of string
         | I_isinst _      //of ILType
         | I_castclass _   //of ILType
         | I_ldtoken _     //of ILToken
@@ -363,14 +331,9 @@ let genBasicBlock
         (args : AnnoVal list)
         (locals : AnnoVal list)
         (blockMap : Map<int, BasicBlockRef>)
-        (depth : int)
         (ilBB : ILBasicBlock) =
-    match ilBB.Fallthrough with
-    | Some lbl  -> iprintfn depth "basicblock (%i, fallthrough=%i)" ilBB.Label lbl
-    | None      -> iprintfn depth "basicblock (%i)" ilBB.Label
-
     use bldr = new Builder(blockMap.[ilBB.Label])
-    genInstructions bldr moduleRef methodVal args locals blockMap ilBB [] (depth + 1) (List.ofArray ilBB.Instructions)
+    genInstructions bldr moduleRef methodVal args locals blockMap ilBB [] (List.ofArray ilBB.Instructions)
 
 let rec genCode
         (moduleRef : ModuleRef)
@@ -378,35 +341,29 @@ let rec genCode
         (args : AnnoVal list)
         (locals : AnnoVal list)
         (blockMap : Map<int, BasicBlockRef>)
-        (depth : int)
         (c : ILCode) =
 
     let genNextCode = genCode moduleRef methodVal args locals blockMap
     
-    iprintfn depth "code"
     match c with
-    | ILBasicBlock bb -> genBasicBlock moduleRef methodVal args locals blockMap (depth + 1) bb
+    | ILBasicBlock bb -> genBasicBlock moduleRef methodVal args locals blockMap bb
     | GroupBlock (debugMappings, codes) ->
-        iprintfn depth "groupblock"
         for c in codes do
-            genNextCode (depth + 1) c
+            genNextCode c
     | RestrictBlock (codeLabels, code) ->
-        iprintfn depth "restrictblock"
-        genNextCode (depth + 1) code
+        genNextCode code
     | TryBlock (tCode, exceptionBlock) ->
-        iprintfn (depth + 1) "tryBlock"
-        genNextCode (depth + 2) tCode
-        match exceptionBlock with
-        | FaultBlock code ->
-            iprintfn (depth + 1) "faultBlock"
-            genNextCode (depth + 2) code
-        | FinallyBlock ilCode ->
-            iprintfn (depth + 1) "finallyBlock"
-            genNextCode (depth + 2) ilCode
-        | FilterCatchBlock filterCatchList ->
-            iprintfn (depth + 1) "filterCatchBlock TODO"
+        failwith "try block not implemented"
+//        genNextCode (depth + 2) tCode
+//        match exceptionBlock with
+//        | FaultBlock code ->
+//            genNextCode (depth + 2) code
+//        | FinallyBlock ilCode ->
+//            genNextCode (depth + 2) ilCode
+//        | FilterCatchBlock filterCatchList ->
+//            iprintfn (depth + 1) "filterCatchBlock TODO"
 
-let genAlloca (bldr : BuilderRef) (depth : int) (t : ILType) (name : string) =
+let genAlloca (bldr : BuilderRef) (t : ILType) (name : string) =
     match t with
     | ILType.Void
     | ILType.Array _ -> failwith "unsuported local type"
@@ -431,36 +388,11 @@ let genAlloca (bldr : BuilderRef) (depth : int) (t : ILType) (name : string) =
     | ILType.TypeVar _
     | ILType.Modified _ -> failwith "unsuported local type"
 
-let genLocal (bldr : BuilderRef) (depth : int) (l : ILLocal) =
-    let tyStr =
-        match l.Type with
-        | ILType.Void -> "void"
-        | ILType.Array (ilArrayShape, ilType) -> "array"
-        | ILType.Value typeSpec ->
-            match typeSpec.tspecTypeRef.trefName with
-            | "System.Int32" ->
-                "int32 value"
-            | "System.UInt32" ->
-                "uint32 value"
-            | "System.Int64" ->
-                "int64 value"
-            | "System.UInt64" ->
-                "uint64 value"
-            | "System.SByte" ->
-                "int8 value"
-            | _ -> failwith (sprintf "unknown value type %A" typeSpec)
-        | ILType.Boxed ilTypeSpec -> "boxed"
-        | ILType.Ptr ilType -> "ptr"
-        | ILType.Byref ilType -> "byref"
-        | ILType.FunctionPointer ilCallingSignature -> "funPtr"
-        | ILType.TypeVar ui -> "typevar"
-        | ILType.Modified (required, modifierRef, ilType) -> "modified"
-    iprintfn depth "%s" tyStr
-    
-    genAlloca bldr depth l.Type "local"
+let genLocal (bldr : BuilderRef) (l : ILLocal) =
+    genAlloca bldr l.Type "local"
 
-let genParam (bldr : BuilderRef) (depth : int) (p : ILParameter) =
-    genAlloca bldr depth p.Type (match p.Name with Some n -> n | None -> "param")
+let genParam (bldr : BuilderRef) (p : ILParameter) =
+    genAlloca bldr p.Type (match p.Name with Some n -> n | None -> "param")
 
 let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
     let rec go (c : ILCode) =
@@ -472,23 +404,22 @@ let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
 
     go c
 
-let genMethodBody (moduleRef : ModuleRef) (methodVal : ValueRef) (depth : int) (md : ILMethodDef) (mb : ILMethodBody) =
+let genMethodBody (moduleRef : ModuleRef) (methodVal : ValueRef) (md : ILMethodDef) (mb : ILMethodBody) =
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
 
-    let args = List.map (genParam bldr (depth + 2)) md.Parameters
+    let args = List.map (genParam bldr) md.Parameters
     for i = 0 to args.Length - 1 do
         buildStore bldr (getParam methodVal (uint32 i)) args.[i].Val |> ignore
     
-    iprintfn (depth + 1) "locals"
-    let locals = List.map (genLocal bldr (depth + 2)) mb.Locals
+    let locals = List.map (genLocal bldr) mb.Locals
     let blockDecs = addBlockDecs methodVal mb.Code
 
     match blockDecs with
     | [] -> failwith ("empty method body: " + md.Name)
     | (_, fstBlockDec) :: _ ->
         buildBr bldr fstBlockDec |> ignore
-        genCode moduleRef methodVal args locals (Map.ofList blockDecs) (depth + 1) mb.Code
+        genCode moduleRef methodVal args locals (Map.ofList blockDecs) mb.Code
 
 let paramType (param : ILParameter) =
     match param.Type with
@@ -533,24 +464,20 @@ let returnType (retTy : ILReturn) =
     | ILType.TypeVar ui -> failwith "typevar return"
     | ILType.Modified (required, modifierRef, ilType) -> failwith "modified return"
 
-let genMethodDef (moduleRef : ModuleRef) (depth : int) (md : ILMethodDef) =
-    iprintfn depth "%s" md.Name
+let genMethodDef (moduleRef : ModuleRef) (md : ILMethodDef) =
     match md.mdBody.Contents with
     | MethodBody.IL mb ->
         let fn = getNamedFunction moduleRef md.Name
-        genMethodBody moduleRef fn depth md mb
-    | MethodBody.PInvoke pInvokeMethod -> iprintfn depth "PInvoke: %s" pInvokeMethod.Name
-    | MethodBody.Abstract -> iprintfn (depth + 1) "abstract"
-    | MethodBody.Native -> iprintfn (depth + 1) "native"
+        genMethodBody moduleRef fn md mb
+    | MethodBody.PInvoke pInvokeMethod -> failwith "PInvoke body"
+    | MethodBody.Abstract -> failwith "abstract body"
+    | MethodBody.Native -> failwith "native body"
 
-let rec genTypeDef (moduleRef : ModuleRef) (depth : int) (td : ILTypeDef) =
-    iprintfn depth "%A %s" td.tdKind td.Name
+let rec genTypeDef (moduleRef : ModuleRef) (td : ILTypeDef) =
     if not (Seq.isEmpty td.NestedTypes) then
-        iprintfn (depth + 1) "Nested Type Defs:"
-        Seq.iter (genTypeDef moduleRef (depth + 2)) td.NestedTypes
+        Seq.iter (genTypeDef moduleRef) td.NestedTypes
     if not (Seq.isEmpty td.Methods) then
-        iprintfn (depth + 1) "Nested Method Defs:"
-        Seq.iter (genMethodDef moduleRef (depth + 2)) td.Methods
+        Seq.iter (genMethodDef moduleRef) td.Methods
 
 let declareMethodDef (moduleRef : ModuleRef) (md : ILMethodDef) =
     let paramTys = [|for p in md.Parameters -> paramType p|]
@@ -575,5 +502,5 @@ let rec declareTypeDef (moduleRef : ModuleRef) (td : ILTypeDef) =
 
 let genTypeDefs (moduleRef : ModuleRef) (typeDefs : ILTypeDefs) =
     Seq.iter (declareTypeDef moduleRef) typeDefs
-    Seq.iter (genTypeDef moduleRef 0) typeDefs
+    Seq.iter (genTypeDef moduleRef) typeDefs
 
