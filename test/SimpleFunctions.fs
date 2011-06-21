@@ -23,6 +23,12 @@ and isOdd = function
     | 0u -> false
     | n  -> isEven (n - 1u)
 
+let power (x : float) (y : int) =
+    let mutable retVal = 1.0
+    for i = 1 to y do
+        retVal <- retVal * x
+    retVal
+
 [<ReferenceEquality>]
 type Point = {x : float; y : float; z : float}
 
