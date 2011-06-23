@@ -22,6 +22,7 @@ let rec genInstructions
         (methodVal : ValueRef)
         (args : ValueRef list)
         (locals : ValueRef list)
+        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : ILBasicBlock)
         (instStack : ValueRef list)
@@ -34,7 +35,7 @@ let rec genInstructions
         | None      -> ()
     | inst :: instTail ->
         let goNext (instStack : ValueRef list) =
-            genInstructions bldr moduleRef methodVal args locals blockMap ilBB instStack instTail
+            genInstructions bldr moduleRef methodVal args locals funMap blockMap ilBB instStack instTail
         let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst)
         
         match inst with
@@ -263,9 +264,15 @@ let rec genInstructions
                 failwith "instruction stack too low"
          // Method call
         | I_call (tailCall, methodSpec, varArgs) -> // TODO do something w/ tailcall
+            // look up the corresponding LLVM function
+            let enclosingName = methodSpec.EnclosingType.BasicQualifiedName
+            let argTypes = methodSpec.FormalArgTypes
+            let retType = methodSpec.FormalReturnType
+            let name = methodSpec.Name
+            let funRef = funMap.[enclosingName].[(retType, name, argTypes)]
+            
             let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
             let args = List.rev args
-            let funRef = getNamedFunction moduleRef methodSpec.Name // TODO this naming lookup is too weak (prone to collisions)
             let callResult = buildCall bldr funRef (Array.ofList args) "callResult"
             
             match tailCall with
@@ -367,23 +374,25 @@ let genBasicBlock
         (methodVal : ValueRef)
         (args : ValueRef list)
         (locals : ValueRef list)
+        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : ILBasicBlock) =
     use bldr = new Builder(blockMap.[ilBB.Label])
-    genInstructions bldr moduleRef methodVal args locals blockMap ilBB [] (List.ofArray ilBB.Instructions)
+    genInstructions bldr moduleRef methodVal args locals funMap blockMap ilBB [] (List.ofArray ilBB.Instructions)
 
 let rec genCode
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
         (args : ValueRef list)
         (locals : ValueRef list)
+        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
         (blockMap : Map<int, BasicBlockRef>)
         (c : ILCode) =
 
-    let genNextCode = genCode moduleRef methodVal args locals blockMap
+    let genNextCode = genCode moduleRef methodVal args locals funMap blockMap
     
     match c with
-    | ILBasicBlock bb -> genBasicBlock moduleRef methodVal args locals blockMap bb
+    | ILBasicBlock bb -> genBasicBlock moduleRef methodVal args locals funMap blockMap bb
     | GroupBlock (debugMappings, codes) ->
         for c in codes do
             genNextCode c
@@ -443,7 +452,12 @@ let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
 
     go c
 
-let genMethodBody (moduleRef : ModuleRef) (methodVal : ValueRef) (md : ILMethodDef) (mb : ILMethodBody) =
+let genMethodBody
+        (moduleRef : ModuleRef)
+        (methodVal : ValueRef)
+        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
+        (md : ILMethodDef)
+        (mb : ILMethodBody) =
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
 
@@ -458,22 +472,26 @@ let genMethodBody (moduleRef : ModuleRef) (methodVal : ValueRef) (md : ILMethodD
     | [] -> failwith ("empty method body: " + md.Name)
     | (_, fstBlockDec) :: _ ->
         buildBr bldr fstBlockDec |> ignore
-        genCode moduleRef methodVal args locals (Map.ofList blockDecs) mb.Code
+        genCode moduleRef methodVal args locals funMap (Map.ofList blockDecs) mb.Code
 
-let genMethodDef (moduleRef : ModuleRef) (md : ILMethodDef) =
+let genMethodDef
+        (moduleRef : ModuleRef)
+        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
+        (md : ILMethodDef) =
     match md.mdBody.Contents with
     | MethodBody.IL mb ->
         let fn = getNamedFunction moduleRef md.Name
-        genMethodBody moduleRef fn md mb
+        genMethodBody moduleRef fn funMap md mb
     | MethodBody.PInvoke pInvokeMethod -> failwith "PInvoke body"
     | MethodBody.Abstract -> failwith "abstract body"
     | MethodBody.Native -> failwith "native body"
 
-let rec genTypeDef (moduleRef : ModuleRef) (td : ILTypeDef) =
-    if not (Seq.isEmpty td.NestedTypes) then
-        Seq.iter (genTypeDef moduleRef) td.NestedTypes
-    if not (Seq.isEmpty td.Methods) then
-        Seq.iter (genMethodDef moduleRef) td.Methods
+let rec genTypeDef
+        (moduleRef : ModuleRef)
+        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
+        (td : ILTypeDef) =
+    Seq.iter (genTypeDef moduleRef funMap) td.NestedTypes
+    Seq.iter (genMethodDef moduleRef funMap) td.Methods
 
 let declareMethodDef (moduleRef : ModuleRef) (md : ILMethodDef) =
     let paramTys = [|for p in md.Parameters -> toLLVMType p.Type|]
@@ -486,17 +504,17 @@ let declareMethodDef (moduleRef : ModuleRef) (md : ILMethodDef) =
             match md.Parameters.[i].Name with
             | Some name -> setValueName (getParam fn (uint32 i)) name |> ignore
             | None -> setValueName (getParam fn (uint32 i)) ("arg" + string i) |> ignore
+        (md.Return.Type, md.Name, [for p in md.Parameters -> p.Type]), fn
     | MethodBody.PInvoke _
     | MethodBody.Abstract
     | MethodBody.Native -> failwith "unsupported method body type"
 
 let rec declareTypeDef (moduleRef : ModuleRef) (td : ILTypeDef) =
-    if not (Seq.isEmpty td.NestedTypes) then
-        Seq.iter (declareTypeDef moduleRef) td.NestedTypes
-    if not (Seq.isEmpty td.Methods) then
-        Seq.iter (declareMethodDef moduleRef) td.Methods
+    let nestedDecs = List.concat [for t in td.NestedTypes -> declareTypeDef moduleRef t]
+    let methodDecs = [for m in td.Methods -> declareMethodDef moduleRef m]
+    (td.Name, Map.ofList methodDecs) :: nestedDecs
 
 let genTypeDefs (moduleRef : ModuleRef) (typeDefs : ILTypeDefs) =
-    Seq.iter (declareTypeDef moduleRef) typeDefs
-    Seq.iter (genTypeDef moduleRef) typeDefs
+    let funMap = Map.ofList <| List.concat [for t in typeDefs -> declareTypeDef moduleRef t]
+    Seq.iter (genTypeDef moduleRef funMap) typeDefs
 
