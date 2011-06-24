@@ -16,13 +16,15 @@ let rec splitAt i xs =
             let splitFst, splitSnd = splitAt (i - 1) xt
             (x :: splitFst, splitSnd)
 
+type FunMap = Map<string, Map<ILType * string * (ILType list), ValueRef>>
+
 let rec genInstructions
         (bldr : BuilderRef)
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
         (args : ValueRef list)
         (locals : ValueRef list)
-        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
+        (funMap : FunMap)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : ILBasicBlock)
         (instStack : ValueRef list)
@@ -374,7 +376,7 @@ let genBasicBlock
         (methodVal : ValueRef)
         (args : ValueRef list)
         (locals : ValueRef list)
-        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
+        (funMap : FunMap)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : ILBasicBlock) =
     use bldr = new Builder(blockMap.[ilBB.Label])
@@ -385,7 +387,7 @@ let rec genCode
         (methodVal : ValueRef)
         (args : ValueRef list)
         (locals : ValueRef list)
-        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
+        (funMap : FunMap)
         (blockMap : Map<int, BasicBlockRef>)
         (c : ILCode) =
 
@@ -409,6 +411,8 @@ let rec genCode
 //        | FilterCatchBlock filterCatchList ->
 //            iprintfn (depth + 1) "filterCatchBlock TODO"
 
+let typeSpecToLLVMType (ts : ILTypeSpec) = failwith "implement me"
+
 let toLLVMType (ty : ILType) =
     match ty with
     | ILType.Void -> voidType ()
@@ -426,7 +430,8 @@ let toLLVMType (ty : ILType) =
         | "System.Boolean"  -> int32Type ()
         | "System.Double"   -> doubleType ()
         | tyStr -> failwith ("unknown value type: " + tyStr)
-    | ILType.Boxed ilTypeSpec -> failwith "boxed type"
+    | ILType.Boxed ilTypeSpec -> //failwith "boxed type"
+        pointerType (typeSpecToLLVMType ilTypeSpec) 0u //FIXME!!
     | ILType.Ptr ilType -> failwith "ptr type"
     | ILType.Byref ilType -> failwith "byref type"
     | ILType.FunctionPointer ilCallingSignature -> failwith "funPtr type"
@@ -455,7 +460,7 @@ let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
 let genMethodBody
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
+        (funMap : FunMap)
         (md : ILMethodDef)
         (mb : ILMethodBody) =
     // create the entry block
@@ -476,7 +481,7 @@ let genMethodBody
 
 let genMethodDef
         (moduleRef : ModuleRef)
-        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
+        (funMap : FunMap)
         (md : ILMethodDef) =
     match md.mdBody.Contents with
     | MethodBody.IL mb ->
@@ -488,7 +493,7 @@ let genMethodDef
 
 let rec genTypeDef
         (moduleRef : ModuleRef)
-        (funMap : Map<string, Map<(ILType * string * (ILType list)), ValueRef>>)
+        (funMap : FunMap)
         (td : ILTypeDef) =
     Seq.iter (genTypeDef moduleRef funMap) td.NestedTypes
     Seq.iter (genMethodDef moduleRef funMap) td.Methods
