@@ -18,12 +18,18 @@ let rec splitAt i xs =
 
 type FunMap = Map<string, Map<ILType * string * (ILType list), ValueRef>>
 
+type JointTypeDef (td : ILTypeDef, tyHandle : TypeHandleRef) =
+    member x.CILType with get() = td
+    member x.LLVMType with get() = resolveTypeHandle tyHandle
+    member x.LLVMTypeHandle with get() = tyHandle
+
 let rec genInstructions
         (bldr : BuilderRef)
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
         (args : ValueRef list)
         (locals : ValueRef list)
+        (typeHandles : Map<string, JointTypeDef>)
         (funMap : FunMap)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : ILBasicBlock)
@@ -37,7 +43,7 @@ let rec genInstructions
         | None      -> ()
     | inst :: instTail ->
         let goNext (instStack : ValueRef list) =
-            genInstructions bldr moduleRef methodVal args locals funMap blockMap ilBB instStack instTail
+            genInstructions bldr moduleRef methodVal args locals typeHandles funMap blockMap ilBB instStack instTail
         let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst)
         
         match inst with
@@ -259,40 +265,67 @@ let rec genInstructions
                 buildSwitchWithCases bldr value (List.zip caseInts caseBlocks) blockMap.[fallThroughCodeLabel]
         
         | I_ret ->
+            // TODO confirm void funs are [] and non-void are not
             match instStack with
-            | stackHead :: stackTail ->
-                buildRet bldr stackHead |> ignore
-            | _ ->
-                failwith "instruction stack too low"
+            | [] -> buildRetVoid bldr |> ignore
+            | stackHead :: stackTail -> buildRet bldr stackHead |> ignore
          // Method call
-        | I_call (tailCall, methodSpec, varArgs) -> // TODO do something w/ tailcall
+        | I_call (tailCall, methodSpec, varArgs) ->
             // look up the corresponding LLVM function
             let enclosingName = methodSpec.EnclosingType.BasicQualifiedName
             let argTypes = methodSpec.FormalArgTypes
             let retType = methodSpec.FormalReturnType
             let name = methodSpec.Name
-            let funRef = funMap.[enclosingName].[(retType, name, argTypes)]
+            if enclosingName = "System.Object" && name = ".ctor" then
+                //TODO stop ignoring object calls
+                goNext instStack.Tail
+            else
+                let funRef = funMap.[enclosingName].[(retType, name, argTypes)]
+
+                let argCount =
+                    match methodSpec.CallingConv.ThisConv with
+                    | ILThisConvention.Instance ->
+                        methodSpec.MethodRef.ArgCount + 1
+                    | ILThisConvention.InstanceExplicit ->
+                        failwith "instance explicit not implemented"
+                    | ILThisConvention.Static ->
+                        methodSpec.MethodRef.ArgCount
+                let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
+                let args = List.rev args
+                let callResult = buildCall bldr funRef (Array.ofList args) "callResult" // FIXME void results should not add to stack!!
+                
+                match tailCall with
+                | Normalcall ->
+                    goNext (callResult :: stackTail)
+                | Tailcall ->
+                    // TODO confirm with CIL docs that tail call includes implicit return
+                    setTailCall callResult true
+                    buildRet bldr callResult |> ignore
+                    goNext stackTail // TODO can probably dump this
             
-            let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
-            let args = List.rev args
-            let callResult = buildCall bldr funRef (Array.ofList args) "callResult"
-            
-            match tailCall with
-            | Normalcall ->
-                goNext (callResult :: stackTail)
-            | Tailcall ->
-                // TODO confirm with CIL docs that tail call includes implicit return
-                setTailCall callResult true
-                buildRet bldr callResult |> ignore
-                goNext stackTail // TODO can probably dump this
-            
-            //goNext instStack
         | I_callvirt _ // (tailCall, methodSpec, varArgs) ->
         | I_callconstraint _ //of ILTailcall * ILType * ILMethodSpec * ILVarArgs
         | I_calli _    //of ILTailcall * ILCallingSignature * ILVarArgs
-        | I_ldftn _    //of ILMethodSpec
-        | I_newobj _   //of ILMethodSpec  * ILVarArgs
-
+        | I_ldftn _ -> noImpl ()   //of ILMethodSpec
+        | I_newobj (methodSpec, varArgs) -> //of ILMethodSpec  * ILVarArgs
+            // TODO implement GC
+            // FIXME naming is all screwed up! fix it
+            //let enclosingName = methodSpec.EnclosingType.BasicQualifiedName
+            let enclosingName = methodSpec.EnclosingType.TypeRef.Name
+            let argTypes = methodSpec.FormalArgTypes
+            let retType = methodSpec.FormalReturnType
+            let name = methodSpec.Name
+            if name <> ".ctor" then
+                failwith "expected a .ctor here"
+            else
+                let funRef = funMap.[enclosingName].[(retType, name, argTypes)]
+                let llvmTy = typeHandles.[enclosingName].LLVMType
+                let newObj = buildMalloc bldr llvmTy ("new" + enclosingName)
+                let argCount = methodSpec.MethodRef.ArgCount + 1 // +1 for self
+                let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
+                let args = newObj :: List.rev args
+                buildCall bldr funRef (Array.ofList args) "" |> ignore
+                goNext (newObj :: stackTail)
         // Exceptions
         | I_throw
         | I_endfinally
@@ -301,12 +334,38 @@ let rec genInstructions
         | I_rethrow
 
         // Object instructions
-        | I_ldsfld _      //of ILVolatility * ILFieldSpec
-        | I_ldfld _       //of ILAlignment * ILVolatility * ILFieldSpec
+        | I_ldsfld _ -> noImpl () //of ILVolatility * ILFieldSpec
+        | I_ldfld (align, vol, field) -> //of ILAlignment * ILVolatility * ILFieldSpec
+            match instStack with
+            | [] -> failwith "empty instruction stack"
+            | selfPtr :: stackTail ->
+                // TODO alignment and volitility
+                let selfJoint = typeHandles.[field.EnclosingTypeRef.Name]
+                let cilFields = selfJoint.CILType.Fields.AsList
+                let fieldIndex = List.findIndex (fun (f : ILFieldDef) -> f.Name = field.Name) cilFields
+
+                // OK now we need to load the field
+                let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) "fieldPtr"
+                let fieldValue = buildLoad bldr fieldPtr "fieldValue"
+                goNext (fieldValue :: stackTail)
+
         | I_ldsflda _     //of ILFieldSpec
         | I_ldflda _      //of ILFieldSpec
-        | I_stsfld _      //of ILVolatility  *  ILFieldSpec
-        | I_stfld _       //of ILAlignment * ILVolatility * ILFieldSpec
+        | I_stsfld _ -> noImpl () //of ILVolatility  *  ILFieldSpec
+        | I_stfld (align, vol, field) -> //of ILAlignment * ILVolatility * ILFieldSpec
+            match instStack with
+            | value :: selfPtr :: stackTail ->
+                // TODO alignment and volitility
+                let selfJoint = typeHandles.[field.EnclosingTypeRef.Name]
+                let cilFields = selfJoint.CILType.Fields.AsList
+                let fieldIndex = List.findIndex (fun (f : ILFieldDef) -> f.Name = field.Name) cilFields
+
+                // OK now we need to store the field
+                let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) "fieldPtr"
+                buildStore bldr value fieldPtr |> ignore
+                goNext stackTail
+            | _ -> failwith "instruction stack too low"
+
         | I_ldstr _       //of string
         | I_isinst _      //of ILType
         | I_castclass _   //of ILType
@@ -376,25 +435,27 @@ let genBasicBlock
         (methodVal : ValueRef)
         (args : ValueRef list)
         (locals : ValueRef list)
+        (typeHandles : Map<string, JointTypeDef>)
         (funMap : FunMap)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : ILBasicBlock) =
     use bldr = new Builder(blockMap.[ilBB.Label])
-    genInstructions bldr moduleRef methodVal args locals funMap blockMap ilBB [] (List.ofArray ilBB.Instructions)
+    genInstructions bldr moduleRef methodVal args locals typeHandles funMap blockMap ilBB [] (List.ofArray ilBB.Instructions)
 
 let rec genCode
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
         (args : ValueRef list)
         (locals : ValueRef list)
+        (typeHandles : Map<string, JointTypeDef>)
         (funMap : FunMap)
         (blockMap : Map<int, BasicBlockRef>)
         (c : ILCode) =
 
-    let genNextCode = genCode moduleRef methodVal args locals funMap blockMap
+    let genNextCode = genCode moduleRef methodVal args locals typeHandles funMap blockMap
     
     match c with
-    | ILBasicBlock bb -> genBasicBlock moduleRef methodVal args locals funMap blockMap bb
+    | ILBasicBlock bb -> genBasicBlock moduleRef methodVal args locals typeHandles funMap blockMap bb
     | GroupBlock (debugMappings, codes) ->
         for c in codes do
             genNextCode c
@@ -411,9 +472,7 @@ let rec genCode
 //        | FilterCatchBlock filterCatchList ->
 //            iprintfn (depth + 1) "filterCatchBlock TODO"
 
-let typeSpecToLLVMType (ts : ILTypeSpec) = failwith "implement me"
-
-let toLLVMType (ty : ILType) =
+let toLLVMType (typeHandles : Map<string, JointTypeDef>) (ty : ILType) =
     match ty with
     | ILType.Void -> voidType ()
     | ILType.Array (ilArrayShape, ilType) -> failwith "array type"
@@ -430,22 +489,26 @@ let toLLVMType (ty : ILType) =
         | "System.Boolean"  -> int32Type ()
         | "System.Double"   -> doubleType ()
         | tyStr -> failwith ("unknown value type: " + tyStr)
-    | ILType.Boxed ilTypeSpec -> //failwith "boxed type"
-        pointerType (typeSpecToLLVMType ilTypeSpec) 0u //FIXME!!
+    | ILType.Boxed ilTypeSpec ->  //FIXME!!
+        pointerType typeHandles.[ilTypeSpec.Name].LLVMType 0u
     | ILType.Ptr ilType -> failwith "ptr type"
     | ILType.Byref ilType -> failwith "byref type"
     | ILType.FunctionPointer ilCallingSignature -> failwith "funPtr type"
     | ILType.TypeVar ui -> failwith "typevar type"
     | ILType.Modified (required, modifierRef, ilType) -> failwith "modified type"
 
-let genAlloca (bldr : BuilderRef) (t : ILType) (name : string) =
-    buildAlloca bldr (toLLVMType t) (name + "Alloca")
+let genAlloca
+        (bldr : BuilderRef)
+        (typeHandles : Map<string, JointTypeDef>)
+        (t : ILType)
+        (name : string) =
+    buildAlloca bldr (toLLVMType typeHandles t) (name + "Alloca")
 
-let genLocal (bldr : BuilderRef) (l : ILLocal) =
-    genAlloca bldr l.Type "local"
+let genLocal (bldr : BuilderRef) (typeHandles : Map<string, JointTypeDef>) (l : ILLocal) =
+    genAlloca bldr typeHandles l.Type "local"
 
-let genParam (bldr : BuilderRef) (p : ILParameter) =
-    genAlloca bldr p.Type (match p.Name with Some n -> n | None -> "param")
+let genParam (bldr : BuilderRef) (typeHandles : Map<string, JointTypeDef>) (p : ILParameter) =
+    genAlloca bldr typeHandles p.Type (match p.Name with Some n -> n | None -> "param")
 
 let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
     let rec go (c : ILCode) =
@@ -460,66 +523,129 @@ let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
 let genMethodBody
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
+        (typeHandles : Map<string, JointTypeDef>)
         (funMap : FunMap)
+        (td : ILTypeDef)
         (md : ILMethodDef)
         (mb : ILMethodBody) =
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
 
-    let args = List.map (genParam bldr) md.Parameters
+    let args =
+        match md.CallingConv.ThisConv with
+        | ILThisConvention.Instance ->
+            let selfTy = pointerType typeHandles.[td.Name].LLVMType 0u
+            let selfAlloca = buildAlloca bldr selfTy "selfAlloca"
+            selfAlloca :: List.map (genParam bldr typeHandles) md.Parameters
+        | ILThisConvention.InstanceExplicit ->
+            failwith "instance explicit not implemented"
+        | ILThisConvention.Static ->
+            List.map (genParam bldr typeHandles) md.Parameters
+
+    //let args = List.map (genParam bldr typeHandles) md.Parameters
     for i = 0 to args.Length - 1 do
         buildStore bldr (getParam methodVal (uint32 i)) args.[i] |> ignore
-    
-    let locals = List.map (genLocal bldr) mb.Locals
+
+    let locals = List.map (genLocal bldr typeHandles) mb.Locals
     let blockDecs = addBlockDecs methodVal mb.Code
 
     match blockDecs with
     | [] -> failwith ("empty method body: " + md.Name)
     | (_, fstBlockDec) :: _ ->
         buildBr bldr fstBlockDec |> ignore
-        genCode moduleRef methodVal args locals funMap (Map.ofList blockDecs) mb.Code
+        genCode moduleRef methodVal args locals typeHandles funMap (Map.ofList blockDecs) mb.Code
 
 let genMethodDef
         (moduleRef : ModuleRef)
+        (typeHandles : Map<string, JointTypeDef>)
         (funMap : FunMap)
+        (td : ILTypeDef)
         (md : ILMethodDef) =
     match md.mdBody.Contents with
     | MethodBody.IL mb ->
         let fn = getNamedFunction moduleRef md.Name
-        genMethodBody moduleRef fn funMap md mb
+        genMethodBody moduleRef fn typeHandles funMap td md mb
     | MethodBody.PInvoke pInvokeMethod -> failwith "PInvoke body"
     | MethodBody.Abstract -> failwith "abstract body"
     | MethodBody.Native -> failwith "native body"
 
 let rec genTypeDef
         (moduleRef : ModuleRef)
+        (typeHandles : Map<string, JointTypeDef>)
         (funMap : FunMap)
         (td : ILTypeDef) =
-    Seq.iter (genTypeDef moduleRef funMap) td.NestedTypes
-    Seq.iter (genMethodDef moduleRef funMap) td.Methods
+    Seq.iter (genTypeDef moduleRef typeHandles funMap) td.NestedTypes
+    Seq.iter (genMethodDef moduleRef typeHandles funMap td) td.Methods
 
-let declareMethodDef (moduleRef : ModuleRef) (md : ILMethodDef) =
-    let paramTys = [|for p in md.Parameters -> toLLVMType p.Type|]
-    let retTy = toLLVMType md.Return.Type
-    let funcTy = functionType retTy paramTys
+let declareMethodDef
+        (moduleRef : ModuleRef)
+        (typeHandles : Map<string, JointTypeDef>)
+        (td : ILTypeDef)
+        (md : ILMethodDef) =
+    let implicitThis =
+        match md.CallingConv.ThisConv with
+        | ILThisConvention.Instance -> true
+        | ILThisConvention.InstanceExplicit -> failwith "instance explicit not implemented"
+        | ILThisConvention.Static -> false
+    let paramTys = [for p in md.Parameters -> toLLVMType typeHandles p.Type]
+    let paramTys =
+        if implicitThis then
+            let thisTy = pointerType typeHandles.[td.Name].LLVMType 0u
+            thisTy :: paramTys
+        else
+            paramTys
+    let retTy = toLLVMType typeHandles md.Return.Type
+    let funcTy = functionType retTy (Array.ofList paramTys)
     match md.mdBody.Contents with
     | MethodBody.IL mb ->
         let fn = addFunction moduleRef md.Name funcTy
+        let getExplicitParam i =
+            let i = if implicitThis then i + 1 else i
+            getParam fn (uint32 i)
+        if implicitThis then
+            setValueName (getParam fn 0u) "selfPtr" |> ignore
         for i = 0 to md.Parameters.Length - 1 do
             match md.Parameters.[i].Name with
-            | Some name -> setValueName (getParam fn (uint32 i)) name |> ignore
-            | None -> setValueName (getParam fn (uint32 i)) ("arg" + string i) |> ignore
+            | Some name -> setValueName (getExplicitParam i) name |> ignore
+            | None -> setValueName (getExplicitParam i) ("arg" + string i) |> ignore
         (md.Return.Type, md.Name, [for p in md.Parameters -> p.Type]), fn
     | MethodBody.PInvoke _
     | MethodBody.Abstract
     | MethodBody.Native -> failwith "unsupported method body type"
 
-let rec declareTypeDef (moduleRef : ModuleRef) (td : ILTypeDef) =
-    let nestedDecs = List.concat [for t in td.NestedTypes -> declareTypeDef moduleRef t]
-    let methodDecs = [for m in td.Methods -> declareMethodDef moduleRef m]
+let rec declareMethodDefs
+        (moduleRef : ModuleRef)
+        (typeHandles : Map<string, JointTypeDef>)
+        (td : ILTypeDef) =
+    let nestedDecs = List.concat [for t in td.NestedTypes -> declareMethodDefs moduleRef typeHandles t]
+    let methodDecs = [for m in td.Methods -> declareMethodDef moduleRef typeHandles td m]
     (td.Name, Map.ofList methodDecs) :: nestedDecs
 
+let declareType (typeHandles : Map<string, JointTypeDef>) (td : ILTypeDef) =
+    let stFields = [|for f in td.Fields.AsList -> toLLVMType typeHandles f.Type|]
+    let stTy = structType stFields false
+    refineType typeHandles.[td.Name].LLVMType stTy
+
+let declareTypes (tds : ILTypeDef list) =
+    // the reason that we build the type map before generating anything with
+    // LLVM is that it allows us to remove the "forward declarations" of types
+    // in the IL code. Since the real declarations all occur after the forward
+    // declarations they will be the ones left behind in the map
+    let rec flattenAndName (td : ILTypeDef) =
+        (td.Name, td) :: List.collect flattenAndName td.NestedTypes.AsList
+    let tyMap = Map.ofList (List.collect flattenAndName tds)
+
+    // generate the llvm ty handles that will hold all struct references
+    // then perform the declarations
+    let typeHandles = Map.map (fun _ td -> new JointTypeDef(td, createTypeHandle (opaqueType ()))) tyMap
+    for _, td in Map.toList tyMap do
+        declareType typeHandles td
+    typeHandles
+
 let genTypeDefs (moduleRef : ModuleRef) (typeDefs : ILTypeDefs) =
-    let funMap = Map.ofList <| List.concat [for t in typeDefs -> declareTypeDef moduleRef t]
-    Seq.iter (genTypeDef moduleRef funMap) typeDefs
+    let typeHandles = declareTypes typeDefs.AsList
+    for name, jointTyDef in Map.toList typeHandles do
+        addTypeName moduleRef name jointTyDef.LLVMType |> ignore
+    let funMap = Map.ofList <| List.concat [for t in typeDefs -> declareMethodDefs moduleRef typeHandles t]
+    Seq.iter (genTypeDef moduleRef typeHandles funMap) typeDefs
 

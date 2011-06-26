@@ -32,6 +32,7 @@ let power (x : float) (y : int) =
 [<ReferenceEquality>]
 type Point = {x : float; y : float; z : float}
 
-let distSq p = p.x * p.y * p.z
+let distSq p = p.x * p.x + p.y * p.y + p.z * p.z
 
-let distSqOf789 = distSq {x = 7.0; y = 8.0; z = 9.0}
+let distSqOf789 () = distSq {x = 7.0; y = 8.0; z = 9.0}
+

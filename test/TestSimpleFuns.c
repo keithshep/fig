@@ -7,6 +7,7 @@ extern int fib(int);
 extern int isEven(unsigned int);
 extern int isOdd(unsigned int);
 extern double power(double, int);
+extern double distSqOf789();
 
 int main(int argc, const char* argv[])
 {
@@ -21,6 +22,7 @@ int main(int argc, const char* argv[])
         printf("isOdd(%i)      = %i\n", i, isOdd(i));
         printf("power(1.5, %i) = %f\n", i, power(1.5, i));
     }
+    printf("distSqOf789() = %f\n", distSqOf789());
     
     return 0;
 }

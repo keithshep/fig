@@ -8,6 +8,7 @@ open LLVM.Core
 open LLVM.Generated.ExecutionEngine
 open LLVM.ExecutionEngine
 open LLVM.Generated.Target
+open LLVM.Generated.BitWriter
 
 [<EntryPoint>]
 let main args =
@@ -16,9 +17,8 @@ let main args =
         let il = OpenILModuleReader inFile defaults
         let moduleRef = moduleCreateWithName "module"
         genTypeDefs moduleRef il.ILModuleDef.TypeDefs
-        LLVM.Generated.BitWriter.writeBitcodeToFile moduleRef outFile |> ignore
-
         dumpModule moduleRef
+        writeBitcodeToFile moduleRef outFile |> ignore
 
     | _ -> failwith (sprintf "bad options %A" args)
 
