@@ -36,3 +36,20 @@ let distSq p = p.x * p.x + p.y * p.y + p.z * p.z
 
 let distSqOf789 () = distSq {x = 7.0; y = 8.0; z = 9.0}
 
+let avgOfTwo (x : float) (y : float) = (x + y) / 2.0
+
+//let avg (xs : float array) =
+//    let mutable sum = 0.0
+//    for x in xs do
+//        sum <- sum + x
+//    sum / float xs.Length
+//
+//let avgOfFour (a : float) (b : float) (c : float) (d : float) =
+//    avg [|a; b; c; d|]
+//
+//let arrTest () =
+//    let a = [|1 .. 5|]
+//    let mutable b = 0
+//    for i in a do
+//        b <- b + i
+//    ()

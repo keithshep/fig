@@ -23,6 +23,43 @@ type JointTypeDef (td : ILTypeDef, tyHandle : TypeHandleRef) =
     member x.LLVMType with get() = resolveTypeHandle tyHandle
     member x.LLVMTypeHandle with get() = tyHandle
 
+let rec toLLVMType (typeHandles : Map<string, JointTypeDef>) (ty : ILType) =
+    match ty with
+    | ILType.Void -> voidType ()
+    | ILType.Array (ilArrayShape, ilType) ->
+        match ilArrayShape with
+        | ILArrayShape [(Some 0, None)] ->
+            // LLVM docs say:
+            // "... 'variable sized array' addressing can be implemented in LLVM
+            // with a zero length array type". So, we implement this as a struct
+            // which contains a length element and an array element
+            let elemTy = toLLVMType typeHandles ilType
+            let basicArrTy = pointerType (arrayType elemTy 0u) 0u
+            // FIXME array len should correspond to "native unsigned int" not int32
+            pointerType (structType [|int32Type (); basicArrTy|] false) 0u
+        | _ ->
+            failwith (sprintf "dont know how to deal with array shape %A" ilArrayShape)
+    | ILType.Value typeSpec ->
+        match typeSpec.tspecTypeRef.trefName with
+        | "System.Int32"
+        | "System.UInt32"   -> int32Type ()
+        | "System.Int64"
+        | "System.UInt64"   -> int64Type ()
+        | "System.SByte"    -> int8Type ()
+        
+        // TODO compiler seems to be generating boolean as I4 but the CIL docs
+        // say that a single byte should be used to represent a boolean
+        | "System.Boolean"  -> int32Type ()
+        | "System.Double"   -> doubleType ()
+        | tyStr -> failwith ("unknown value type: " + tyStr)
+    | ILType.Boxed ilTypeSpec ->  //FIXME!!
+        pointerType typeHandles.[ilTypeSpec.Name].LLVMType 0u
+    | ILType.Ptr ilType -> failwith "ptr type"
+    | ILType.Byref ilType -> failwith "byref type"
+    | ILType.FunctionPointer ilCallingSignature -> failwith "funPtr type"
+    | ILType.TypeVar ui -> failwith "typevar type"
+    | ILType.Modified (required, modifierRef, ilType) -> failwith "modified type"
+
 let rec genInstructions
         (bldr : BuilderRef)
         (moduleRef : ModuleRef)
@@ -67,15 +104,71 @@ let rec genInstructions
                 failwith "instruction stack too low"
         | AI_add_ovf
         | AI_add_ovf_un
-        | AI_and
-        | AI_div
+        | AI_and -> noImpl ()
+        | AI_div ->
+            match instStack with
+            | value2 :: value1 :: stackTail ->
+                let divResult =
+                    match getTypeKind <| typeOf value1 with
+                    | TypeKind.FloatTypeKind | TypeKind.DoubleTypeKind ->
+                        buildFDiv bldr value1 value2 "tmpFDiv"
+                    | TypeKind.IntegerTypeKind ->
+                        buildSDiv bldr value1 value2 "tmpDiv"
+                    | ty ->
+                        failwith (sprintf "don't know how to div type: %A" ty)
+                goNext (divResult :: stackTail)
+            | _ ->
+                failwith "instruction stack too low"
         | AI_div_un
         | AI_ceq
         | AI_cgt
         | AI_cgt_un
         | AI_clt
-        | AI_clt_un
-        | AI_conv _      //of ILBasicType
+        | AI_clt_un -> noImpl ()
+        | AI_conv basicType -> //of ILBasicType
+            match basicType with
+            | DT_R
+            | DT_I1
+            | DT_U1
+            | DT_I2
+            | DT_U2 -> noImpl ()
+            | DT_I4 ->
+                match instStack with
+                | stackHead :: stackTail ->
+                    let headType = typeOf stackHead
+                    match getTypeKind headType with
+                    | TypeKind.IntegerTypeKind ->
+                        if getIntTypeWidth headType = 32u then
+                            goNext instStack
+                        else
+                            failwith "not 32u"
+                    | _ ->
+                        failwith "not an int kind"
+                | _ ->
+                    failwith "instruction stack too low"
+            | DT_U4
+            | DT_I8
+            | DT_U8
+            | DT_R4 -> noImpl ()
+            | DT_R8 ->
+                match instStack with
+                | stackHead :: stackTail ->
+                    let headType = typeOf stackHead
+                    match getTypeKind headType with
+                    | TypeKind.IntegerTypeKind ->
+                        if getIntTypeWidth headType = 32u then
+                            // FIXME don't really know if it's signed or unsigned here
+                            let convVal = buildSIToFP bldr stackHead (doubleType ()) "convVal"
+                            goNext (convVal :: stackTail)
+                        else
+                            failwith "not 32u"
+                    | _ ->
+                        failwith "not an int kind"
+                | _ ->
+                    failwith "instruction stack too low"
+            | DT_I
+            | DT_U
+            | DT_REF -> noImpl ()
         | AI_conv_ovf _  //of ILBasicType
         | AI_conv_ovf_un _ -> noImpl ()  //of ILBasicType
         | AI_mul ->
@@ -259,10 +352,10 @@ let rec genInstructions
             | [] -> failwith "empty instruction stack"
             | value :: stackTail ->
                 let caseInts =
-                    [for i in 0 .. codeLabels.Length - 1 ->
-                        constInt (int32Type ()) (uint64 i) false]
-                let caseBlocks = [for l in codeLabels -> blockMap.[l]]
-                buildSwitchWithCases bldr value (List.zip caseInts caseBlocks) blockMap.[fallThroughCodeLabel]
+                    [|for i in 0 .. codeLabels.Length - 1 ->
+                        constInt (int32Type ()) (uint64 i) false|]
+                let caseBlocks = [|for l in codeLabels -> blockMap.[l]|]
+                buildSwitchWithCases bldr value (Array.zip caseInts caseBlocks) blockMap.[fallThroughCodeLabel]
         
         | I_ret ->
             // TODO confirm void funs are [] and non-void are not
@@ -395,11 +488,32 @@ let rec genInstructions
         // The IL writer then reverses this when emitting the binary.
         | I_ldelem _      //of ILBasicType
         | I_stelem _      //of ILBasicType
-        | I_ldelema _     //of ILReadonly * ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
-        | I_ldelem_any _  //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
-        | I_stelem_any _  //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
-        | I_newarr _      //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
-        | I_ldlen
+        | I_ldelema _ -> noImpl () //of ILReadonly * ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
+        | I_ldelem_any (shape, ty) -> //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
+            match shape with
+            | ILArrayShape [(Some 0, None)] ->
+                match instStack with
+                | index :: arrObj :: stackTail ->
+                    let arrPtr = buildStructGEP bldr arrObj 1u "arrPtr"
+                    let arr = buildLoad bldr arrPtr "array"
+                    let elemPtr = buildGEP bldr arr [|index|] "elemPtr"
+                    let elem = buildLoad bldr elemPtr "elem"
+                    
+                    goNext (elem :: stackTail)
+                | _ ->
+                    failwith "instruction stack too low"
+            | _ ->
+                noImpl ()
+        | I_stelem_any _  -> noImpl () //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
+        | I_newarr (shape, ty) -> noImpl () //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
+        | I_ldlen ->
+            match instStack with
+            | arrObj :: stackTail ->
+                let lenPtr = buildStructGEP bldr arrObj 0u "lenPtr"
+                let len = buildLoad bldr lenPtr "len"
+                
+                goNext (len :: stackTail)
+            | _ -> failwith "instruction stack too low"
 
         // "System.TypedReference" related instructions: almost
         // no languages produce these, though they do occur in mscorlib.dll
@@ -471,31 +585,6 @@ let rec genCode
 //            genNextCode (depth + 2) ilCode
 //        | FilterCatchBlock filterCatchList ->
 //            iprintfn (depth + 1) "filterCatchBlock TODO"
-
-let toLLVMType (typeHandles : Map<string, JointTypeDef>) (ty : ILType) =
-    match ty with
-    | ILType.Void -> voidType ()
-    | ILType.Array (ilArrayShape, ilType) -> failwith "array type"
-    | ILType.Value typeSpec ->
-        match typeSpec.tspecTypeRef.trefName with
-        | "System.Int32"
-        | "System.UInt32"   -> int32Type ()
-        | "System.Int64"
-        | "System.UInt64"   -> int64Type ()
-        | "System.SByte"    -> int8Type ()
-        
-        // TODO compiler seems to be generating boolean as I4 but the CIL docs
-        // say that a single byte should be used to represent a boolean
-        | "System.Boolean"  -> int32Type ()
-        | "System.Double"   -> doubleType ()
-        | tyStr -> failwith ("unknown value type: " + tyStr)
-    | ILType.Boxed ilTypeSpec ->  //FIXME!!
-        pointerType typeHandles.[ilTypeSpec.Name].LLVMType 0u
-    | ILType.Ptr ilType -> failwith "ptr type"
-    | ILType.Byref ilType -> failwith "byref type"
-    | ILType.FunctionPointer ilCallingSignature -> failwith "funPtr type"
-    | ILType.TypeVar ui -> failwith "typevar type"
-    | ILType.Modified (required, modifierRef, ilType) -> failwith "modified type"
 
 let genAlloca
         (bldr : BuilderRef)
