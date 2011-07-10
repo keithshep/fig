@@ -9,5 +9,6 @@ mkdir -p build
 ln -fs ../CIL.dll build/CIL.dll
 ln -fs ../LLVMFSharp.dll build/LLVMFSharp.dll
 fsc --nologo --target:library --out:build/fig.dll -r CIL.dll -r LLVMFSharp.dll \
+    src/Fig/CIL.fs \
     src/Fig/LLVMCodeGen.fs
 
