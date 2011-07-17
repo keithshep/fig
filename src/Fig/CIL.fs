@@ -14,8 +14,10 @@ type DLLReader(stream : Stream) =
 
     let mutable posStack = []
 
+    member x.PushPos () = posStack <- stream.Position :: posStack
+
     member x.PushPos (pos : int64) =
-        posStack <- stream.Position :: posStack
+        x.PushPos ()
         stream.Seek (pos, SeekOrigin.Begin) |> ignore
 
     member x.PopPos () =
@@ -55,13 +57,16 @@ let readLongEq (br : BinaryReader) (expectLong : uint64) (name : string) =
     if inLong <> expectLong then
         printfn "expected \"%s\" to be %X but read %X" name expectLong inLong
 
-let readASCII (br : BinaryReader) =
-    let sb = new StringBuilder()
-    let mutable currByte = br.ReadByte ()
-    while currByte <> 0uy do
-        sb.Append (char currByte) |> ignore
-        currByte <- br.ReadByte ()
-    sb.ToString ()
+let readString (br : BinaryReader) (enc : Encoding) =
+    enc.GetString [|
+        let currByte = ref (br.ReadByte ())
+        while !currByte <> 0uy do
+            yield !currByte
+            currByte := br.ReadByte ()|]
+
+let readASCII (br : BinaryReader) = readString br Encoding.ASCII
+
+let readUTF8 (br : BinaryReader) = readString br Encoding.UTF8
 
 let readFixedASCII (br : BinaryReader) (fixedLen : int) =
     let sb = new StringBuilder(fixedLen)
@@ -70,6 +75,20 @@ let readFixedASCII (br : BinaryReader) (fixedLen : int) =
     while i < bytes.Length && bytes.[i] <> 0uy do
         sb.Append (char bytes.[i]) |> ignore
         i <- i + 1
+    sb.ToString ()
+
+let readAlignedASCII (br : BinaryReader) (align : int) =
+    let sb = new StringBuilder()
+    let mutable currByte = br.ReadByte ()
+    let mutable bytesRead = 1
+    while currByte <> 0uy do
+        sb.Append (char currByte) |> ignore
+        currByte <- br.ReadByte ()
+        bytesRead <- bytesRead + 1
+    let overhang = bytesRead % align
+    if overhang <> 0 then
+        let padding = align - overhang
+        br.BaseStream.Seek (int64 padding, SeekOrigin.Current) |> ignore
     sb.ToString ()
 
 // see EMCA-335 25.2.1
@@ -102,7 +121,6 @@ let readMSDOSHeader (br : BinaryReader) =
 
     peOffset
 
-// specified in EMCA-335 25.2.2
 type SubSystem = WindowsCUI | WindowsGUI
 
 type PEOptionalHeader = {
@@ -140,18 +158,56 @@ type PEHeader = {
     isDLL : bool
     optHeader : PEOptionalHeader option}
 
-// specified in EMCA-335 25.3.1
-let readImportTables (br : BinaryReader) =
-    let importLookupTableRVA = br.ReadUInt32 ()
-    printfn "importLookupTableRVA = %X" importLookupTableRVA
-    readIntEq br 0u "DateTimeStamp"
-    readIntEq br 0u "ForwarderChain"
-    let nameRVA = br.ReadUInt32 ()
-    printfn "nameRVA = %X" nameRVA
-    let importAddressTableRVA = br.ReadUInt32 ()
-    printfn "importAddressTableRVA = %X" importAddressTableRVA
-    readBytesEq br (Array.create 20 0x00uy) "import table RVA padding"
+type SectionHeader = {
+    name : string
+    virtSize : uint32
+    virtAddr : uint32
+    sizeOfRawData : uint32
+    ptrToRawData : uint32
+    containsCode : bool
+    containsInitData : bool
+    containsUninitData : bool
+    memExec : bool
+    memRead : bool
+    memWrite : bool}
 
+type CLIHeader = {
+    majorRuntimeVersion : uint16
+    minorRuntimeVersion : uint16
+    metaDataRVA : uint32
+    metaDataSize : uint32
+    flags : uint32
+    entryPointTok : uint32
+    resourcesRVA : uint32
+    resourcesSize : uint32
+    strongNameSig : uint64
+    vTableFixupsRVA : uint32
+    vTableFixupsSize : uint32}
+
+// From EMCA-335 25
+// The PE format frequently uses the term RVA (Relative Virtual Address). An RVA is the address of an item
+// once loaded into memory, with the base address of the image file subtracted from it (i.e., the offset from the
+// base address where the file is loaded). The RVA of an item will almost always differ from its position within
+// the file on disk. To compute the file position of an item with RVA r, search all the sections in the PE file to find
+// the section with RVA s, length l and file position p in which the RVA lies, ie s <= r < s+l. The file position of
+// the item is then given by p+(r-s).
+let rec rvaToDiskPosOpt (secHeaders : SectionHeader list) (r : uint32) =
+    match secHeaders with
+    | {virtSize = l; virtAddr = s; ptrToRawData = p} :: hdrTail ->
+        if s <= r && r < s + l then
+            let diskPos = p + (r - s)
+            Some (int64 diskPos)
+        else
+            rvaToDiskPosOpt hdrTail r
+    | [] ->
+        None
+
+let rvaToDiskPos (secHeaders : SectionHeader list) (r : uint32) =
+    match rvaToDiskPosOpt secHeaders r with
+    | Some x -> x
+    | None -> failwith (sprintf "failed to locate RVA %X" r)
+
+// specified in EMCA-335 25.2.2
 let readPEHeader (br : BinaryReader) =
     let peOffset = readMSDOSHeader br
     br.BaseStream.Seek (int64 peOffset, SeekOrigin.Begin) |> ignore
@@ -262,6 +318,7 @@ let readPEHeader (br : BinaryReader) =
             readLongEq br 0uL "delay import descriptor"
             let cliHeaderRVA = br.ReadUInt32 ()
             let cliHeaderSize = br.ReadUInt32 ()
+            //printfn "CLI header: %i %i" cliHeaderRVA cliHeaderSize
             readLongEq br 0uL "reserved"
             Some {
                 // 25.2.3.1 standard fields
@@ -301,19 +358,6 @@ let readPEHeader (br : BinaryReader) =
     }
 
 // specified in EMCA-335 25.3
-type SectionHeader = {
-    name : string
-    virtSize : uint32
-    virtAddr : uint32
-    sizeOfRawData : uint32
-    ptrToRawData : uint32
-    containsCode : bool
-    containsInitData : bool
-    containsUninitData : bool
-    memExec : bool
-    memRead : bool
-    memWrite : bool}
-
 let readSectionHeader (br : BinaryReader) =
     let name = readFixedASCII br 8
     let virtualSize = br.ReadUInt32 ()
@@ -349,5 +393,372 @@ let readSectionHeader (br : BinaryReader) =
     }
 
 let readSectionHeaders (br : BinaryReader) (pe : PEHeader) =
-    [|for _ in 1us .. pe.numSections -> readSectionHeader br|]
+    [for _ in 1us .. pe.numSections -> readSectionHeader br]
+
+// 25.3.3 CLI Header
+let readCLIHeader (br : BinaryReader) (secHdrs : SectionHeader list) (peHdr : PEHeader) =
+    match peHdr.optHeader with
+    | None -> failwith "can't read CLI with missing optional PE header"
+    | Some {cliHeaderRVA = rvi} ->
+        br.BaseStream.Seek (rvaToDiskPos secHdrs rvi, SeekOrigin.Begin) |> ignore
+        readIntEq br 72u "size in bytes"
+        let majorRuntimeVersion = br.ReadUInt16 ()
+        let minorRuntimeVersion = br.ReadUInt16 ()
+        let metaDataRVA = br.ReadUInt32 ()
+        let metaDataSize = br.ReadUInt32 ()
+        let flags = br.ReadUInt32 ()
+        let entryPointTok = br.ReadUInt32 ()
+        printfn "entry point tok: %i" entryPointTok
+        let resourcesRVA = br.ReadUInt32 ()
+        let resourcesSize = br.ReadUInt32 ()
+        let strongNameSig = br.ReadUInt64 ()
+        readLongEq br 0uL "code manager table"
+        let vTableFixupsRVA = br.ReadUInt32 ()
+        let vTableFixupsSize = br.ReadUInt32 ()
+        readLongEq br 0uL "export address table jumps"
+        readLongEq br 0uL "managed native header"
+        
+        {
+            CLIHeader.majorRuntimeVersion = majorRuntimeVersion
+            CLIHeader.minorRuntimeVersion = minorRuntimeVersion
+            CLIHeader.metaDataRVA = metaDataRVA
+            CLIHeader.metaDataSize = metaDataSize
+            CLIHeader.flags = flags
+            CLIHeader.entryPointTok = entryPointTok
+            CLIHeader.resourcesRVA = resourcesRVA
+            CLIHeader.resourcesSize = resourcesSize
+            CLIHeader.strongNameSig = strongNameSig
+            CLIHeader.vTableFixupsRVA = vTableFixupsRVA
+            CLIHeader.vTableFixupsSize = vTableFixupsSize
+        }
+
+let readStreamHeader (br : BinaryReader) =
+    let offset = br.ReadUInt32 ()
+    let size = br.ReadUInt32 ()
+    let name = readAlignedASCII br 4
+    (offset, size, name)
+
+let readStreamHeaders (br : BinaryReader) (secHdrs : SectionHeader list) (cliHeader : CLIHeader) =
+    br.BaseStream.Seek (rvaToDiskPos secHdrs cliHeader.metaDataRVA, SeekOrigin.Begin) |> ignore
+    readIntEq br 0x424A5342u "magic signature for physical metadata"
+    br.BaseStream.Seek (4L, SeekOrigin.Current) |> ignore
+    readIntEq br 0u "reserved"
+    let versionStrLen = br.ReadUInt32 ()
+    let tempPos = br.BaseStream.Position
+    printfn "version string: '%s', alloc: %i" (readASCII br) versionStrLen
+    br.BaseStream.Seek (tempPos + int64 versionStrLen, SeekOrigin.Begin) |> ignore
+    readShortEq br 0us "meta data flags"
+    let numStreams = br.ReadUInt16 ()
+    printfn "num streams %i" numStreams
+    
+    Map.ofList
+        [for _ in 1us .. numStreams do
+            let offset, size, name = readStreamHeader br
+            printfn "offset = %i, size = %i, name = '%s'" offset size name
+            yield (name, (offset, size))]
+
+type MetadataTables =
+    | Assembly = 0x20
+    | AssemblyOS = 0x22
+    | AssemblyProcessor = 0x21
+    | AssemblyRef = 0x23
+    | AssemblyRefOS = 0x25
+    | AssemblyRefProcessor = 0x24
+    | ClassLayout = 0x0F
+    | Constant = 0x0B
+    | CustomAttribute = 0x0C
+    | DeclSecurity = 0x0E
+    | EventMap = 0x12
+    | Event = 0x14
+    | ExportedType = 0x27
+    | Field = 0x04
+    | FieldLayout = 0x10
+    | FieldMarshal = 0x0D
+    | FieldRVA = 0x1D
+    | File = 0x26
+    | GenericParam = 0x2A
+    | GenericParamConstraint = 0x2C
+    | ImplMap = 0x1C
+    | InterfaceImpl = 0x09
+    | ManifestResource = 0x28
+    | MemberRef = 0x0A
+    | MethodDef = 0x06
+    | MethodImpl = 0x19
+    | MethodSemantics = 0x18
+    | MethodSpec = 0x2B
+    | Module = 0x00
+    | ModuleRef = 0x1A
+    | NestedClass = 0x29
+    | Param = 0x08
+    | Property = 0x17
+    | PropertyMap = 0x15
+    | StandAloneSig = 0x11
+    | TypeDef = 0x02
+    | TypeRef = 0x01
+    | TypeSpec = 0x1B
+
+let sortedTableEnums =
+    [|for x in System.Enum.GetValues typeof<MetadataTables> ->
+        enum<MetadataTables> (x :?> int)|]
+
+let isMetadataTableValid (validTblBits : uint64) (mt : MetadataTables) =
+    (1uL <<< int mt) &&& validTblBits <> 0uL
+
+type CodedIndexKind =
+    | TypeDefOrRef
+    | HasConstant
+    | HasCustomAttribute
+    | HasFieldMarshall
+    | HasDeclSecurity
+    | MemberRefParent
+    | HasSemantics
+    | MethodDefOrRef
+    | MemberForwarded
+    | Implementation
+    | CustomAttributeType
+    | ResolutionScope
+    | TypeOrMethodDef
+
+let codeBitCount = function
+    | TypeDefOrRef -> 2
+    | HasConstant -> 2
+    | HasCustomAttribute -> 5
+    | HasFieldMarshall -> 1
+    | HasDeclSecurity -> 2
+    | MemberRefParent -> 3
+    | HasSemantics -> 1
+    | MethodDefOrRef -> 1
+    | MemberForwarded -> 1
+    | Implementation -> 2
+    | CustomAttributeType -> 3
+    | ResolutionScope -> 2
+    | TypeOrMethodDef -> 1
+
+let possibleTableKinds = function
+    | TypeDefOrRef -> [|MetadataTables.TypeDef; MetadataTables.TypeRef; MetadataTables.TypeSpec|]
+    | HasConstant -> [|MetadataTables.Field; MetadataTables.Param; MetadataTables.Property|]
+    | HasCustomAttribute ->
+        [|MetadataTables.MethodDef; MetadataTables.Field; MetadataTables.TypeRef;
+          MetadataTables.TypeDef; MetadataTables.Param; MetadataTables.InterfaceImpl;
+          MetadataTables.MemberRef; MetadataTables.Module;
+          (* TODO documented as Permission not sure if this is valid *) MetadataTables.DeclSecurity;
+          MetadataTables.Property; MetadataTables.Event; MetadataTables.StandAloneSig;
+          MetadataTables.ModuleRef; MetadataTables.TypeSpec; MetadataTables.Assembly;
+          MetadataTables.AssemblyRef; MetadataTables.File; MetadataTables.ExportedType;
+          MetadataTables.ManifestResource; MetadataTables.GenericParam;
+          MetadataTables.GenericParamConstraint; MetadataTables.MethodSpec|]
+    | HasFieldMarshall -> [|MetadataTables.Field; MetadataTables.Param|]
+    | HasDeclSecurity -> [|MetadataTables.TypeDef; MetadataTables.MethodDef; MetadataTables.Assembly|]
+    | MemberRefParent ->
+        [|MetadataTables.TypeDef; MetadataTables.TypeRef; MetadataTables.ModuleRef;
+          MetadataTables.MethodDef; MetadataTables.TypeSpec|]
+    | HasSemantics -> [|MetadataTables.Event; MetadataTables.Property|]
+    | MethodDefOrRef -> [|MetadataTables.MethodDef; MetadataTables.MemberRef|]
+    | MemberForwarded -> [|MetadataTables.Field; MetadataTables.MethodDef|]
+    | Implementation -> [|MetadataTables.File; MetadataTables.AssemblyRef; MetadataTables.ExportedType|]
+    | CustomAttributeType -> [|MetadataTables.MethodDef; MetadataTables.MemberRef|]
+    | ResolutionScope ->
+        [|MetadataTables.Module; MetadataTables.ModuleRef;
+          MetadataTables.AssemblyRef; MetadataTables.TypeRef|]
+    | TypeOrMethodDef -> [|MetadataTables.TypeDef; MetadataTables.MethodDef|]
+
+let resolveTableKind (cik : CodedIndexKind) (i : int) =
+    match cik with
+    | CustomAttributeType ->
+        // CustomAttributeType is a special case since it isn't directly indexable
+        match i with
+        | 2 -> MetadataTables.MethodDef
+        | 3 -> MetadataTables.MemberRef
+        | _ -> failwith (sprintf "bad index used for CustomAttributeType: %i" i)
+
+    | _ -> (possibleTableKinds cik).[i]
+
+let readMetadataTables
+        (br : DLLReader)
+        (secHdrs : SectionHeader list)
+        (cliHeader : CLIHeader)
+        (streamHeaders : Map<string, uint32 * uint32>) =
+
+    // see 24.2.6
+    match streamHeaders.TryFind "#~" with
+    | None -> failwith "failed to find the \"#~\" stream"
+    | Some (tildeOffset, tildeSize) ->
+        let rraToDiskPos rootRelAddr =
+            rvaToDiskPos secHdrs (cliHeader.metaDataRVA + rootRelAddr)
+        br.BaseStream.Seek (rraToDiskPos tildeOffset, SeekOrigin.Begin) |> ignore
+        
+        readIntEq br 0u "meta tables header reserved field"
+        readByteEq br 2uy "major version of table schemata"
+        readByteEq br 0uy "minor version of table schemata"
+        let heapSizes = br.ReadByte ()
+        readByteEq br 1uy "meta tables header second reserved field"
+        let validTables = br.ReadUInt64 ()
+        let sortedTables = br.ReadUInt64 ()
+
+        let readMaybeWideIndex isWide =
+            if isWide then
+                br.ReadUInt32 ()
+            else
+                br.ReadUInt16 () |> uint32
+
+        let stringHeapIndicesWide = heapSizes &&& 0x01uy <> 0x00uy
+        let readStringHeapIndex () = readMaybeWideIndex stringHeapIndicesWide
+        let readHeapString () =
+            let i = readStringHeapIndex ()
+            let strOffset =
+                match streamHeaders.TryFind "#Strings" with
+                | Some (offset, _) -> offset
+                | None -> failwith "failed to find string section"
+            let strAddr = rraToDiskPos strOffset + int64 i
+            br.PushPos strAddr
+            let str = readUTF8 br
+            br.PopPos ()
+            str
+
+        let guidHeapIndicesWide = heapSizes &&& 0x02uy <> 0x00uy
+        let readGUIDHeapIndex () = readMaybeWideIndex guidHeapIndicesWide
+
+        let blobHeapIndicesWide = heapSizes &&& 0x04uy <> 0x00uy
+        let readBlobHeapIndex () = readMaybeWideIndex blobHeapIndicesWide
+
+        let rowCounts =
+            Map.ofList
+                [for mt in sortedTableEnums do
+                    if isMetadataTableValid validTables mt then
+                        yield mt, br.ReadUInt32 ()]
+
+        let tableIndicesWide mt =
+            match rowCounts.TryFind mt with
+            | None -> false
+            | Some count -> count &&& 0xFFFF0000u <> 0u
+
+        let readTableIndex mt =
+            if tableIndicesWide mt then
+                br.ReadUInt32 ()
+            else
+                br.ReadUInt16 () |> uint32
+
+        let codedIndicesWide (cik : CodedIndexKind) =
+            let maxCount =
+                Array.max
+                    [|for mt in possibleTableKinds cik do
+                        match rowCounts.TryFind mt with
+                        | None -> ()
+                        | Some x -> yield x|]
+            let mask = 0xFFFF0000u ||| (0xFFFF0000u >>> codeBitCount cik)
+            maxCount &&& mask <> 0u
+
+        let readCodedIndex (cik : CodedIndexKind) =
+            let rawIndex =
+                if codedIndicesWide cik then
+                    br.ReadUInt32 ()
+                else
+                    br.ReadUInt16 () |> uint32
+            let cbc = codeBitCount cik
+            let tableKindIndex = int (rawIndex &&& ~~~(0xFFFFFFFFu <<< cbc))
+            let tableKind = resolveTableKind cik tableKindIndex
+            let rowIndex = rawIndex >>> cbc
+            
+            tableKind, rowIndex
+
+        printfn "num tables: %i" rowCounts.Count
+        for kv in rowCounts do printfn "%A, %A is wide? %A" kv.Key kv.Value (tableIndicesWide kv.Key)
+        
+        for kv in rowCounts do
+            let rowCount = kv.Value
+            let noImpl () = failwith (sprintf "no implementation for %A" kv.Key)
+            match kv.Key with
+            | MetadataTables.Assembly ->
+                for i in {1u .. rowCount} do
+                    let hashAlgId = br.ReadUInt32 ()
+                    let majorVersion = br.ReadUInt16 ()
+                    let minorVersion = br.ReadUInt16 ()
+                    let buildNumber = br.ReadUInt16 ()
+                    let revisionNumber = br.ReadUInt16 ()
+                    let flags = br.ReadUInt32 ()
+                    let pubKeyBlobIdx = readBlobHeapIndex ()
+                    let name = readHeapString ()
+                    let culture = readHeapString ()
+                    
+                    printfn "asm name=\"%s\", culture=\"%s\"" name culture
+            | MetadataTables.AssemblyOS -> noImpl ()
+            | MetadataTables.AssemblyProcessor -> noImpl ()
+            | MetadataTables.AssemblyRef ->
+                for i in {1u .. rowCount} do
+                    let majorVersion = br.ReadUInt16 ()
+                    let minorVersion = br.ReadUInt16 ()
+                    let buildNumber = br.ReadUInt16 ()
+                    let revisionNumber = br.ReadUInt16 ()
+                    let flags = br.ReadUInt32 ()
+                    let publicKeyOrTokenIndex = readBlobHeapIndex ()
+                    let name = readHeapString ()
+                    let culture = readHeapString ()
+                    let hashValueIndex = readBlobHeapIndex ()
+                    
+                    printfn "refasm name=\"%s\", culture=\"%s\"" name culture
+            | MetadataTables.AssemblyRefOS
+            | MetadataTables.AssemblyRefProcessor
+            | MetadataTables.ClassLayout
+            | MetadataTables.Constant
+            | MetadataTables.CustomAttribute
+            | MetadataTables.DeclSecurity
+            | MetadataTables.EventMap
+            | MetadataTables.Event
+            | MetadataTables.ExportedType -> noImpl ()
+            | MetadataTables.Field ->
+                for i in {1u .. rowCount} do
+                    let fieldAttrFlags = br.ReadUInt16 ()
+                    let name = readHeapString ()
+                    let signatureIndex = readBlobHeapIndex ()
+
+                    printfn "Field: flags=%X, name=%s, sigindex=%i" fieldAttrFlags name signatureIndex
+            | MetadataTables.FieldLayout
+            | MetadataTables.FieldMarshal
+            | MetadataTables.FieldRVA
+            | MetadataTables.File
+            | MetadataTables.GenericParam
+            | MetadataTables.GenericParamConstraint
+            | MetadataTables.ImplMap
+            | MetadataTables.InterfaceImpl
+            | MetadataTables.ManifestResource
+            | MetadataTables.MemberRef
+            | MetadataTables.MethodDef
+            | MetadataTables.MethodImpl
+            | MetadataTables.MethodSemantics
+            | MetadataTables.MethodSpec -> noImpl ()
+            | MetadataTables.Module ->
+                for i in {1u .. rowCount} do
+                    readShortEq br 0us "module generation"
+                    let name = readHeapString ()
+                    let mvidIndex = readGUIDHeapIndex ()
+                    let encIDIndex = readGUIDHeapIndex ()
+                    let encBaseIdIndex = readGUIDHeapIndex ()
+                    
+                    printfn "module name=\"%s\"" name
+            | MetadataTables.ModuleRef
+            | MetadataTables.NestedClass
+            | MetadataTables.Param
+            | MetadataTables.Property
+            | MetadataTables.PropertyMap
+            | MetadataTables.StandAloneSig -> noImpl ()
+            | MetadataTables.TypeDef ->
+                for i in {1u .. rowCount} do
+                    let flags = br.ReadUInt32 ()
+                    let typeName = readHeapString ()
+                    let typeNamespace = readHeapString ()
+                    let extendsKind, extendsIndex = readCodedIndex TypeDefOrRef
+                    let fieldsIndex = readTableIndex MetadataTables.Field
+                    let methodsIndex = readTableIndex MetadataTables.MethodDef
+
+                    printfn "TypeDef: typeName=%s, typeNamespace=%s" typeName typeNamespace
+            | MetadataTables.TypeRef ->
+                for i in {1u .. rowCount} do
+                    let tableKind, rowIndex = readCodedIndex ResolutionScope
+                    let typeName = readHeapString ()
+                    let typeNamespace = readHeapString ()
+
+                    printfn "TypeRef: tableKind=%A, typeName=%s, typeNamespace=%s" tableKind typeName typeNamespace
+            | MetadataTables.TypeSpec
+            | _ -> noImpl ()
+
 

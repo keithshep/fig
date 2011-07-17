@@ -18,12 +18,16 @@ let main args =
     match args with
     | [| inFile; outFile |] ->
 
-        use br = new BinaryReader(new FileStream(inFile, FileMode.Open))
+        use br = new DLLReader(new FileStream(inFile, FileMode.Open))
         let pe = readPEHeader br
-        let headers = readSectionHeaders br pe
-        for hdr in headers do
+        let secHdrs = readSectionHeaders br pe
+        for hdr in secHdrs do
             printfn "SECTION HEADER:"
             printfn "%A" hdr
+        let cliHeader = readCLIHeader br secHdrs pe
+        let streamHeaders = readStreamHeaders br secHdrs cliHeader
+        readMetadataTables br secHdrs cliHeader streamHeaders
+        
 //        let il = OpenILModuleReader inFile defaults
 //        let moduleRef = moduleCreateWithName "module"
 //        genTypeDefs moduleRef il.ILModuleDef.TypeDefs
