@@ -3,6 +3,8 @@ module Fig.CIL
 open System.IO
 open System.Text
 
+let warnf fmt = eprintfn fmt
+
 // Misc. notes:
 //  - Info on Relative Virtual Address (RVA) can be found at 9.4
 //    Also, from 4.15
@@ -504,6 +506,14 @@ let sortedTableEnums =
 let isMetadataTableValid (validTblBits : uint64) (mt : MetadataTables) =
     (1uL <<< int mt) &&& validTblBits <> 0uL
 
+let assertTableBitsValid (validTblBits : uint64) =
+    let mutable maskedBits = validTblBits
+    for mt in sortedTableEnums do
+        let mask = ~~~(1uL <<< int mt)
+        maskedBits <- maskedBits &&& mask
+
+    if maskedBits <> 0uL then failwith (sprintf "bad bits: %X" maskedBits)
+
 type CodedIndexKind =
     | TypeDefOrRef
     | HasConstant
@@ -593,6 +603,7 @@ let readMetadataTables
         let heapSizes = br.ReadByte ()
         readByteEq br 1uy "meta tables header second reserved field"
         let validTables = br.ReadUInt64 ()
+        assertTableBitsValid validTables
         let sortedTables = br.ReadUInt64 ()
 
         let readMaybeWideIndex isWide =
@@ -669,7 +680,7 @@ let readMetadataTables
             let noImpl () = failwith (sprintf "no implementation for %A" kv.Key)
             match kv.Key with
             | MetadataTables.Assembly ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let hashAlgId = br.ReadUInt32 ()
                     let majorVersion = br.ReadUInt16 ()
                     let minorVersion = br.ReadUInt16 ()
@@ -680,11 +691,11 @@ let readMetadataTables
                     let name = readHeapString ()
                     let culture = readHeapString ()
                     
-                    printfn "asm name=\"%s\", culture=\"%s\"" name culture
+                    printfn "Assembly: name=\"%s\", culture=\"%s\"" name culture
             | MetadataTables.AssemblyOS -> noImpl ()
             | MetadataTables.AssemblyProcessor -> noImpl ()
             | MetadataTables.AssemblyRef ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let majorVersion = br.ReadUInt16 ()
                     let minorVersion = br.ReadUInt16 ()
                     let buildNumber = br.ReadUInt16 ()
@@ -695,13 +706,13 @@ let readMetadataTables
                     let culture = readHeapString ()
                     let hashValueIndex = readBlobHeapIndex ()
                     
-                    printfn "refasm name=\"%s\", culture=\"%s\"" name culture
+                    printfn "AssemblyRef: name=\"%s\", culture=\"%s\"" name culture
             | MetadataTables.AssemblyRefOS
             | MetadataTables.AssemblyRefProcessor
             | MetadataTables.ClassLayout
             | MetadataTables.Constant
             | MetadataTables.CustomAttribute ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let parentKind, parentIndex = readCodedIndex HasCustomAttribute
                     // The column called Type is slightly misleading
                     // it actually indexes a constructor method
@@ -716,30 +727,60 @@ let readMetadataTables
             | MetadataTables.Event
             | MetadataTables.ExportedType -> noImpl ()
             | MetadataTables.Field ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let fieldAttrFlags = br.ReadUInt16 ()
                     let name = readHeapString ()
                     let signatureIndex = readBlobHeapIndex ()
 
                     printfn "Field: flags=%X, name=%s, sigindex=%i" fieldAttrFlags name signatureIndex
-            | MetadataTables.FieldLayout
-            | MetadataTables.FieldMarshal
+            | MetadataTables.FieldLayout -> noImpl ()
+            | MetadataTables.FieldMarshal ->
+                for _ in 1u .. rowCount do
+                    let parentKind, parentIndex = readCodedIndex HasFieldMarshall
+                    let nativeTypeIndex = readBlobHeapIndex ()
+
+                    printfn "FieldMarshal: parent=(%A, %i), nativeType=%i" parentKind parentIndex nativeTypeIndex
             | MetadataTables.FieldRVA
             | MetadataTables.File
             | MetadataTables.GenericParam
-            | MetadataTables.GenericParamConstraint
-            | MetadataTables.ImplMap
-            | MetadataTables.InterfaceImpl
-            | MetadataTables.ManifestResource -> noImpl ()
+            | MetadataTables.GenericParamConstraint -> noImpl ()
+            | MetadataTables.ImplMap ->
+                for _ in 1u .. rowCount do
+                    let mappingFlags = br.ReadUInt16 ()
+                    //it only ever indexes the MethodDef table, since Field export is not supported
+                    let memberForwardedKind, memberForwardedIndex = readCodedIndex MemberForwarded
+                    let importName = readHeapString ()
+                    let importScopeIndex = readTableIndex MetadataTables.ModuleRef
+
+                    printfn
+                        "ImplMap: forwarded=(%A, %i), importName=%s, importScopeIndex=%i"
+                        memberForwardedKind
+                        memberForwardedIndex
+                        importName
+                        importScopeIndex
+            | MetadataTables.InterfaceImpl ->
+                for _ in 1u .. rowCount do
+                    let classIndex = readTableIndex MetadataTables.TypeDef
+                    let ifaceKind, ifaceIndex = readCodedIndex TypeDefOrRef
+
+                    printfn "InterfaceImpl: class=%i, interface=(%A, %i)" classIndex ifaceKind ifaceIndex
+            | MetadataTables.ManifestResource ->
+                for _ in 1u .. rowCount do
+                    let offset = br.ReadUInt32 ()
+                    let flags = br.ReadUInt32 ()
+                    let name = readHeapString ()
+                    let implKind, implIndex = readCodedIndex Implementation
+
+                    printfn "ManifestResource: name=%s, impl=(%A, %i)" name implKind implIndex
             | MetadataTables.MemberRef ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let classKind, classIndex = readCodedIndex MemberRefParent
                     let name = readHeapString ()
                     let signatureIndex = readBlobHeapIndex ()
                     
                     printfn "MemberRef: class=(%A, %i) name=%s, sigIndex=%i" classKind classIndex name signatureIndex
             | MetadataTables.MethodDef ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let rva = br.ReadUInt32 ()
                     let implFlags = br.ReadUInt16 ()
                     let flags = br.ReadUInt16 ()
@@ -748,11 +789,28 @@ let readMetadataTables
                     let paramIndex = readTableIndex MetadataTables.Param
 
                     printfn "MethodDef: name=%s, sigIndex=%i, paramIndex=%i" name signatureIndex paramIndex
-            | MetadataTables.MethodImpl
-            | MetadataTables.MethodSemantics
-            | MetadataTables.MethodSpec -> noImpl ()
+            | MetadataTables.MethodImpl ->
+                for _ in 1u .. rowCount do
+                    let classIndex = readTableIndex MetadataTables.TypeDef
+                    let methodBodyKind, methodBodyIndex = readCodedIndex MethodDefOrRef
+                    let methodDecKind, methodDecIndex = readCodedIndex MethodDefOrRef
+
+                    printfn "MethodImpl: class=%i, body=(%A, %i), declaration=(%A, %i)" classIndex methodBodyKind methodBodyIndex methodDecKind methodDecIndex
+            | MetadataTables.MethodSemantics ->
+                for _ in 1u .. rowCount do
+                    let semanticsFlags = br.ReadUInt16 ()
+                    let methodIndex = readTableIndex MetadataTables.MethodDef
+                    let assocKind, assocIndex = readCodedIndex HasSemantics
+
+                    printfn "MethodSemantics: semantics=%X, methodIndex=%i, assoc=(%A, %i)" semanticsFlags methodIndex assocKind assocIndex
+            | MetadataTables.MethodSpec ->
+                for _ in 1u .. rowCount do
+                    let methodKind, methodIndex = readCodedIndex MethodDefOrRef
+                    let instIndex = readBlobHeapIndex ()
+
+                    printfn "MethodSpec: method=(%A, %i), instantiation=%i" methodKind methodIndex instIndex
             | MetadataTables.Module ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     readShortEq br 0us "module generation"
                     let name = readHeapString ()
                     let mvidIndex = readGUIDHeapIndex ()
@@ -760,17 +818,26 @@ let readMetadataTables
                     let encBaseIdIndex = readGUIDHeapIndex ()
                     
                     printfn "module name=\"%s\"" name
-            | MetadataTables.ModuleRef
-            | MetadataTables.NestedClass -> noImpl ()
+            | MetadataTables.ModuleRef ->
+                for _ in 1u .. rowCount do
+                    let name = readHeapString ()
+
+                    printfn "ModuleRef: %s" name
+            | MetadataTables.NestedClass ->
+                for _ in 1u .. rowCount do
+                    let nestedClassIndex = readTableIndex MetadataTables.TypeDef
+                    let enclosingClassIndex = readTableIndex MetadataTables.TypeDef
+
+                    printfn "NestedClass: nestedClass=%i, enclosingClass=%i" nestedClassIndex enclosingClassIndex
             | MetadataTables.Param ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let flags = br.ReadUInt16 ()
                     let sequence = br.ReadUInt16 ()
                     let name = readHeapString ()
                     
                     printfn "Param: name=\"%s\", seq=%i" name sequence
             | MetadataTables.Property ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let flags = br.ReadUInt16 ()
                     let name = readHeapString ()
                     // The name of this column is misleading.  It does not index
@@ -780,17 +847,17 @@ let readMetadataTables
 
                     printfn "Property: name=%s, type=%i" name typeIndex
             | MetadataTables.PropertyMap ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let parentIndex = readTableIndex MetadataTables.TypeDef
                     let propertyListIndex = readTableIndex MetadataTables.Property
 
                     printfn "PropertyMap: parent=%i, propertyList=%i" parentIndex propertyListIndex
             | MetadataTables.StandAloneSig ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let signatureIndex = readBlobHeapIndex ()
                     printfn "StandAloneSig: sigIndex=%i" signatureIndex
             | MetadataTables.TypeDef ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let flags = br.ReadUInt32 ()
                     let typeName = readHeapString ()
                     let typeNamespace = readHeapString ()
@@ -800,13 +867,16 @@ let readMetadataTables
 
                     printfn "TypeDef: typeName=%s, typeNamespace=%s" typeName typeNamespace
             | MetadataTables.TypeRef ->
-                for _ in {1u .. rowCount} do
+                for _ in 1u .. rowCount do
                     let tableKind, rowIndex = readCodedIndex ResolutionScope
                     let typeName = readHeapString ()
                     let typeNamespace = readHeapString ()
 
                     printfn "TypeRef: tableKind=%A, typeName=%s, typeNamespace=%s" tableKind typeName typeNamespace
-            | MetadataTables.TypeSpec
+            | MetadataTables.TypeSpec ->
+                for _ in 1u .. rowCount do
+                    let sigIndex = readBlobHeapIndex ()
+                    printfn "TypeSpec: %i" sigIndex
             | _ -> noImpl ()
 
 
