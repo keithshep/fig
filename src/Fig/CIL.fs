@@ -649,6 +649,8 @@ let readMetadataTables
             else
                 br.ReadUInt16 () |> uint32
 
+        let tableIndexWidth mt = if tableIndicesWide mt then 4L else 2L
+
         let codedIndicesWide (cik : CodedIndexKind) =
             let maxCount =
                 Array.max
@@ -692,8 +694,14 @@ let readMetadataTables
                     let culture = readHeapString ()
                     
                     printfn "Assembly: name=\"%s\", culture=\"%s\"" name culture
-            | MetadataTables.AssemblyOS -> noImpl ()
-            | MetadataTables.AssemblyProcessor -> noImpl ()
+            | MetadataTables.AssemblyOS ->
+                printfn "AssemblyOS: skipping %i rows..." rowCount
+                let tableSize = 4L * 3L
+                br.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
+            | MetadataTables.AssemblyProcessor ->
+                printfn "AssemblyProcessor: skipping %i rows..." rowCount
+                let tableSize = 4L
+                br.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
             | MetadataTables.AssemblyRef ->
                 for _ in 1u .. rowCount do
                     let majorVersion = br.ReadUInt16 ()
@@ -707,10 +715,29 @@ let readMetadataTables
                     let hashValueIndex = readBlobHeapIndex ()
                     
                     printfn "AssemblyRef: name=\"%s\", culture=\"%s\"" name culture
-            | MetadataTables.AssemblyRefOS
-            | MetadataTables.AssemblyRefProcessor
-            | MetadataTables.ClassLayout
-            | MetadataTables.Constant
+            | MetadataTables.AssemblyRefOS ->
+                printfn "AssemblyRefOS: skipping %i rows..." rowCount
+                let tableSize = 4L * 3L + tableIndexWidth MetadataTables.AssemblyRef
+                br.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
+            | MetadataTables.AssemblyRefProcessor ->
+                printfn "AssemblyRefProcessor: skipping %i rows..." rowCount
+                let tableSize = 4L + tableIndexWidth MetadataTables.AssemblyRef
+                br.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
+            | MetadataTables.ClassLayout ->
+                for _ in 1u .. rowCount do
+                    let packingSize = br.ReadUInt16 ()
+                    let classSize = br.ReadUInt32 ()
+                    let parentIndex = readTableIndex MetadataTables.TypeDef
+
+                    printfn "ClassLayout: packingSize=%i, classSize=%i, parent=%i" packingSize classSize parentIndex
+            | MetadataTables.Constant ->
+                for _ in 1u .. rowCount do
+                    let typeVal = br.ReadByte ()
+                    readByteEq br 0x00uy "constant type padding"
+                    let parentKind, parentIndex = readCodedIndex HasConstant
+                    let valueIndex = readBlobHeapIndex ()
+
+                    printfn "Constant: type=0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
             | MetadataTables.CustomAttribute ->
                 for _ in 1u .. rowCount do
                     let parentKind, parentIndex = readCodedIndex HasCustomAttribute
@@ -722,9 +749,15 @@ let readMetadataTables
                     let valueIndex = readBlobHeapIndex ()
 
                     printfn "CustomAttribute: parent=(%A, %i), type=(%A, %i), valueIndex=%i" parentKind parentIndex typeKind typeIndex valueIndex
-            | MetadataTables.DeclSecurity
-            | MetadataTables.EventMap
-            | MetadataTables.Event
+            | MetadataTables.DeclSecurity ->
+                for _ in 1u .. rowCount do
+                    let action = br.ReadUInt16 ()
+                    let parentKind, parentIndex = readCodedIndex HasDeclSecurity
+                    let permissionSetIndex = readBlobHeapIndex ()
+
+                    printfn "DeclSecurity: action=%i, parent=(%A, %i), permissionSet=%i" action parentKind parentIndex permissionSetIndex
+            | MetadataTables.EventMap -> noImpl ()
+            | MetadataTables.Event -> noImpl ()
             | MetadataTables.ExportedType -> noImpl ()
             | MetadataTables.Field ->
                 for _ in 1u .. rowCount do
@@ -740,10 +773,27 @@ let readMetadataTables
                     let nativeTypeIndex = readBlobHeapIndex ()
 
                     printfn "FieldMarshal: parent=(%A, %i), nativeType=%i" parentKind parentIndex nativeTypeIndex
-            | MetadataTables.FieldRVA
-            | MetadataTables.File
-            | MetadataTables.GenericParam
-            | MetadataTables.GenericParamConstraint -> noImpl ()
+            | MetadataTables.FieldRVA ->
+                for _ in 1u .. rowCount do
+                    let rva = br.ReadUInt32 ()
+                    let fieldIndex = readTableIndex MetadataTables.Field
+
+                    printfn "FieldRVA: RVA=%i, fieldIndex=%i" rva fieldIndex
+            | MetadataTables.File -> noImpl ()
+            | MetadataTables.GenericParam ->
+                for _ in 1u .. rowCount do
+                    let number = br.ReadUInt16 ()
+                    let flags = br.ReadUInt16 ()
+                    let ownerKind, ownerIndex = readCodedIndex TypeOrMethodDef
+                    let name = readHeapString ()
+
+                    printfn "GenericParam: number=%i, flags=0x%X, owner=(%A, %i), name=%s" number flags ownerKind ownerIndex name
+            | MetadataTables.GenericParamConstraint ->
+                for _ in 1u .. rowCount do
+                    let ownerIndex = readTableIndex MetadataTables.GenericParam
+                    let constraintKind, constraintIndex = readCodedIndex TypeDefOrRef
+
+                    printfn "GenericParamConstraint: owner=%i, constraint=(%A, %i)" ownerIndex constraintKind constraintIndex
             | MetadataTables.ImplMap ->
                 for _ in 1u .. rowCount do
                     let mappingFlags = br.ReadUInt16 ()
@@ -878,5 +928,4 @@ let readMetadataTables
                     let sigIndex = readBlobHeapIndex ()
                     printfn "TypeSpec: %i" sigIndex
             | _ -> noImpl ()
-
 
