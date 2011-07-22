@@ -16,7 +16,8 @@ open System.IO
 [<EntryPoint>]
 let main args =
     match args with
-    | [| inFile; outFile |] ->
+    //| [| inFile; outFile |] ->
+    | [|inFile|] ->
 
         use br = new DLLReader(new FileStream(inFile, FileMode.Open))
         let pe = readPEHeader br
