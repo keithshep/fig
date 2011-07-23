@@ -853,8 +853,19 @@ let readMetadataTables
             
             tableKind, rowIndex
 
+        let mutable assemblies = ([||] : AssemblyRow array)
+        let mutable assemblyRefs = ([||] : AssemblyRefRow array)
+        let mutable customAttributes = ([||] : CustomAttributeRow array)
         let mutable fields = ([||] : FieldRow array)
+        let mutable manifestResources = ([||] : ManifestResourceRow array)
+        let mutable memberRefs = ([||] : MemberRefRow array)
         let mutable methodDefs = ([||] : MethodDefRow array)
+        let mutable methodSemantics = ([||] : MethodSemanticsRow array)
+        let mutable nestedClasses = ([||] : NestedClassRow array)
+        let mutable paramRows = ([||] : ParamRow array)
+        let mutable properties = ([||] : PropertyRow array)
+        let mutable propertyMaps = ([||] : PropertyMapRow array)
+        let mutable standAloneSigs = ([||] : StandAloneSigRow array)
         let mutable typeDefs = ([||] : TypeDefRow array)
         let mutable typeRefs = ([||] : TypeRefRow array)
 
@@ -863,18 +874,30 @@ let readMetadataTables
             let noImpl () = failwith (sprintf "no implementation for %A" kv.Key)
             match kv.Key with
             | MetadataTables.Assembly ->
-                for _ in 1u .. rowCount do
-                    let hashAlgId = br.ReadUInt32 ()
-                    let majorVersion = br.ReadUInt16 ()
-                    let minorVersion = br.ReadUInt16 ()
-                    let buildNumber = br.ReadUInt16 ()
-                    let revisionNumber = br.ReadUInt16 ()
-                    let flags = br.ReadUInt32 ()
-                    let pubKeyBlobIdx = readBlobHeapIndex ()
-                    let name = readHeapString ()
-                    let culture = readHeapString ()
-                    
-                    printfn "Assembly: name=\"%s\", culture=\"%s\"" name culture
+                assemblies <-
+                    [|for _ in 1u .. rowCount do
+                        let hashAlgId = br.ReadUInt32 ()
+                        let majorVersion = br.ReadUInt16 ()
+                        let minorVersion = br.ReadUInt16 ()
+                        let buildNumber = br.ReadUInt16 ()
+                        let revisionNumber = br.ReadUInt16 ()
+                        let flags = br.ReadUInt32 ()
+                        let pubKeyBlobIdx = readBlobHeapIndex ()
+                        let name = readHeapString ()
+                        let culture = readHeapString ()
+                        
+                        printfn "Assembly: name=\"%s\", culture=\"%s\"" name culture
+
+                        yield {
+                            AssemblyRow.hashAlgId = hashAlgId
+                            AssemblyRow.majorVersion = majorVersion
+                            AssemblyRow.minorVersion = minorVersion
+                            AssemblyRow.buildNumber = buildNumber
+                            AssemblyRow.revisionNumber = revisionNumber
+                            AssemblyRow.flags = flags
+                            AssemblyRow.pubKeyBlobIdx = pubKeyBlobIdx
+                            AssemblyRow.name = name
+                            AssemblyRow.culture = culture}|]
             | MetadataTables.AssemblyOS ->
                 printfn "AssemblyOS: skipping %i rows..." rowCount
                 let tableSize = 4L * 3L
@@ -884,18 +907,30 @@ let readMetadataTables
                 let tableSize = 4L
                 br.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
             | MetadataTables.AssemblyRef ->
-                for _ in 1u .. rowCount do
-                    let majorVersion = br.ReadUInt16 ()
-                    let minorVersion = br.ReadUInt16 ()
-                    let buildNumber = br.ReadUInt16 ()
-                    let revisionNumber = br.ReadUInt16 ()
-                    let flags = br.ReadUInt32 ()
-                    let publicKeyOrTokenIndex = readBlobHeapIndex ()
-                    let name = readHeapString ()
-                    let culture = readHeapString ()
-                    let hashValueIndex = readBlobHeapIndex ()
-                    
-                    printfn "AssemblyRef: name=\"%s\", culture=\"%s\"" name culture
+                assemblyRefs <-
+                    [|for _ in 1u .. rowCount do
+                        let majorVersion = br.ReadUInt16 ()
+                        let minorVersion = br.ReadUInt16 ()
+                        let buildNumber = br.ReadUInt16 ()
+                        let revisionNumber = br.ReadUInt16 ()
+                        let flags = br.ReadUInt32 ()
+                        let publicKeyOrTokenIndex = readBlobHeapIndex ()
+                        let name = readHeapString ()
+                        let culture = readHeapString ()
+                        let hashValueIndex = readBlobHeapIndex ()
+                        
+                        printfn "AssemblyRef: name=\"%s\", culture=\"%s\"" name culture
+
+                        yield {
+                            AssemblyRefRow.majorVersion = majorVersion
+                            AssemblyRefRow.minorVersion = minorVersion
+                            AssemblyRefRow.buildNumber = buildNumber
+                            AssemblyRefRow.revisionNumber = revisionNumber
+                            AssemblyRefRow.flags = flags
+                            AssemblyRefRow.publicKeyOrTokenIndex = publicKeyOrTokenIndex
+                            AssemblyRefRow.name = name
+                            AssemblyRefRow.culture = culture
+                            AssemblyRefRow.hashValueIndex = hashValueIndex}|]
             | MetadataTables.AssemblyRefOS ->
                 printfn "AssemblyRefOS: skipping %i rows..." rowCount
                 let tableSize = 4L * 3L + tableIndexWidth MetadataTables.AssemblyRef
@@ -920,16 +955,24 @@ let readMetadataTables
 
                     printfn "Constant: type=0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
             | MetadataTables.CustomAttribute ->
-                for _ in 1u .. rowCount do
-                    let parentKind, parentIndex = readCodedIndex HasCustomAttribute
-                    // The column called Type is slightly misleading
-                    // it actually indexes a constructor method
-                    // the owner of that constructor method is
-                    //the Type of the Custom Attribute.
-                    let typeKind, typeIndex = readCodedIndex CustomAttributeType
-                    let valueIndex = readBlobHeapIndex ()
+                customAttributes <-
+                    [|for _ in 1u .. rowCount do
+                        let parentKind, parentIndex = readCodedIndex HasCustomAttribute
+                        // The column called Type is slightly misleading
+                        // it actually indexes a constructor method
+                        // the owner of that constructor method is
+                        //the Type of the Custom Attribute.
+                        let typeKind, typeIndex = readCodedIndex CustomAttributeType
+                        let valueIndex = readBlobHeapIndex ()
 
-                    printfn "CustomAttribute: parent=(%A, %i), type=(%A, %i), valueIndex=%i" parentKind parentIndex typeKind typeIndex valueIndex
+                        printfn "CustomAttribute: parent=(%A, %i), type=(%A, %i), valueIndex=%i" parentKind parentIndex typeKind typeIndex valueIndex
+
+                        yield {
+                            CustomAttributeRow.parentKind = parentKind
+                            CustomAttributeRow.parentIndex = parentIndex
+                            CustomAttributeRow.typeKind = typeKind
+                            CustomAttributeRow.typeIndex = typeIndex
+                            CustomAttributeRow.valueIndex = valueIndex}|]
             | MetadataTables.DeclSecurity ->
                 for _ in 1u .. rowCount do
                     let action = br.ReadUInt16 ()
@@ -1010,12 +1053,19 @@ let readMetadataTables
 
                     printfn "ManifestResource: name=%s, impl=(%A, %i)" name implKind implIndex
             | MetadataTables.MemberRef ->
-                for _ in 1u .. rowCount do
-                    let classKind, classIndex = readCodedIndex MemberRefParent
-                    let name = readHeapString ()
-                    let signatureIndex = readBlobHeapIndex ()
-                    
-                    printfn "MemberRef: class=(%A, %i) name=%s, sigIndex=%i" classKind classIndex name signatureIndex
+                memberRefs <-
+                    [|for _ in 1u .. rowCount do
+                        let classKind, classIndex = readCodedIndex MemberRefParent
+                        let name = readHeapString ()
+                        let signatureIndex = readBlobHeapIndex ()
+                        
+                        printfn "MemberRef: class=(%A, %i) name=%s, sigIndex=%i" classKind classIndex name signatureIndex
+
+                        yield {
+                            MemberRefRow.classKind = classKind
+                            MemberRefRow.classIndex = classIndex
+                            MemberRefRow.name = name
+                            MemberRefRow.signatureIndex = signatureIndex}|]
             | MetadataTables.MethodDef ->
                 methodDefs <-
                     [|for _ in 1u .. rowCount do
@@ -1043,12 +1093,19 @@ let readMetadataTables
 
                     printfn "MethodImpl: class=%i, body=(%A, %i), declaration=(%A, %i)" classIndex methodBodyKind methodBodyIndex methodDecKind methodDecIndex
             | MetadataTables.MethodSemantics ->
-                for _ in 1u .. rowCount do
-                    let semanticsFlags = br.ReadUInt16 ()
-                    let methodIndex = readTableIndex MetadataTables.MethodDef
-                    let assocKind, assocIndex = readCodedIndex HasSemantics
+                methodSemantics <-
+                    [|for _ in 1u .. rowCount do
+                        let semanticsFlags = br.ReadUInt16 ()
+                        let methodIndex = readTableIndex MetadataTables.MethodDef
+                        let assocKind, assocIndex = readCodedIndex HasSemantics
 
-                    printfn "MethodSemantics: semantics=%X, methodIndex=%i, assoc=(%A, %i)" semanticsFlags methodIndex assocKind assocIndex
+                        printfn "MethodSemantics: semantics=%X, methodIndex=%i, assoc=(%A, %i)" semanticsFlags methodIndex assocKind assocIndex
+
+                        yield {
+                            MethodSemanticsRow.semanticsFlags = semanticsFlags
+                            MethodSemanticsRow.methodIndex = methodIndex
+                            MethodSemanticsRow.assocKind = assocKind
+                            MethodSemanticsRow.assocIndex = assocIndex}|]
             | MetadataTables.MethodSpec ->
                 for _ in 1u .. rowCount do
                     let methodKind, methodIndex = readCodedIndex MethodDefOrRef
@@ -1076,32 +1133,52 @@ let readMetadataTables
 
                     printfn "NestedClass: nestedClass=%i, enclosingClass=%i" nestedClassIndex enclosingClassIndex
             | MetadataTables.Param ->
-                for _ in 1u .. rowCount do
-                    let flags = br.ReadUInt16 ()
-                    let sequence = br.ReadUInt16 ()
-                    let name = readHeapString ()
-                    
-                    printfn "Param: name=\"%s\", seq=%i" name sequence
+                paramRows <-
+                    [|for _ in 1u .. rowCount do
+                        let flags = br.ReadUInt16 ()
+                        let sequence = br.ReadUInt16 ()
+                        let name = readHeapString ()
+                        
+                        printfn "Param: name=\"%s\", seq=%i" name sequence
+
+                        yield {
+                            ParamRow.flags = flags
+                            ParamRow.sequence = sequence
+                            ParamRow.name = name}|]
             | MetadataTables.Property ->
-                for _ in 1u .. rowCount do
-                    let flags = br.ReadUInt16 ()
-                    let name = readHeapString ()
-                    // The name of this column is misleading.  It does not index
-                    // a TypeDef or TypeRef table. Instead it indexes the
-                    // signature in the Blob heap of the Property
-                    let typeIndex = readBlobHeapIndex ()
+                properties <-
+                    [|for _ in 1u .. rowCount do
+                        let flags = br.ReadUInt16 ()
+                        let name = readHeapString ()
+                        // The name of this column is misleading.  It does not index
+                        // a TypeDef or TypeRef table. Instead it indexes the
+                        // signature in the Blob heap of the Property
+                        let typeIndex = readBlobHeapIndex ()
 
-                    printfn "Property: name=%s, type=%i" name typeIndex
+                        printfn "Property: name=%s, type=%i" name typeIndex
+
+                        yield {
+                            PropertyRow.flags = flags
+                            PropertyRow.name = name
+                            PropertyRow.typeIndex = typeIndex}|]
             | MetadataTables.PropertyMap ->
-                for _ in 1u .. rowCount do
-                    let parentIndex = readTableIndex MetadataTables.TypeDef
-                    let propertyListIndex = readTableIndex MetadataTables.Property
+                propertyMaps <-
+                    [|for _ in 1u .. rowCount do
+                        let parentIndex = readTableIndex MetadataTables.TypeDef
+                        let propertyListIndex = readTableIndex MetadataTables.Property
 
-                    printfn "PropertyMap: parent=%i, propertyList=%i" parentIndex propertyListIndex
+                        printfn "PropertyMap: parent=%i, propertyList=%i" parentIndex propertyListIndex
+
+                        yield {
+                            PropertyMapRow.parentIndex = parentIndex
+                            PropertyMapRow.propertyListIndex = propertyListIndex}|]
             | MetadataTables.StandAloneSig ->
-                for _ in 1u .. rowCount do
-                    let signatureIndex = readBlobHeapIndex ()
-                    printfn "StandAloneSig: sigIndex=%i" signatureIndex
+                standAloneSigs <-
+                    [|for _ in 1u .. rowCount do
+                        let signatureIndex = readBlobHeapIndex ()
+                        printfn "StandAloneSig: sigIndex=%i" signatureIndex
+
+                        yield {StandAloneSigRow.signatureIndex = signatureIndex}|]
             | MetadataTables.TypeDef ->
                 typeDefs <-
                     [|for _ in 1u .. rowCount do
