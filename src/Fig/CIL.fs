@@ -39,25 +39,25 @@ let readBytesEq (br : BinaryReader) (expectBytes : byte array) (name : string) =
 let readByteEq (br : BinaryReader) (expectByte : byte) (name : string) =
     let inByte = br.ReadByte ()
     if inByte <> expectByte then
-        //failwith (sprintf "expected \"%s\" to be %X but read %X" name expectByte inByte)
-        printfn "expected \"%s\" to be %X but read %X" name expectByte inByte
+        //failwith (sprintf "expected \"%s\" to be 0x%X but read 0x%X" name expectByte inByte)
+        printfn "expected \"%s\" to be 0x%X but read 0x%X" name expectByte inByte
 
 let readShortEq (br : BinaryReader) (expectShort : uint16) (name : string) =
     let inShort = br.ReadUInt16 ()
     if inShort <> expectShort then
-        //failwith (sprintf "expected \"%s\" to be %X but read %X" name expectShort inShort)
-        printfn "expected \"%s\" to be %X but read %X" name expectShort inShort
+        //failwith (sprintf "expected \"%s\" to be 0x%X but read 0x%X" name expectShort inShort)
+        printfn "expected \"%s\" to be 0x%X but read 0x%X" name expectShort inShort
 
 let readIntEq (br : BinaryReader) (expectInt : uint32) (name : string) =
     let inInt = br.ReadUInt32 ()
     if inInt <> expectInt then
-        //failwith (sprintf "expected \"%s\" to be %X but read %X" name expectInt inInt)
-        printfn "expected \"%s\" to be %X but read %X" name expectInt inInt
+        //failwith (sprintf "expected \"%s\" to be 0x%X but read 0x%X" name expectInt inInt)
+        printfn "expected \"%s\" to be 0x%X but read 0x%X" name expectInt inInt
 
 let readLongEq (br : BinaryReader) (expectLong : uint64) (name : string) =
     let inLong = br.ReadUInt64 ()
     if inLong <> expectLong then
-        printfn "expected \"%s\" to be %X but read %X" name expectLong inLong
+        printfn "expected \"%s\" to be 0x%X but read 0x%X" name expectLong inLong
 
 let readString (br : BinaryReader) (enc : Encoding) =
     enc.GetString [|
@@ -207,7 +207,7 @@ let rec rvaToDiskPosOpt (secHeaders : SectionHeader list) (r : uint32) =
 let rvaToDiskPos (secHeaders : SectionHeader list) (r : uint32) =
     match rvaToDiskPosOpt secHeaders r with
     | Some x -> x
-    | None -> failwith (sprintf "failed to locate RVA %X" r)
+    | None -> failwith (sprintf "failed to locate RVA 0x%X" r)
 
 // specified in EMCA-335 25.2.2
 let readPEHeader (br : BinaryReader) =
@@ -283,7 +283,7 @@ let readPEHeader (br : BinaryReader) =
                 match br.ReadUInt16 () with
                 | 0x0003us -> WindowsCUI
                 | 0x0002us -> WindowsGUI
-                | i -> failwith (sprintf "unexpected sub-system %X" i)
+                | i -> failwith (sprintf "unexpected sub-system 0x%X" i)
             let dllFlags = br.ReadUInt16 ()
             if dllFlags &&& 0x100Fus <> 0us then
                 failwith "expected DLL flags to be 0 for mask 0x100F"
@@ -299,7 +299,7 @@ let readPEHeader (br : BinaryReader) =
             let importTableRVA = br.ReadUInt32 ()
             let importTableSize = br.ReadUInt32 ()
             //br.PushPos (int64 importTableRVA)
-            //printfn "importtbl rva %i %X and size %i %X" importTableRVA importTableRVA importTableSize importTableSize
+            //printfn "importtbl rva %i 0x%X and size %i 0x%X" importTableRVA importTableRVA importTableSize importTableSize
             //readImportTables br |> ignore
             //printfn "READ"
             //br.PopPos ()
@@ -325,38 +325,38 @@ let readPEHeader (br : BinaryReader) =
             Some {
                 // 25.2.3.1 standard fields
                 PEOptionalHeader.codeSize = codeSize
-                PEOptionalHeader.initDataSize = initDataSize
-                PEOptionalHeader.uninitDataSize = uninitDataSize
-                PEOptionalHeader.entryPointRVA = entryPointRVA
-                PEOptionalHeader.baseOfCode = baseOfCode
-                PEOptionalHeader.baseOfData = baseOfData
+                initDataSize = initDataSize
+                uninitDataSize = uninitDataSize
+                entryPointRVA = entryPointRVA
+                baseOfCode = baseOfCode
+                baseOfData = baseOfData
 
                 // 25.2.3.2 NT specific fields
-                PEOptionalHeader.imageBase = imageBase
-                PEOptionalHeader.sectionAlignment = sectionAlignment
-                PEOptionalHeader.fileAlignment = fileAlignment
-                PEOptionalHeader.imageSize = imageSize
-                PEOptionalHeader.headerSize = headerSize
-                PEOptionalHeader.subSystem = subSystem
-                PEOptionalHeader.dllFlags = dllFlags
+                imageBase = imageBase
+                sectionAlignment = sectionAlignment
+                fileAlignment = fileAlignment
+                imageSize = imageSize
+                headerSize = headerSize
+                subSystem = subSystem
+                dllFlags = dllFlags
 
                 // 25.2.3.3 PE header data directories
-                PEOptionalHeader.importTableRVA = importTableRVA
-                PEOptionalHeader.importTableSize = importTableSize
-                PEOptionalHeader.baseRelocationRVA = baseRelocationRVA
-                PEOptionalHeader.baseRelocationSize = baseRelocationSize
-                PEOptionalHeader.importAddressTableRVA = importAddressTableRVA
-                PEOptionalHeader.importAddressTableSize = importAddressTableSize
-                PEOptionalHeader.cliHeaderRVA = cliHeaderRVA
-                PEOptionalHeader.cliHeaderSize = cliHeaderSize}
+                importTableRVA = importTableRVA
+                importTableSize = importTableSize
+                baseRelocationRVA = baseRelocationRVA
+                baseRelocationSize = baseRelocationSize
+                importAddressTableRVA = importAddressTableRVA
+                importAddressTableSize = importAddressTableSize
+                cliHeaderRVA = cliHeaderRVA
+                cliHeaderSize = cliHeaderSize}
 
     // return the PE header
     {
         PEHeader.numSections = numSections
-        PEHeader.timeStampSecs = timeStampSecs
-        PEHeader.is32BitMachine = is32BitMachine
-        PEHeader.isDLL = isDLL
-        PEHeader.optHeader = optHeader
+        timeStampSecs = timeStampSecs
+        is32BitMachine = is32BitMachine
+        isDLL = isDLL
+        optHeader = optHeader
     }
 
 // specified in EMCA-335 25.3
@@ -382,16 +382,16 @@ let readSectionHeader (br : BinaryReader) =
     
     {
         SectionHeader.name = name
-        SectionHeader.virtSize = virtualSize
-        SectionHeader.virtAddr = virtualAddr
-        SectionHeader.sizeOfRawData = sizeOfRawData
-        SectionHeader.ptrToRawData = ptrToRawData
-        SectionHeader.containsCode = containsCode
-        SectionHeader.containsInitData = containsInitData
-        SectionHeader.containsUninitData = containsUninitData
-        SectionHeader.memExec = memExec
-        SectionHeader.memRead = memRead
-        SectionHeader.memWrite = memWrite
+        virtSize = virtualSize
+        virtAddr = virtualAddr
+        sizeOfRawData = sizeOfRawData
+        ptrToRawData = ptrToRawData
+        containsCode = containsCode
+        containsInitData = containsInitData
+        containsUninitData = containsUninitData
+        memExec = memExec
+        memRead = memRead
+        memWrite = memWrite
     }
 
 let readSectionHeaders (br : BinaryReader) (pe : PEHeader) =
@@ -422,16 +422,16 @@ let readCLIHeader (br : BinaryReader) (secHdrs : SectionHeader list) (peHdr : PE
         
         {
             CLIHeader.majorRuntimeVersion = majorRuntimeVersion
-            CLIHeader.minorRuntimeVersion = minorRuntimeVersion
-            CLIHeader.metaDataRVA = metaDataRVA
-            CLIHeader.metaDataSize = metaDataSize
-            CLIHeader.flags = flags
-            CLIHeader.entryPointTok = entryPointTok
-            CLIHeader.resourcesRVA = resourcesRVA
-            CLIHeader.resourcesSize = resourcesSize
-            CLIHeader.strongNameSig = strongNameSig
-            CLIHeader.vTableFixupsRVA = vTableFixupsRVA
-            CLIHeader.vTableFixupsSize = vTableFixupsSize
+            minorRuntimeVersion = minorRuntimeVersion
+            metaDataRVA = metaDataRVA
+            metaDataSize = metaDataSize
+            flags = flags
+            entryPointTok = entryPointTok
+            resourcesRVA = resourcesRVA
+            resourcesSize = resourcesSize
+            strongNameSig = strongNameSig
+            vTableFixupsRVA = vTableFixupsRVA
+            vTableFixupsSize = vTableFixupsSize
         }
 
 let readStreamHeader (br : BinaryReader) =
@@ -447,7 +447,7 @@ let readStreamHeaders (br : BinaryReader) (secHdrs : SectionHeader list) (cliHea
     readIntEq br 0u "reserved"
     let versionStrLen = br.ReadUInt32 ()
     let tempPos = br.BaseStream.Position
-    printfn "version string: '%s', alloc: %i" (readASCII br) versionStrLen
+    printfn "version string: \"%s\", alloc: %i" (readASCII br) versionStrLen
     br.BaseStream.Seek (tempPos + int64 versionStrLen, SeekOrigin.Begin) |> ignore
     readShortEq br 0us "meta data flags"
     let numStreams = br.ReadUInt16 ()
@@ -456,7 +456,7 @@ let readStreamHeaders (br : BinaryReader) (secHdrs : SectionHeader list) (cliHea
     Map.ofList
         [for _ in 1us .. numStreams do
             let offset, size, name = readStreamHeader br
-            printfn "offset = %i, size = %i, name = '%s'" offset size name
+            printfn "offset = %i, size = %i, name = \"%s\"" offset size name
             yield (name, (offset, size))]
 
 type MetadataTableKind =
@@ -512,7 +512,7 @@ let assertTableBitsValid (validTblBits : uint64) =
         let mask = ~~~(1uL <<< int mt)
         maskedBits <- maskedBits &&& mask
 
-    if maskedBits <> 0uL then failwith (sprintf "bad bits: %X" maskedBits)
+    if maskedBits <> 0uL then failwith (sprintf "bad bits: 0x%X" maskedBits)
 
 type CodedIndexKind =
     | TypeDefOrRef
@@ -1005,7 +1005,7 @@ let readMetadataTables
                         let parentKind, parentIndex = readCodedIndex HasConstant
                         let valueIndex = readBlobHeapIndex ()
 
-                        printfn "Constant: type=0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
+                        printfn "Constant: type=0x0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
 
                         yield {
                             ConstantRow.typeVal = typeVal
@@ -1066,7 +1066,7 @@ let readMetadataTables
                         let name = readHeapString ()
                         let signatureIndex = readBlobHeapIndex ()
 
-                        printfn "Field: flags=%X, name=%s, sigindex=%i" fieldAttrFlags name signatureIndex
+                        printfn "Field: flags=0x%X, name=\"%s\", sigindex=%i" fieldAttrFlags name signatureIndex
 
                         yield {
                             FieldRow.fieldAttrFlags = fieldAttrFlags
@@ -1106,7 +1106,7 @@ let readMetadataTables
                         let name = readHeapString ()
 
                         printfn
-                            "GenericParam: number=%i, flags=0x%X, owner=(%A, %i), name=%s"
+                            "GenericParam: number=%i, flags=0x%X, owner=(%A, %i), name=\"%s\""
                             number
                             flags
                             ownerKind
@@ -1145,7 +1145,7 @@ let readMetadataTables
                         let importScopeIndex = readTableIndex MetadataTableKind.ModuleRef
 
                         printfn
-                            "ImplMap: forwarded=(%A, %i), importName=%s, importScopeIndex=%i"
+                            "ImplMap: forwarded=(%A, %i), importName=\"%s\", importScopeIndex=%i"
                             memberForwardedKind
                             memberForwardedIndex
                             importName
@@ -1177,7 +1177,7 @@ let readMetadataTables
                         let name = readHeapString ()
                         let implKind, implIndex = readCodedIndex Implementation
 
-                        printfn "ManifestResource: name=%s, impl=(%A, %i)" name implKind implIndex
+                        printfn "ManifestResource: name=\"%s\", impl=(%A, %i)" name implKind implIndex
 
                         yield {
                             ManifestResourceRow.offset = offset
@@ -1192,7 +1192,7 @@ let readMetadataTables
                         let name = readHeapString ()
                         let signatureIndex = readBlobHeapIndex ()
                         
-                        printfn "MemberRef: class=(%A, %i) name=%s, sigIndex=%i" classKind classIndex name signatureIndex
+                        printfn "MemberRef: class=(%A, %i) name=\"%s\", sigIndex=%i" classKind classIndex name signatureIndex
 
                         yield {
                             MemberRefRow.classKind = classKind
@@ -1209,7 +1209,7 @@ let readMetadataTables
                         let signatureIndex = readBlobHeapIndex ()
                         let paramIndex = readTableIndex MetadataTableKind.Param
 
-                        printfn "MethodDef: name=%s, sigIndex=%i, paramIndex=%i" name signatureIndex paramIndex
+                        printfn "MethodDef: name=\"%s\", sigIndex=%i, paramIndex=%i" name signatureIndex paramIndex
 
                         yield {
                             MethodDefRow.rva = rva
@@ -1247,7 +1247,7 @@ let readMetadataTables
                         let assocKind, assocIndex = readCodedIndex HasSemantics
 
                         printfn
-                            "MethodSemantics: semantics=%X, methodIndex=%i, assoc=(%A, %i)"
+                            "MethodSemantics: semantics=0x%X, methodIndex=%i, assoc=(%A, %i)"
                             semanticsFlags
                             methodIndex
                             assocKind
@@ -1291,7 +1291,7 @@ let readMetadataTables
                     [|for _ in 1u .. rowCount do
                         let name = readHeapString ()
 
-                        printfn "ModuleRef: %s" name
+                        printfn "ModuleRef: \"%s\"" name
 
                         yield {ModuleRefRow.name = name}|]
             | MetadataTableKind.NestedClass ->
@@ -1331,7 +1331,7 @@ let readMetadataTables
                         // signature in the Blob heap of the Property
                         let typeIndex = readBlobHeapIndex ()
 
-                        printfn "Property: name=%s, type=%i" name typeIndex
+                        printfn "Property: name=\"%s\", type=%i" name typeIndex
 
                         yield {
                             PropertyRow.flags = flags
@@ -1365,7 +1365,7 @@ let readMetadataTables
                         let fieldsIndex = readTableIndex MetadataTableKind.Field
                         let methodsIndex = readTableIndex MetadataTableKind.MethodDef
 
-                        printfn "TypeDef: typeName=%s, typeNamespace=%s" typeName typeNamespace
+                        printfn "TypeDef: typeName=\"%s\", typeNamespace=\"%s\"" typeName typeNamespace
 
                         yield {
                             TypeDefRow.flags = flags
@@ -1383,7 +1383,7 @@ let readMetadataTables
                         let typeNamespace = readHeapString ()
 
                         printfn
-                            "TypeRef: resolutionScope=(%A, %i), typeName=%s, typeNamespace=%s"
+                            "TypeRef: resolutionScope=(%A, %i), typeName=\"%s\", typeNamespace=\"%s\""
                             resolutionScopeKind
                             resolutionScopeIndex
                             typeName
