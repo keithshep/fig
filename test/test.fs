@@ -27,7 +27,8 @@ let main args =
             printfn "%A" hdr
         let cliHeader = readCLIHeader br secHdrs pe
         let streamHeaders = readStreamHeaders br secHdrs cliHeader
-        readMetadataTables br secHdrs cliHeader streamHeaders
+        let metadataTables = readMetadataTables br secHdrs cliHeader streamHeaders
+        ()
         
 //        let il = OpenILModuleReader inFile defaults
 //        let moduleRef = moduleCreateWithName "module"
