@@ -1023,7 +1023,13 @@ let readMetadataTables
                         let typeKind, typeIndex = readCodedIndex CustomAttributeType
                         let valueIndex = readBlobHeapIndex ()
 
-                        printfn "CustomAttribute: parent=(%A, %i), type=(%A, %i), valueIndex=%i" parentKind parentIndex typeKind typeIndex valueIndex
+                        printfn
+                            "CustomAttribute: parent=(%A, %i), type=(%A, %i), valueIndex=%i"
+                            parentKind
+                            parentIndex
+                            typeKind
+                            typeIndex
+                            valueIndex
 
                         yield {
                             CustomAttributeRow.parentKind = parentKind
@@ -1038,7 +1044,12 @@ let readMetadataTables
                         let parentKind, parentIndex = readCodedIndex HasDeclSecurity
                         let permissionSetIndex = readBlobHeapIndex ()
 
-                        printfn "DeclSecurity: action=%i, parent=(%A, %i), permissionSet=%i" action parentKind parentIndex permissionSetIndex
+                        printfn
+                            "DeclSecurity: action=%i, parent=(%A, %i), permissionSet=%i"
+                            action
+                            parentKind
+                            parentIndex
+                            permissionSetIndex
 
                         yield {
                             DeclSecurityRow.action = action
@@ -1094,7 +1105,13 @@ let readMetadataTables
                         let ownerKind, ownerIndex = readCodedIndex TypeOrMethodDef
                         let name = readHeapString ()
 
-                        printfn "GenericParam: number=%i, flags=0x%X, owner=(%A, %i), name=%s" number flags ownerKind ownerIndex name
+                        printfn
+                            "GenericParam: number=%i, flags=0x%X, owner=(%A, %i), name=%s"
+                            number
+                            flags
+                            ownerKind
+                            ownerIndex
+                            name
 
                         yield {
                             GenericParamRow.number = number
@@ -1108,7 +1125,11 @@ let readMetadataTables
                         let ownerIndex = readTableIndex MetadataTableKind.GenericParam
                         let constraintKind, constraintIndex = readCodedIndex TypeDefOrRef
 
-                        printfn "GenericParamConstraint: owner=%i, constraint=(%A, %i)" ownerIndex constraintKind constraintIndex
+                        printfn
+                            "GenericParamConstraint: owner=%i, constraint=(%A, %i)"
+                            ownerIndex
+                            constraintKind
+                            constraintIndex
 
                         yield {
                             GenericParamConstraintRow.ownerIndex = ownerIndex
@@ -1225,7 +1246,12 @@ let readMetadataTables
                         let methodIndex = readTableIndex MetadataTableKind.MethodDef
                         let assocKind, assocIndex = readCodedIndex HasSemantics
 
-                        printfn "MethodSemantics: semantics=%X, methodIndex=%i, assoc=(%A, %i)" semanticsFlags methodIndex assocKind assocIndex
+                        printfn
+                            "MethodSemantics: semantics=%X, methodIndex=%i, assoc=(%A, %i)"
+                            semanticsFlags
+                            methodIndex
+                            assocKind
+                            assocIndex
 
                         yield {
                             MethodSemanticsRow.semanticsFlags = semanticsFlags
@@ -1274,7 +1300,10 @@ let readMetadataTables
                         let nestedClassIndex = readTableIndex MetadataTableKind.TypeDef
                         let enclosingClassIndex = readTableIndex MetadataTableKind.TypeDef
 
-                        printfn "NestedClass: nestedClass=%i, enclosingClass=%i" nestedClassIndex enclosingClassIndex
+                        printfn
+                            "NestedClass: nestedClass=%i, enclosingClass=%i"
+                            nestedClassIndex
+                            enclosingClassIndex
 
                         yield {
                             NestedClassRow.nestedClassIndex = nestedClassIndex
@@ -1353,7 +1382,12 @@ let readMetadataTables
                         let typeName = readHeapString ()
                         let typeNamespace = readHeapString ()
 
-                        printfn "TypeRef: resolutionScope=(%A, %i), typeName=%s, typeNamespace=%s" resolutionScopeKind resolutionScopeIndex typeName typeNamespace
+                        printfn
+                            "TypeRef: resolutionScope=(%A, %i), typeName=%s, typeNamespace=%s"
+                            resolutionScopeKind
+                            resolutionScopeIndex
+                            typeName
+                            typeNamespace
 
                         yield {
                             TypeRefRow.resolutionScopeKind = resolutionScopeKind
