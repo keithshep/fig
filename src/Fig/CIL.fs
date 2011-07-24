@@ -460,44 +460,44 @@ let readStreamHeaders (br : BinaryReader) (secHdrs : SectionHeader list) (cliHea
             yield (name, (offset, size))]
 
 type MetadataTableKind =
-    | Assembly = 0x20
-    | AssemblyOS = 0x22
-    | AssemblyProcessor = 0x21
-    | AssemblyRef = 0x23
-    | AssemblyRefOS = 0x25
-    | AssemblyRefProcessor = 0x24
-    | ClassLayout = 0x0F
-    | Constant = 0x0B
-    | CustomAttribute = 0x0C
-    | DeclSecurity = 0x0E
-    | EventMap = 0x12
-    | Event = 0x14
-    | ExportedType = 0x27
-    | Field = 0x04
-    | FieldLayout = 0x10
-    | FieldMarshal = 0x0D
-    | FieldRVA = 0x1D
-    | File = 0x26
-    | GenericParam = 0x2A
-    | GenericParamConstraint = 0x2C
-    | ImplMap = 0x1C
-    | InterfaceImpl = 0x09
-    | ManifestResource = 0x28
-    | MemberRef = 0x0A
-    | MethodDef = 0x06
-    | MethodImpl = 0x19
-    | MethodSemantics = 0x18
-    | MethodSpec = 0x2B
-    | Module = 0x00
-    | ModuleRef = 0x1A
-    | NestedClass = 0x29
-    | Param = 0x08
-    | Property = 0x17
-    | PropertyMap = 0x15
-    | StandAloneSig = 0x11
-    | TypeDef = 0x02
-    | TypeRef = 0x01
-    | TypeSpec = 0x1B
+    | AssemblyKind = 0x20
+    | AssemblyOSKind = 0x22
+    | AssemblyProcessorKind = 0x21
+    | AssemblyRefKind = 0x23
+    | AssemblyRefOSKind = 0x25
+    | AssemblyRefProcessorKind = 0x24
+    | ClassLayoutKind = 0x0F
+    | ConstantKind = 0x0B
+    | CustomAttributeKind = 0x0C
+    | DeclSecurityKind = 0x0E
+    | EventMapKind = 0x12
+    | EventKind = 0x14
+    | ExportedTypeKind = 0x27
+    | FieldKind = 0x04
+    | FieldLayoutKind = 0x10
+    | FieldMarshalKind = 0x0D
+    | FieldRVAKind = 0x1D
+    | FileKind = 0x26
+    | GenericParamKind = 0x2A
+    | GenericParamConstraintKind = 0x2C
+    | ImplMapKind = 0x1C
+    | InterfaceImplKind = 0x09
+    | ManifestResourceKind = 0x28
+    | MemberRefKind = 0x0A
+    | MethodDefKind = 0x06
+    | MethodImplKind = 0x19
+    | MethodSemanticsKind = 0x18
+    | MethodSpecKind = 0x2B
+    | ModuleKind = 0x00
+    | ModuleRefKind = 0x1A
+    | NestedClassKind = 0x29
+    | ParamKind = 0x08
+    | PropertyKind = 0x17
+    | PropertyMapKind = 0x15
+    | StandAloneSigKind = 0x11
+    | TypeDefKind = 0x02
+    | TypeRefKind = 0x01
+    | TypeSpecKind = 0x1B
 
 let sortedTableEnums =
     [|for x in System.Enum.GetValues typeof<MetadataTableKind> ->
@@ -545,40 +545,40 @@ let codeBitCount = function
     | TypeOrMethodDef -> 1
 
 let possibleTableKinds = function
-    | TypeDefOrRef -> [|MetadataTableKind.TypeDef; MetadataTableKind.TypeRef; MetadataTableKind.TypeSpec|]
-    | HasConstant -> [|MetadataTableKind.Field; MetadataTableKind.Param; MetadataTableKind.Property|]
+    | TypeDefOrRef -> [|MetadataTableKind.TypeDefKind; MetadataTableKind.TypeRefKind; MetadataTableKind.TypeSpecKind|]
+    | HasConstant -> [|MetadataTableKind.FieldKind; MetadataTableKind.ParamKind; MetadataTableKind.PropertyKind|]
     | HasCustomAttribute ->
-        [|MetadataTableKind.MethodDef; MetadataTableKind.Field; MetadataTableKind.TypeRef;
-          MetadataTableKind.TypeDef; MetadataTableKind.Param; MetadataTableKind.InterfaceImpl;
-          MetadataTableKind.MemberRef; MetadataTableKind.Module;
-          (* TODO documented as Permission not sure if this is valid *) MetadataTableKind.DeclSecurity;
-          MetadataTableKind.Property; MetadataTableKind.Event; MetadataTableKind.StandAloneSig;
-          MetadataTableKind.ModuleRef; MetadataTableKind.TypeSpec; MetadataTableKind.Assembly;
-          MetadataTableKind.AssemblyRef; MetadataTableKind.File; MetadataTableKind.ExportedType;
-          MetadataTableKind.ManifestResource; MetadataTableKind.GenericParam;
-          MetadataTableKind.GenericParamConstraint; MetadataTableKind.MethodSpec|]
-    | HasFieldMarshall -> [|MetadataTableKind.Field; MetadataTableKind.Param|]
-    | HasDeclSecurity -> [|MetadataTableKind.TypeDef; MetadataTableKind.MethodDef; MetadataTableKind.Assembly|]
+        [|MetadataTableKind.MethodDefKind; MetadataTableKind.FieldKind; MetadataTableKind.TypeRefKind;
+          MetadataTableKind.TypeDefKind; MetadataTableKind.ParamKind; MetadataTableKind.InterfaceImplKind;
+          MetadataTableKind.MemberRefKind; MetadataTableKind.ModuleKind;
+          (* TODO documented as Permission not sure if this is valid *) MetadataTableKind.DeclSecurityKind;
+          MetadataTableKind.PropertyKind; MetadataTableKind.EventKind; MetadataTableKind.StandAloneSigKind;
+          MetadataTableKind.ModuleRefKind; MetadataTableKind.TypeSpecKind; MetadataTableKind.AssemblyKind;
+          MetadataTableKind.AssemblyRefKind; MetadataTableKind.FileKind; MetadataTableKind.ExportedTypeKind;
+          MetadataTableKind.ManifestResourceKind; MetadataTableKind.GenericParamKind;
+          MetadataTableKind.GenericParamConstraintKind; MetadataTableKind.MethodSpecKind|]
+    | HasFieldMarshall -> [|MetadataTableKind.FieldKind; MetadataTableKind.ParamKind|]
+    | HasDeclSecurity -> [|MetadataTableKind.TypeDefKind; MetadataTableKind.MethodDefKind; MetadataTableKind.AssemblyKind|]
     | MemberRefParent ->
-        [|MetadataTableKind.TypeDef; MetadataTableKind.TypeRef; MetadataTableKind.ModuleRef;
-          MetadataTableKind.MethodDef; MetadataTableKind.TypeSpec|]
-    | HasSemantics -> [|MetadataTableKind.Event; MetadataTableKind.Property|]
-    | MethodDefOrRef -> [|MetadataTableKind.MethodDef; MetadataTableKind.MemberRef|]
-    | MemberForwarded -> [|MetadataTableKind.Field; MetadataTableKind.MethodDef|]
-    | Implementation -> [|MetadataTableKind.File; MetadataTableKind.AssemblyRef; MetadataTableKind.ExportedType|]
-    | CustomAttributeType -> [|MetadataTableKind.MethodDef; MetadataTableKind.MemberRef|]
+        [|MetadataTableKind.TypeDefKind; MetadataTableKind.TypeRefKind; MetadataTableKind.ModuleRefKind;
+          MetadataTableKind.MethodDefKind; MetadataTableKind.TypeSpecKind|]
+    | HasSemantics -> [|MetadataTableKind.EventKind; MetadataTableKind.PropertyKind|]
+    | MethodDefOrRef -> [|MetadataTableKind.MethodDefKind; MetadataTableKind.MemberRefKind|]
+    | MemberForwarded -> [|MetadataTableKind.FieldKind; MetadataTableKind.MethodDefKind|]
+    | Implementation -> [|MetadataTableKind.FileKind; MetadataTableKind.AssemblyRefKind; MetadataTableKind.ExportedTypeKind|]
+    | CustomAttributeType -> [|MetadataTableKind.MethodDefKind; MetadataTableKind.MemberRefKind|]
     | ResolutionScope ->
-        [|MetadataTableKind.Module; MetadataTableKind.ModuleRef;
-          MetadataTableKind.AssemblyRef; MetadataTableKind.TypeRef|]
-    | TypeOrMethodDef -> [|MetadataTableKind.TypeDef; MetadataTableKind.MethodDef|]
+        [|MetadataTableKind.ModuleKind; MetadataTableKind.ModuleRefKind;
+          MetadataTableKind.AssemblyRefKind; MetadataTableKind.TypeRefKind|]
+    | TypeOrMethodDef -> [|MetadataTableKind.TypeDefKind; MetadataTableKind.MethodDefKind|]
 
 let resolveTableKind (cik : CodedIndexKind) (i : int) =
     match cik with
     | CustomAttributeType ->
         // CustomAttributeType is a special case since it isn't directly indexable
         match i with
-        | 2 -> MetadataTableKind.MethodDef
-        | 3 -> MetadataTableKind.MemberRef
+        | 2 -> MetadataTableKind.MethodDefKind
+        | 3 -> MetadataTableKind.MemberRefKind
         | _ -> failwith (sprintf "bad index used for CustomAttributeType: %i" i)
 
     | _ -> (possibleTableKinds cik).[i]
@@ -918,7 +918,7 @@ let readMetadataTables
             let rowCount = kv.Value
             let noImpl () = failwith (sprintf "no implementation for %A" kv.Key)
             match kv.Key with
-            | MetadataTableKind.Assembly ->
+            | MetadataTableKind.AssemblyKind ->
                 assemblies <-
                     [|for _ in 1u .. rowCount do
                         let hashAlgId = br.ReadUInt32 ()
@@ -943,15 +943,15 @@ let readMetadataTables
                             pubKeyBlobIdx = pubKeyBlobIdx
                             name = name
                             culture = culture}|]
-            | MetadataTableKind.AssemblyOS ->
+            | MetadataTableKind.AssemblyOSKind ->
                 printfn "AssemblyOS: skipping %i rows..." rowCount
                 let tableSize = 4L * 3L
                 br.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
-            | MetadataTableKind.AssemblyProcessor ->
-                printfn "AssemblyProcessor: skipping %i rows..." rowCount
+            | MetadataTableKind.AssemblyProcessorKind ->
+                printfn "AssemblyProcessorKind: skipping %i rows..." rowCount
                 let tableSize = 4L
                 br.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
-            | MetadataTableKind.AssemblyRef ->
+            | MetadataTableKind.AssemblyRefKind ->
                 assemblyRefs <-
                     [|for _ in 1u .. rowCount do
                         let majorVersion = br.ReadUInt16 ()
@@ -964,7 +964,7 @@ let readMetadataTables
                         let culture = readHeapString ()
                         let hashValueIndex = readBlobHeapIndex ()
                         
-                        printfn "AssemblyRef: name=\"%s\", culture=\"%s\"" name culture
+                        printfn "AssemblyRefKind: name=\"%s\", culture=\"%s\"" name culture
 
                         yield {
                             AssemblyRefRow.majorVersion = majorVersion
@@ -976,28 +976,28 @@ let readMetadataTables
                             name = name
                             culture = culture
                             hashValueIndex = hashValueIndex}|]
-            | MetadataTableKind.AssemblyRefOS ->
-                printfn "AssemblyRefOS: skipping %i rows..." rowCount
-                let tableSize = 4L * 3L + tableIndexWidth MetadataTableKind.AssemblyRef
+            | MetadataTableKind.AssemblyRefOSKind ->
+                printfn "AssemblyRefOSKind: skipping %i rows..." rowCount
+                let tableSize = 4L * 3L + tableIndexWidth MetadataTableKind.AssemblyRefKind
                 br.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
-            | MetadataTableKind.AssemblyRefProcessor ->
-                printfn "AssemblyRefProcessor: skipping %i rows..." rowCount
-                let tableSize = 4L + tableIndexWidth MetadataTableKind.AssemblyRef
+            | MetadataTableKind.AssemblyRefProcessorKind ->
+                printfn "AssemblyRefProcessorKind: skipping %i rows..." rowCount
+                let tableSize = 4L + tableIndexWidth MetadataTableKind.AssemblyRefKind
                 br.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
-            | MetadataTableKind.ClassLayout ->
+            | MetadataTableKind.ClassLayoutKind ->
                 classLayouts <-
                     [|for _ in 1u .. rowCount do
                         let packingSize = br.ReadUInt16 ()
                         let classSize = br.ReadUInt32 ()
-                        let parentIndex = readTableIndex MetadataTableKind.TypeDef
+                        let parentIndex = readTableIndex MetadataTableKind.TypeDefKind
 
-                        printfn "ClassLayout: packingSize=%i, classSize=%i, parent=%i" packingSize classSize parentIndex
+                        printfn "ClassLayoutKind: packingSize=%i, classSize=%i, parent=%i" packingSize classSize parentIndex
 
                         yield {
                             ClassLayoutRow.packingSize = packingSize
                             classSize = classSize
                             parentIndex = parentIndex}|]
-            | MetadataTableKind.Constant ->
+            | MetadataTableKind.ConstantKind ->
                 constants <-
                     [|for _ in 1u .. rowCount do
                         let typeVal = br.ReadByte ()
@@ -1005,14 +1005,14 @@ let readMetadataTables
                         let parentKind, parentIndex = readCodedIndex HasConstant
                         let valueIndex = readBlobHeapIndex ()
 
-                        printfn "Constant: type=0x0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
+                        printfn "ConstantKind: type=0x0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
 
                         yield {
                             ConstantRow.typeVal = typeVal
                             parentKind = parentKind
                             parentIndex = parentIndex
                             valueIndex = valueIndex}|]
-            | MetadataTableKind.CustomAttribute ->
+            | MetadataTableKind.CustomAttributeKind ->
                 customAttributes <-
                     [|for _ in 1u .. rowCount do
                         let parentKind, parentIndex = readCodedIndex HasCustomAttribute
@@ -1024,7 +1024,7 @@ let readMetadataTables
                         let valueIndex = readBlobHeapIndex ()
 
                         printfn
-                            "CustomAttribute: parent=(%A, %i), type=(%A, %i), valueIndex=%i"
+                            "CustomAttributeKind: parent=(%A, %i), type=(%A, %i), valueIndex=%i"
                             parentKind
                             parentIndex
                             typeKind
@@ -1037,7 +1037,7 @@ let readMetadataTables
                             typeKind = typeKind
                             typeIndex = typeIndex
                             valueIndex = valueIndex}|]
-            | MetadataTableKind.DeclSecurity ->
+            | MetadataTableKind.DeclSecurityKind ->
                 declSecurities <-
                     [|for _ in 1u .. rowCount do
                         let action = br.ReadUInt16 ()
@@ -1045,7 +1045,7 @@ let readMetadataTables
                         let permissionSetIndex = readBlobHeapIndex ()
 
                         printfn
-                            "DeclSecurity: action=%i, parent=(%A, %i), permissionSet=%i"
+                            "DeclSecurityKind: action=%i, parent=(%A, %i), permissionSet=%i"
                             action
                             parentKind
                             parentIndex
@@ -1056,48 +1056,48 @@ let readMetadataTables
                             parentKind = parentKind
                             parentIndex = parentIndex
                             permissionSetIndex = permissionSetIndex}|]
-            | MetadataTableKind.EventMap -> noImpl ()
-            | MetadataTableKind.Event -> noImpl ()
-            | MetadataTableKind.ExportedType -> noImpl ()
-            | MetadataTableKind.Field ->
+            | MetadataTableKind.EventMapKind -> noImpl ()
+            | MetadataTableKind.EventKind -> noImpl ()
+            | MetadataTableKind.ExportedTypeKind -> noImpl ()
+            | MetadataTableKind.FieldKind ->
                 fields <-
                     [|for _ in 1u .. rowCount do
                         let fieldAttrFlags = br.ReadUInt16 ()
                         let name = readHeapString ()
                         let signatureIndex = readBlobHeapIndex ()
 
-                        printfn "Field: flags=0x%X, name=\"%s\", sigindex=%i" fieldAttrFlags name signatureIndex
+                        printfn "FieldKind: flags=0x%X, name=\"%s\", sigindex=%i" fieldAttrFlags name signatureIndex
 
                         yield {
                             FieldRow.fieldAttrFlags = fieldAttrFlags
                             name = name
                             signatureIndex = signatureIndex}|]
-            | MetadataTableKind.FieldLayout -> noImpl ()
-            | MetadataTableKind.FieldMarshal ->
+            | MetadataTableKind.FieldLayoutKind -> noImpl ()
+            | MetadataTableKind.FieldMarshalKind ->
                 fieldMarshals <-
                     [|for _ in 1u .. rowCount do
                         let parentKind, parentIndex = readCodedIndex HasFieldMarshall
                         let nativeTypeIndex = readBlobHeapIndex ()
 
-                        printfn "FieldMarshal: parent=(%A, %i), nativeType=%i" parentKind parentIndex nativeTypeIndex
+                        printfn "FieldMarshalKind: parent=(%A, %i), nativeType=%i" parentKind parentIndex nativeTypeIndex
 
                         yield {
                             FieldMarshalRow.parentKind = parentKind
                             parentIndex = parentIndex
                             nativeTypeIndex = nativeTypeIndex}|]
-            | MetadataTableKind.FieldRVA ->
+            | MetadataTableKind.FieldRVAKind ->
                 fieldRVAs <-
                     [|for _ in 1u .. rowCount do
                         let rva = br.ReadUInt32 ()
-                        let fieldIndex = readTableIndex MetadataTableKind.Field
+                        let fieldIndex = readTableIndex MetadataTableKind.FieldKind
 
-                        printfn "FieldRVA: RVA=%i, fieldIndex=%i" rva fieldIndex
+                        printfn "FieldRVAKind: RVA=%i, fieldIndex=%i" rva fieldIndex
 
                         yield {
                             FieldRVARow.rva = rva
                             fieldIndex = fieldIndex}|]
-            | MetadataTableKind.File -> noImpl ()
-            | MetadataTableKind.GenericParam ->
+            | MetadataTableKind.FileKind -> noImpl ()
+            | MetadataTableKind.GenericParamKind ->
                 genericParams <-
                     [|for _ in 1u .. rowCount do
                         let number = br.ReadUInt16 ()
@@ -1106,7 +1106,7 @@ let readMetadataTables
                         let name = readHeapString ()
 
                         printfn
-                            "GenericParam: number=%i, flags=0x%X, owner=(%A, %i), name=\"%s\""
+                            "GenericParamKind: number=%i, flags=0x%X, owner=(%A, %i), name=\"%s\""
                             number
                             flags
                             ownerKind
@@ -1119,14 +1119,14 @@ let readMetadataTables
                             ownerKind = ownerKind
                             ownerIndex = ownerIndex
                             name = name}|]
-            | MetadataTableKind.GenericParamConstraint ->
+            | MetadataTableKind.GenericParamConstraintKind ->
                 genericParamConstraints <-
                     [|for _ in 1u .. rowCount do
-                        let ownerIndex = readTableIndex MetadataTableKind.GenericParam
+                        let ownerIndex = readTableIndex MetadataTableKind.GenericParamKind
                         let constraintKind, constraintIndex = readCodedIndex TypeDefOrRef
 
                         printfn
-                            "GenericParamConstraint: owner=%i, constraint=(%A, %i)"
+                            "GenericParamConstraintKind: owner=%i, constraint=(%A, %i)"
                             ownerIndex
                             constraintKind
                             constraintIndex
@@ -1135,17 +1135,17 @@ let readMetadataTables
                             GenericParamConstraintRow.ownerIndex = ownerIndex
                             constraintKind = constraintKind
                             constraintIndex = constraintIndex}|]
-            | MetadataTableKind.ImplMap ->
+            | MetadataTableKind.ImplMapKind ->
                 implMaps <-
                     [|for _ in 1u .. rowCount do
                         let mappingFlags = br.ReadUInt16 ()
                         //it only ever indexes the MethodDef table, since Field export is not supported
                         let memberForwardedKind, memberForwardedIndex = readCodedIndex MemberForwarded
                         let importName = readHeapString ()
-                        let importScopeIndex = readTableIndex MetadataTableKind.ModuleRef
+                        let importScopeIndex = readTableIndex MetadataTableKind.ModuleRefKind
 
                         printfn
-                            "ImplMap: forwarded=(%A, %i), importName=\"%s\", importScopeIndex=%i"
+                            "ImplMapKind: forwarded=(%A, %i), importName=\"%s\", importScopeIndex=%i"
                             memberForwardedKind
                             memberForwardedIndex
                             importName
@@ -1157,19 +1157,19 @@ let readMetadataTables
                             memberForwardedIndex = memberForwardedIndex
                             importName = importName
                             importScopeIndex = importScopeIndex}|]
-            | MetadataTableKind.InterfaceImpl ->
+            | MetadataTableKind.InterfaceImplKind ->
                 interfaceImpls <-
                     [|for _ in 1u .. rowCount do
-                        let classIndex = readTableIndex MetadataTableKind.TypeDef
+                        let classIndex = readTableIndex MetadataTableKind.TypeDefKind
                         let ifaceKind, ifaceIndex = readCodedIndex TypeDefOrRef
 
-                        printfn "InterfaceImpl: class=%i, interface=(%A, %i)" classIndex ifaceKind ifaceIndex
+                        printfn "InterfaceImplKind: class=%i, interface=(%A, %i)" classIndex ifaceKind ifaceIndex
 
                         yield {
                             InterfaceImplRow.classIndex = classIndex
                             ifaceKind = ifaceKind
                             ifaceIndex = ifaceIndex}|]
-            | MetadataTableKind.ManifestResource ->
+            | MetadataTableKind.ManifestResourceKind ->
                 manifestResources <-
                     [|for _ in 1u .. rowCount do
                         let offset = br.ReadUInt32 ()
@@ -1177,7 +1177,7 @@ let readMetadataTables
                         let name = readHeapString ()
                         let implKind, implIndex = readCodedIndex Implementation
 
-                        printfn "ManifestResource: name=\"%s\", impl=(%A, %i)" name implKind implIndex
+                        printfn "ManifestResourceKind: name=\"%s\", impl=(%A, %i)" name implKind implIndex
 
                         yield {
                             ManifestResourceRow.offset = offset
@@ -1185,21 +1185,21 @@ let readMetadataTables
                             name = name
                             implKind = implKind
                             implIndex = implIndex}|]
-            | MetadataTableKind.MemberRef ->
+            | MetadataTableKind.MemberRefKind ->
                 memberRefs <-
                     [|for _ in 1u .. rowCount do
                         let classKind, classIndex = readCodedIndex MemberRefParent
                         let name = readHeapString ()
                         let signatureIndex = readBlobHeapIndex ()
                         
-                        printfn "MemberRef: class=(%A, %i) name=\"%s\", sigIndex=%i" classKind classIndex name signatureIndex
+                        printfn "MemberRefKind: class=(%A, %i) name=\"%s\", sigIndex=%i" classKind classIndex name signatureIndex
 
                         yield {
                             MemberRefRow.classKind = classKind
                             classIndex = classIndex
                             name = name
                             signatureIndex = signatureIndex}|]
-            | MetadataTableKind.MethodDef ->
+            | MetadataTableKind.MethodDefKind ->
                 methodDefs <-
                     [|for _ in 1u .. rowCount do
                         let rva = br.ReadUInt32 ()
@@ -1207,9 +1207,9 @@ let readMetadataTables
                         let flags = br.ReadUInt16 ()
                         let name = readHeapString ()
                         let signatureIndex = readBlobHeapIndex ()
-                        let paramIndex = readTableIndex MetadataTableKind.Param
+                        let paramIndex = readTableIndex MetadataTableKind.ParamKind
 
-                        printfn "MethodDef: name=\"%s\", sigIndex=%i, paramIndex=%i" name signatureIndex paramIndex
+                        printfn "MethodDefKind: name=\"%s\", sigIndex=%i, paramIndex=%i" name signatureIndex paramIndex
 
                         yield {
                             MethodDefRow.rva = rva
@@ -1218,15 +1218,15 @@ let readMetadataTables
                             name = name
                             signatureIndex = signatureIndex
                             paramIndex = paramIndex}|]
-            | MetadataTableKind.MethodImpl ->
+            | MetadataTableKind.MethodImplKind ->
                 methodImpls <-
                     [|for _ in 1u .. rowCount do
-                        let classIndex = readTableIndex MetadataTableKind.TypeDef
+                        let classIndex = readTableIndex MetadataTableKind.TypeDefKind
                         let methodBodyKind, methodBodyIndex = readCodedIndex MethodDefOrRef
                         let methodDecKind, methodDecIndex = readCodedIndex MethodDefOrRef
 
                         printfn
-                            "MethodImpl: class=%i, body=(%A, %i), declaration=(%A, %i)"
+                            "MethodImplKind: class=%i, body=(%A, %i), declaration=(%A, %i)"
                             classIndex
                             methodBodyKind
                             methodBodyIndex
@@ -1239,15 +1239,15 @@ let readMetadataTables
                             methodBodyIndex = methodBodyIndex
                             methodDecKind = methodDecKind
                             methodDecIndex = methodDecIndex}|]
-            | MetadataTableKind.MethodSemantics ->
+            | MetadataTableKind.MethodSemanticsKind ->
                 methodSemantics <-
                     [|for _ in 1u .. rowCount do
                         let semanticsFlags = br.ReadUInt16 ()
-                        let methodIndex = readTableIndex MetadataTableKind.MethodDef
+                        let methodIndex = readTableIndex MetadataTableKind.MethodDefKind
                         let assocKind, assocIndex = readCodedIndex HasSemantics
 
                         printfn
-                            "MethodSemantics: semantics=0x%X, methodIndex=%i, assoc=(%A, %i)"
+                            "MethodSemanticsKind: semantics=0x%X, methodIndex=%i, assoc=(%A, %i)"
                             semanticsFlags
                             methodIndex
                             assocKind
@@ -1258,19 +1258,19 @@ let readMetadataTables
                             methodIndex = methodIndex
                             assocKind = assocKind
                             assocIndex = assocIndex}|]
-            | MetadataTableKind.MethodSpec ->
+            | MetadataTableKind.MethodSpecKind ->
                 methodSpecs <-
                     [|for _ in 1u .. rowCount do
                         let methodKind, methodIndex = readCodedIndex MethodDefOrRef
                         let instIndex = readBlobHeapIndex ()
 
-                        printfn "MethodSpec: method=(%A, %i), instantiation=%i" methodKind methodIndex instIndex
+                        printfn "MethodSpecKind: method=(%A, %i), instantiation=%i" methodKind methodIndex instIndex
 
                         yield {
                             MethodSpecRow.methodKind = methodKind
                             methodIndex = methodIndex
                             instIndex = instIndex}|]
-            | MetadataTableKind.Module ->
+            | MetadataTableKind.ModuleKind ->
                 modules <-
                     [|for _ in 1u .. rowCount do
                         readShortEq br 0us "module generation"
@@ -1286,42 +1286,42 @@ let readMetadataTables
                             mvidIndex = mvidIndex
                             encIDIndex = encIDIndex
                             encBaseIdIndex = encBaseIdIndex}|]
-            | MetadataTableKind.ModuleRef ->
+            | MetadataTableKind.ModuleRefKind ->
                 moduleRefs <-
                     [|for _ in 1u .. rowCount do
                         let name = readHeapString ()
 
-                        printfn "ModuleRef: \"%s\"" name
+                        printfn "ModuleRefKind: \"%s\"" name
 
                         yield {ModuleRefRow.name = name}|]
-            | MetadataTableKind.NestedClass ->
+            | MetadataTableKind.NestedClassKind ->
                 nestedClasses <-
                     [|for _ in 1u .. rowCount do
-                        let nestedClassIndex = readTableIndex MetadataTableKind.TypeDef
-                        let enclosingClassIndex = readTableIndex MetadataTableKind.TypeDef
+                        let nestedClassIndex = readTableIndex MetadataTableKind.TypeDefKind
+                        let enclosingClassIndex = readTableIndex MetadataTableKind.TypeDefKind
 
                         printfn
-                            "NestedClass: nestedClass=%i, enclosingClass=%i"
+                            "NestedClassKind: nestedClass=%i, enclosingClass=%i"
                             nestedClassIndex
                             enclosingClassIndex
 
                         yield {
                             NestedClassRow.nestedClassIndex = nestedClassIndex
                             enclosingClassIndex = enclosingClassIndex}|]
-            | MetadataTableKind.Param ->
+            | MetadataTableKind.ParamKind ->
                 paramRows <-
                     [|for _ in 1u .. rowCount do
                         let flags = br.ReadUInt16 ()
                         let sequence = br.ReadUInt16 ()
                         let name = readHeapString ()
                         
-                        printfn "Param: name=\"%s\", seq=%i" name sequence
+                        printfn "ParamKind: name=\"%s\", seq=%i" name sequence
 
                         yield {
                             ParamRow.flags = flags
                             sequence = sequence
                             name = name}|]
-            | MetadataTableKind.Property ->
+            | MetadataTableKind.PropertyKind ->
                 properties <-
                     [|for _ in 1u .. rowCount do
                         let flags = br.ReadUInt16 ()
@@ -1331,41 +1331,41 @@ let readMetadataTables
                         // signature in the Blob heap of the Property
                         let typeIndex = readBlobHeapIndex ()
 
-                        printfn "Property: name=\"%s\", type=%i" name typeIndex
+                        printfn "PropertyKind: name=\"%s\", type=%i" name typeIndex
 
                         yield {
                             PropertyRow.flags = flags
                             name = name
                             typeIndex = typeIndex}|]
-            | MetadataTableKind.PropertyMap ->
+            | MetadataTableKind.PropertyMapKind ->
                 propertyMaps <-
                     [|for _ in 1u .. rowCount do
-                        let parentIndex = readTableIndex MetadataTableKind.TypeDef
-                        let propertyListIndex = readTableIndex MetadataTableKind.Property
+                        let parentIndex = readTableIndex MetadataTableKind.TypeDefKind
+                        let propertyListIndex = readTableIndex MetadataTableKind.PropertyKind
 
-                        printfn "PropertyMap: parent=%i, propertyList=%i" parentIndex propertyListIndex
+                        printfn "PropertyMapKind: parent=%i, propertyList=%i" parentIndex propertyListIndex
 
                         yield {
                             PropertyMapRow.parentIndex = parentIndex
                             propertyListIndex = propertyListIndex}|]
-            | MetadataTableKind.StandAloneSig ->
+            | MetadataTableKind.StandAloneSigKind ->
                 standAloneSigs <-
                     [|for _ in 1u .. rowCount do
                         let signatureIndex = readBlobHeapIndex ()
-                        printfn "StandAloneSig: sigIndex=%i" signatureIndex
+                        printfn "StandAloneSigKind: sigIndex=%i" signatureIndex
 
                         yield {StandAloneSigRow.signatureIndex = signatureIndex}|]
-            | MetadataTableKind.TypeDef ->
+            | MetadataTableKind.TypeDefKind ->
                 typeDefs <-
                     [|for _ in 1u .. rowCount do
                         let flags = br.ReadUInt32 ()
                         let typeName = readHeapString ()
                         let typeNamespace = readHeapString ()
                         let extendsKind, extendsIndex = readCodedIndex TypeDefOrRef
-                        let fieldsIndex = readTableIndex MetadataTableKind.Field
-                        let methodsIndex = readTableIndex MetadataTableKind.MethodDef
+                        let fieldsIndex = readTableIndex MetadataTableKind.FieldKind
+                        let methodsIndex = readTableIndex MetadataTableKind.MethodDefKind
 
-                        printfn "TypeDef: typeName=\"%s\", typeNamespace=\"%s\"" typeName typeNamespace
+                        printfn "TypeDefKind: typeName=\"%s\", typeNamespace=\"%s\"" typeName typeNamespace
 
                         yield {
                             TypeDefRow.flags = flags
@@ -1375,7 +1375,7 @@ let readMetadataTables
                             extendsIndex = extendsIndex
                             fieldsIndex = fieldsIndex
                             methodsIndex = methodsIndex}|]
-            | MetadataTableKind.TypeRef ->
+            | MetadataTableKind.TypeRefKind ->
                 typeRefs <-
                     [|for _ in 1u .. rowCount do
                         let resolutionScopeKind, resolutionScopeIndex = readCodedIndex ResolutionScope
@@ -1383,7 +1383,7 @@ let readMetadataTables
                         let typeNamespace = readHeapString ()
 
                         printfn
-                            "TypeRef: resolutionScope=(%A, %i), typeName=\"%s\", typeNamespace=\"%s\""
+                            "TypeRefKind: resolutionScope=(%A, %i), typeName=\"%s\", typeNamespace=\"%s\""
                             resolutionScopeKind
                             resolutionScopeIndex
                             typeName
@@ -1394,11 +1394,11 @@ let readMetadataTables
                             resolutionScopeIndex = resolutionScopeIndex
                             typeName = typeName
                             typeNamespace = typeNamespace}|]
-            | MetadataTableKind.TypeSpec ->
+            | MetadataTableKind.TypeSpecKind ->
                 typeSpecs <-
                     [|for _ in 1u .. rowCount do
                         let sigIndex = readBlobHeapIndex ()
-                        printfn "TypeSpec: %i" sigIndex
+                        printfn "TypeSpecKind: %i" sigIndex
 
                         yield {TypeSpecRow.sigIndex = sigIndex}|]
             | _ -> noImpl ()
