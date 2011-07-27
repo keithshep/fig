@@ -15,9 +15,11 @@ let main args =
             printfn "%A" hdr
         let cliHeader = readCLIHeader br secHdrs pe
         let streamHeaders = readStreamHeaders br secHdrs cliHeader
-        let metadataTables = readMetadataTables br secHdrs cliHeader streamHeaders
-        ()
-        
+        let mt = readMetadataTables br secHdrs cliHeader streamHeaders
+        for i in 0 .. mt.methodDefs.Length - 1 do
+            let md = new MethodDef (br, secHdrs, mt, i)
+            md.MethodBody
+
     | _ -> failwith (sprintf "bad options %A" args)
 
     // exit success
