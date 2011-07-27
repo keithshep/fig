@@ -4,6 +4,7 @@ open System.IO
 open System.Text
 
 let warnf fmt = eprintfn fmt
+let failwithf fmt = Printf.ksprintf failwith fmt
 
 // Misc. notes:
 //  - Info on Relative Virtual Address (RVA) can be found at 9.4
@@ -207,7 +208,7 @@ let rec rvaToDiskPosOpt (secHeaders : SectionHeader list) (r : uint32) =
 let rvaToDiskPos (secHeaders : SectionHeader list) (r : uint32) =
     match rvaToDiskPosOpt secHeaders r with
     | Some x -> x
-    | None -> failwith (sprintf "failed to locate RVA 0x%X" r)
+    | None -> failwithf "failed to locate RVA 0x%X" r
 
 // specified in EMCA-335 25.2.2
 let readPEHeader (r : BinaryReader) =
@@ -283,7 +284,7 @@ let readPEHeader (r : BinaryReader) =
                 match r.ReadUInt16 () with
                 | 0x0003us -> WindowsCUI
                 | 0x0002us -> WindowsGUI
-                | i -> failwith (sprintf "unexpected sub-system 0x%X" i)
+                | i -> failwithf "unexpected sub-system 0x%X" i
             let dllFlags = r.ReadUInt16 ()
             if dllFlags &&& 0x100Fus <> 0us then
                 failwith "expected DLL flags to be 0 for mask 0x100F"
@@ -512,7 +513,7 @@ let assertTableBitsValid (validTblBits : uint64) =
         let mask = ~~~(1uL <<< int mt)
         maskedBits <- maskedBits &&& mask
 
-    if maskedBits <> 0uL then failwith (sprintf "bad bits: 0x%X" maskedBits)
+    if maskedBits <> 0uL then failwithf "bad bits: 0x%X" maskedBits
 
 type CodedIndexKind =
     | TypeDefOrRef
@@ -579,7 +580,7 @@ let resolveTableKind (cik : CodedIndexKind) (i : int) =
         match i with
         | 2 -> MetadataTableKind.MethodDefKind
         | 3 -> MetadataTableKind.MemberRefKind
-        | _ -> failwith (sprintf "bad index used for CustomAttributeType: %i" i)
+        | _ -> failwithf "bad index used for CustomAttributeType: %i" i
 
     | _ -> (possibleTableKinds cik).[i]
 
@@ -916,7 +917,7 @@ let readMetadataTables
 
         for kv in rowCounts do
             let rowCount = kv.Value
-            let noImpl () = failwith (sprintf "no implementation for %A" kv.Key)
+            let noImpl () = failwithf "no implementation for %A" kv.Key
             match kv.Key with
             | MetadataTableKind.AssemblyKind ->
                 assemblies <-
