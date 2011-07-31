@@ -18,7 +18,13 @@ let main args =
         let mt = readMetadataTables br secHdrs cliHeader streamHeaders
         for i in 0 .. mt.methodDefs.Length - 1 do
             let md = new MethodDef (br, secHdrs, mt, i)
-            md.MethodBody
+            printfn ""
+            printfn "METHOD BODY"
+            match md.MethodBody with
+            | None -> printfn "    EMPTY"
+            | Some insts ->
+                for inst in insts do
+                    printfn "    %A" inst
 
     | _ -> failwith (sprintf "bad options %A" args)
 

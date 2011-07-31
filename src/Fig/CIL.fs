@@ -1617,47 +1617,47 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
     elif codeSize < 0L then
         failwith "unexpected end of method body"
     else
-        let mutable codeSize = codeSize
+        let codeSize = ref codeSize
 
         // convenience functions for reading bytes
         let readByte () =
-            codeSize <- codeSize - 1L
+            codeSize := !codeSize - 1L
             r.ReadByte ()
 
         let readSByte () =
-            codeSize <- codeSize - 1L
+            codeSize := !codeSize - 1L
             r.ReadSByte ()
 
         let readInt16 () =
-            codeSize <- codeSize - 2L
+            codeSize := !codeSize - 2L
             r.ReadInt16 ()
 
         let readUInt16 () =
-            codeSize <- codeSize - 2L
+            codeSize := !codeSize - 2L
             r.ReadUInt16 ()
 
         let readInt32 () =
-            codeSize <- codeSize - 4L
+            codeSize := !codeSize - 4L
             r.ReadInt32 ()
 
         let readUInt32 () =
-            codeSize <- codeSize - 4L
+            codeSize := !codeSize - 4L
             r.ReadUInt32 ()
 
         let readInt64 () =
-            codeSize <- codeSize - 8L
+            codeSize := !codeSize - 8L
             r.ReadInt64 ()
 
         let readUInt64 () =
-            codeSize <- codeSize - 8L
+            codeSize := !codeSize - 8L
             r.ReadUInt64 ()
 
         let readSingle () =
-            codeSize <- codeSize - 4L
+            codeSize := !codeSize - 4L
             r.ReadSingle ()
 
         let readDouble () =
-            codeSize <- codeSize - 8L
+            codeSize := !codeSize - 8L
             r.ReadDouble ()
 
         let readMetadataToken () =
@@ -1933,9 +1933,9 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
                         readInst constrainedPrefix noPrefix true tailPrefix unalignedPrefix volatilePrefix
                 | bc -> failwithf "unknown bytecode 0xFE 0x%X" bc
             
-            | _ -> failwithf "unknown bytecode 0x%X" bc
+            | bc -> failwithf "unknown bytecode 0x%X" bc
         
-        readInst None 0uy false false None false :: readInsts r codeSize
+        readInst None 0uy false false None false :: readInsts r !codeSize
 
 type CodeType =
     | ILCodeType
