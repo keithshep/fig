@@ -1438,68 +1438,179 @@ let readMetadataTables
 
 type MetadataToken = MetadataTableKind option * int
 
-//type Instruction =
-//    | Add
-//    | AddOvf
-//    | And
-//    | ArgList
-//    | Beq
-//    | Bge
-//    | Bgt
-//    | Ble
-//    | Blt
-//    | BneUn
-//    | Br
-//    | Break
-//    | BrFalse
-//    | BrTrue
-//    | Call
-//    | CallI
-//    | Ceq
-//    | Cgt
-//    | Ckfinite
-//    | Clt
-//    | Conv
-//    | ConvOvf
-//    | Cpblk
-//    | Div
-//    | Dup
-//    | Endfilter
-//    | Endfinally
-//    | Initblk
-//    | Jmp
-//    | Ldarg of uint16
-//    | Ldarga
-//    | LdcI4
-//    | LdcI8
-//    | LdcR4
-//    | LdcR8
-//    | Ldftn
-//    | Ldind
-//    | LdindRef
-//    | Ldloc of uint16
-//    | Ldloca
-//    | Ldnull
-//    | Leave
-//    | Localloc
-//    | Mul
-//    | MulOvf
-//    | Neg
-//    | Nop
-//    | Not
-//    | Or
-//    | Pop
-//    | Rem
-//    | Ret
-//    | Shl
-//    | Shr
-//    | Starg
-//    | Stind
-//    | Stloc
-//    | Sub
-//    | Switch
-//    | Xor
+type Instruction =
+    | Add
+    | And
+    | Beq of int
+    | Bge of int
+    | Bgt of int
+    | Ble of int
+    | Blt of int
+    | BneUn of int
+    | BgeUn of int
+    | BgtUn of int
+    | BleUn of int
+    | BltUn of int
+    | Br of int
+    | Break
+    | Brfalse of int
+    | Brtrue of int
+    | Call of MetadataToken
+    | Calli of MetadataToken
+    | Callvirt of MetadataToken
+    | ConvI1
+    | ConvI2
+    | ConvI4
+    | ConvI8
+    | ConvR4
+    | ConvR8
+    | ConvU4
+    | ConvU8
+    | Cpobj of MetadataToken
+    | Div
+    | DivUn
+    | Dup
+    | Jmp of MetadataToken
+    | Ldarg of uint16
+    | Ldarga of uint16
+    | LdcI4 of int
+    | LdcI8 of int64
+    | LdcR4 of single
+    | LdcR8 of double
+    | LdindU1
+    | LdindI2
+    | LdindU2
+    | LdindI4
+    | LdindU4
+    | LdindI8
+    | LdindI
+    | LdindR4
+    | LdindR8
+    | LdindRef
+    | Ldloc of uint16
+    | Ldloca of uint16
+    | Ldnull
+    | Ldobj of MetadataToken
+    | Ldstr of MetadataToken
+    | Mul
+    | Neg
+    | Nop
+    | Not
+    | Newobj of MetadataToken
+    | Or
+    | Pop
+    | Rem
+    | RemUn
+    | Ret
+    | Shl
+    | Shr
+    | ShrUn
+    | Starg of uint16
+    | StindRef
+    | StindI1
+    | StindI2
+    | StindI4
+    | StindI8
+    | StindR4
+    | StindR8
+    | Stloc of uint16
+    | Sub
+    | Switch of int array
+    | Xor
+    | Castclass of MetadataToken
+    | Isinst of MetadataToken
+    | ConvRUn
+    | Unbox of MetadataToken
+    | Throw
+    | Ldfld of MetadataToken
+    | Ldflda of MetadataToken
+    | Stfld of MetadataToken
+    | Ldsfld of MetadataToken
+    | Ldsflda of MetadataToken
+    | Stsfld of MetadataToken
+    | Stobj of MetadataToken
+    | ConvOvfI1Un
+    | ConvOvfI2Un
+    | ConvOvfI4Un
+    | ConvOvfI8Un
+    | ConvOvfU1Un
+    | ConvOvfU2Un
+    | ConvOvfU4Un
+    | ConvOvfU8Un
+    | ConvOvfIUn
+    | ConvOvfUUn
+    | Box of MetadataToken
+    | Newarr of MetadataToken
+    | Ldlen
+    | Ldelema of MetadataToken
+    | LdelemI1
+    | LdelemU1
+    | LdelemI2
+    | LdelemU2
+    | LdelemI4
+    | LdelemU4
+    | LdelemI8
+    | LdelemI
+    | LdelemR4
+    | LdelemR8
+    | LdelemRef
+    | StelemI
+    | StelemI1
+    | StelemI2
+    | StelemI4
+    | StelemI8
+    | StelemR4
+    | StelemR8
+    | StelemRef
+    | Ldelem of MetadataToken
+    | Stelem of MetadataToken
+    | UnboxAny of MetadataToken
+    | ConvOvfI1
+    | ConvOvfU1
+    | ConvOvfI2
+    | ConvOvfU2
+    | ConvOvfI4
+    | ConvOvfU4
+    | ConvOvfI8
+    | ConvOvfU8
+    | Refanyval of MetadataToken
+    | Ckfinite
+    | Mkrefany of MetadataToken
+    | Ldtoken of MetadataToken
+    | ConvU2
+    | ConvU1
+    | ConvI
+    | ConvOvfI
+    | ConvOvfU
+    | AddOvf
+    | AddOvfUn
+    | MulOvf
+    | MulOvfUn
+    | SubOvf
+    | SubOvfUn
+    | Endfinally
+    | Leave of int
+    | StindI
+    | ConvU
+    | Arglist
+    | Ceq
+    | Cgt
+    | CgtUn
+    | Clt
+    | CltUn
+    | Ldftn of MetadataToken
+    | Ldvirtftn of MetadataToken
+    | Localloc
+    | Endfilter
+    | Initobj of MetadataToken
+    | Cpblk
+    | Initblk
+    | Rethrow
+    | Sizeof of MetadataToken
+    | Refanytype
 
+// TODO not sure if using int64 is a good choice here. Maybe use uint32 and check
+// before reading instead of checking for negative after
 let rec readInsts (r : BinaryReader) (codeSize : int64) =
     if codeSize = 0L then
         []
@@ -1787,7 +1898,7 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
                     match unalignedPrefix with
                     | Some _ -> failwith "repeated unaligned. prefixes"
                     | None ->
-                        let alignVal = readUInt8 ()
+                        let alignVal = readByte ()
                         readInst constrainedPrefix noPrefix readonlyPrefix tailPrefix (Some alignVal) volatilePrefix
                 | 0x13uy ->
                     if volatilePrefix then
@@ -1824,7 +1935,7 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             
             | _ -> failwithf "unknown bytecode 0x%X" bc
         
-        inst :: bytesToInsts byteTail
+        readInst None 0uy false false None false :: readInsts r codeSize
 
 type CodeType =
     | ILCodeType
@@ -1950,7 +2061,7 @@ type MethodDef (r : BinaryReader, secHdrs : SectionHeader list, mt : MetadataTab
                     let mbSize = fstByte >>> 2
                     printfn "tiny header: size=%i" mbSize
 
-                    Some ()
+                    Some (readInsts r (int64 mbSize))
                 else
                     let moreSects = fstByte &&& 0x08uy <> 0uy
                     let initLocals = fstByte &&& 0x10uy <> 0uy
@@ -1970,5 +2081,5 @@ type MethodDef (r : BinaryReader, secHdrs : SectionHeader list, mt : MetadataTab
                         codeSize
                         localVarSigTok
 
-                    Some (readInsts r codeSize)
+                    Some (readInsts r (int64 codeSize))
 
