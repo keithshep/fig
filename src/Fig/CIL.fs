@@ -1436,6 +1436,396 @@ let readMetadataTables
             typeSpecs = typeSpecs
         }
 
+type MetadataToken = MetadataTableKind option * int
+
+//type Instruction =
+//    | Add
+//    | AddOvf
+//    | And
+//    | ArgList
+//    | Beq
+//    | Bge
+//    | Bgt
+//    | Ble
+//    | Blt
+//    | BneUn
+//    | Br
+//    | Break
+//    | BrFalse
+//    | BrTrue
+//    | Call
+//    | CallI
+//    | Ceq
+//    | Cgt
+//    | Ckfinite
+//    | Clt
+//    | Conv
+//    | ConvOvf
+//    | Cpblk
+//    | Div
+//    | Dup
+//    | Endfilter
+//    | Endfinally
+//    | Initblk
+//    | Jmp
+//    | Ldarg of uint16
+//    | Ldarga
+//    | LdcI4
+//    | LdcI8
+//    | LdcR4
+//    | LdcR8
+//    | Ldftn
+//    | Ldind
+//    | LdindRef
+//    | Ldloc of uint16
+//    | Ldloca
+//    | Ldnull
+//    | Leave
+//    | Localloc
+//    | Mul
+//    | MulOvf
+//    | Neg
+//    | Nop
+//    | Not
+//    | Or
+//    | Pop
+//    | Rem
+//    | Ret
+//    | Shl
+//    | Shr
+//    | Starg
+//    | Stind
+//    | Stloc
+//    | Sub
+//    | Switch
+//    | Xor
+
+let rec readInsts (r : BinaryReader) (codeSize : int64) =
+    if codeSize = 0L then
+        []
+    elif codeSize < 0L then
+        failwith "unexpected end of method body"
+    else
+        let mutable codeSize = codeSize
+
+        // convenience functions for reading bytes
+        let readByte () =
+            codeSize <- codeSize - 1L
+            r.ReadByte ()
+
+        let readSByte () =
+            codeSize <- codeSize - 1L
+            r.ReadSByte ()
+
+        let readInt16 () =
+            codeSize <- codeSize - 2L
+            r.ReadInt16 ()
+
+        let readUInt16 () =
+            codeSize <- codeSize - 2L
+            r.ReadUInt16 ()
+
+        let readInt32 () =
+            codeSize <- codeSize - 4L
+            r.ReadInt32 ()
+
+        let readUInt32 () =
+            codeSize <- codeSize - 4L
+            r.ReadUInt32 ()
+
+        let readInt64 () =
+            codeSize <- codeSize - 8L
+            r.ReadInt64 ()
+
+        let readUInt64 () =
+            codeSize <- codeSize - 8L
+            r.ReadUInt64 ()
+
+        let readSingle () =
+            codeSize <- codeSize - 4L
+            r.ReadSingle ()
+
+        let readDouble () =
+            codeSize <- codeSize - 8L
+            r.ReadDouble ()
+
+        let readMetadataToken () =
+            let mtBytes = readUInt32 ()
+            let mutable rowOrIndex =
+                // The rows within metadata tables are numbered one upwards,
+                // whilst offsets in the heap are numbered zero upwards.
+                int (mtBytes &&& 0x00FFFFFFu)
+            let optTblKind =
+                match mtBytes >>> 24 with
+                | 0x70u ->
+                    // 0x70 indicates this is an index into the string heap
+                    None
+                | n ->
+                    // adjust the row so that it's zero based
+                    rowOrIndex <- rowOrIndex - 1
+                    Some (enum<MetadataTableKind> (int n))
+
+            (optTblKind, rowOrIndex)
+
+        let rec readInst
+                (constrainedPrefix : MetadataToken option)
+                (noPrefix : byte)
+                (readonlyPrefix : bool)
+                (tailPrefix : bool)
+                (unalignedPrefix : byte option)
+                (volatilePrefix : bool) =
+            match readByte () with
+            | 0x00uy -> Nop
+            | 0x01uy -> Break
+            | 0x02uy -> Ldarg 0us
+            | 0x03uy -> Ldarg 1us
+            | 0x04uy -> Ldarg 2us
+            | 0x05uy -> Ldarg 3us
+            | 0x06uy -> Ldloc 0us
+            | 0x07uy -> Ldloc 1us
+            | 0x08uy -> Ldloc 2us
+            | 0x09uy -> Ldloc 3us
+            | 0x0Auy -> Stloc 0us
+            | 0x0Buy -> Stloc 1us
+            | 0x0Cuy -> Stloc 2us
+            | 0x0Duy -> Stloc 3us
+            | 0x0Euy -> Ldarg (readByte () |> uint16)
+            | 0x0Fuy -> Ldarga (readByte () |> uint16)
+            | 0x10uy -> Starg (readByte () |> uint16)
+            | 0x11uy -> Ldloc (readByte () |> uint16)
+            | 0x12uy -> Ldloca (readByte () |> uint16)
+            | 0x13uy -> Stloc (readByte () |> uint16)
+            | 0x14uy -> Ldnull
+            | 0x15uy -> LdcI4 -1
+            | 0x16uy -> LdcI4 0
+            | 0x17uy -> LdcI4 1
+            | 0x18uy -> LdcI4 2
+            | 0x19uy -> LdcI4 3
+            | 0x1Auy -> LdcI4 4
+            | 0x1Buy -> LdcI4 5
+            | 0x1Cuy -> LdcI4 6
+            | 0x1Duy -> LdcI4 7
+            | 0x1Euy -> LdcI4 8
+            | 0x1Fuy -> LdcI4 (readSByte () |> int) // TODO will this do the right thing for -1y
+            | 0x20uy -> LdcI4 (readInt32 ())
+            | 0x21uy -> LdcI8 (readInt64 ())
+            | 0x22uy -> LdcR4 (readSingle ())
+            | 0x23uy -> LdcR8 (readDouble ())
+            | 0x25uy -> Dup
+            | 0x26uy -> Pop
+            | 0x27uy -> Jmp (readMetadataToken ())
+            | 0x28uy -> Call (readMetadataToken ())
+            | 0x29uy -> Calli (readMetadataToken ())
+            | 0x2Auy -> Ret
+            | 0x2Buy -> Br (readSByte () |> int)
+            | 0x2Cuy -> Brfalse (readSByte () |> int)
+            | 0x2Duy -> Brtrue (readSByte () |> int)
+            | 0x2Euy -> Beq (readSByte () |> int)
+            | 0x2Fuy -> Bge (readSByte () |> int)
+            | 0x30uy -> Bgt (readSByte () |> int)
+            | 0x31uy -> Ble (readSByte () |> int)
+            | 0x32uy -> Blt (readSByte () |> int)
+            | 0x33uy -> BneUn (readSByte () |> int)
+            | 0x34uy -> BgeUn (readSByte () |> int)
+            | 0x35uy -> BgtUn (readSByte () |> int)
+            | 0x36uy -> BleUn (readSByte () |> int)
+            | 0x37uy -> BltUn (readSByte () |> int)
+            | 0x38uy -> Br (readInt32 ())
+            | 0x39uy -> Brfalse (readInt32 ())
+            | 0x3Auy -> Brtrue (readInt32 ())
+            | 0x3Buy -> Beq (readInt32 ())
+            | 0x3Cuy -> Bge (readInt32 ())
+            | 0x3Duy -> Bgt (readInt32 ())
+            | 0x3Euy -> Ble (readInt32 ())
+            | 0x3Fuy -> Blt (readInt32 ())
+            | 0x40uy -> BneUn (readInt32 ())
+            | 0x41uy -> BgeUn (readInt32 ())
+            | 0x42uy -> BgtUn (readInt32 ())
+            | 0x43uy -> BleUn (readInt32 ())
+            | 0x44uy -> BltUn (readInt32 ())
+            | 0x45uy -> Switch [|for _ in 1u .. readUInt32 () -> readInt32 ()|]
+            | 0x47uy -> LdindU1
+            | 0x48uy -> LdindI2
+            | 0x49uy -> LdindU2
+            | 0x4Auy -> LdindI4
+            | 0x4Buy -> LdindU4
+            | 0x4Cuy -> LdindI8
+            | 0x4Duy -> LdindI
+            | 0x4Euy -> LdindR4
+            | 0x4Fuy -> LdindR8
+            | 0x50uy -> LdindRef
+            | 0x51uy -> StindRef
+            | 0x52uy -> StindI1
+            | 0x53uy -> StindI2
+            | 0x54uy -> StindI4
+            | 0x55uy -> StindI8
+            | 0x56uy -> StindR4
+            | 0x57uy -> StindR8
+            | 0x58uy -> Add
+            | 0x59uy -> Sub
+            | 0x5Auy -> Mul
+            | 0x5Buy -> Div
+            | 0x5Cuy -> DivUn
+            | 0x5Duy -> Rem
+            | 0x5Euy -> RemUn
+            | 0x5Fuy -> And
+            | 0x60uy -> Or
+            | 0x61uy -> Xor
+            | 0x62uy -> Shl
+            | 0x63uy -> Shr
+            | 0x64uy -> ShrUn
+            | 0x65uy -> Neg
+            | 0x66uy -> Not
+            | 0x67uy -> ConvI1
+            | 0x68uy -> ConvI2
+            | 0x69uy -> ConvI4
+            | 0x6Auy -> ConvI8
+            | 0x6Buy -> ConvR4
+            | 0x6Cuy -> ConvR8
+            | 0x6Duy -> ConvU4
+            | 0x6Euy -> ConvU8
+            | 0x6Fuy -> Callvirt (readMetadataToken ())
+            | 0x70uy -> Cpobj (readMetadataToken ())
+            | 0x71uy -> Ldobj (readMetadataToken ())
+            | 0x72uy -> Ldstr (readMetadataToken ())
+            | 0x73uy -> Newobj (readMetadataToken ())
+            | 0x74uy -> Castclass (readMetadataToken ())
+            | 0x75uy -> Isinst (readMetadataToken ())
+            | 0x76uy -> ConvRUn
+            | 0x79uy -> Unbox (readMetadataToken ())
+            | 0x7Auy -> Throw
+            | 0x7Buy -> Ldfld (readMetadataToken ())
+            | 0x7Cuy -> Ldflda (readMetadataToken ())
+            | 0x7Duy -> Stfld (readMetadataToken ())
+            | 0x7Euy -> Ldsfld (readMetadataToken ())
+            | 0x7Fuy -> Ldsflda (readMetadataToken ())
+            | 0x80uy -> Stsfld (readMetadataToken ())
+            | 0x81uy -> Stobj (readMetadataToken ())
+            | 0x82uy -> ConvOvfI1Un
+            | 0x83uy -> ConvOvfI2Un
+            | 0x84uy -> ConvOvfI4Un
+            | 0x85uy -> ConvOvfI8Un
+            | 0x86uy -> ConvOvfU1Un
+            | 0x87uy -> ConvOvfU2Un
+            | 0x88uy -> ConvOvfU4Un
+            | 0x89uy -> ConvOvfU8Un
+            | 0x8Auy -> ConvOvfIUn
+            | 0x8Buy -> ConvOvfUUn
+            | 0x8Cuy -> Box (readMetadataToken ())
+            | 0x8Duy -> Newarr (readMetadataToken ())
+            | 0x8Euy -> Ldlen
+            | 0x8Fuy -> Ldelema (readMetadataToken ())
+            | 0x90uy -> LdelemI1
+            | 0x91uy -> LdelemU1
+            | 0x92uy -> LdelemI2
+            | 0x93uy -> LdelemU2
+            | 0x94uy -> LdelemI4
+            | 0x95uy -> LdelemU4
+            | 0x96uy -> LdelemI8
+            | 0x97uy -> LdelemI
+            | 0x98uy -> LdelemR4
+            | 0x99uy -> LdelemR8
+            | 0x9Auy -> LdelemRef
+            | 0x9Buy -> StelemI
+            | 0x9Cuy -> StelemI1
+            | 0x9Duy -> StelemI2
+            | 0x9Euy -> StelemI4
+            | 0x9Fuy -> StelemI8
+            | 0xA0uy -> StelemR4
+            | 0xA1uy -> StelemR8
+            | 0xA2uy -> StelemRef
+            | 0xA3uy -> Ldelem (readMetadataToken ())
+            | 0xA4uy -> Stelem (readMetadataToken ())
+            | 0xA5uy -> UnboxAny (readMetadataToken ())
+            | 0xB3uy -> ConvOvfI1
+            | 0xB4uy -> ConvOvfU1
+            | 0xB5uy -> ConvOvfI2
+            | 0xB6uy -> ConvOvfU2
+            | 0xB7uy -> ConvOvfI4
+            | 0xB8uy -> ConvOvfU4
+            | 0xB9uy -> ConvOvfI8
+            | 0xBAuy -> ConvOvfU8
+            | 0xC2uy -> Refanyval (readMetadataToken ())
+            | 0xC3uy -> Ckfinite
+            | 0xC6uy -> Mkrefany (readMetadataToken ())
+            | 0xD0uy -> Ldtoken (readMetadataToken ())
+            | 0xD1uy -> ConvU2
+            | 0xD2uy -> ConvU1
+            | 0xD3uy -> ConvI
+            | 0xD4uy -> ConvOvfI
+            | 0xD5uy -> ConvOvfU
+            | 0xD6uy -> AddOvf
+            | 0xD7uy -> AddOvfUn
+            | 0xD8uy -> MulOvf
+            | 0xD9uy -> MulOvfUn
+            | 0xDAuy -> SubOvf
+            | 0xDBuy -> SubOvfUn
+            | 0xDCuy -> Endfinally
+            | 0xDDuy -> Leave (readInt32 ())
+            | 0xDEuy -> Leave (readSByte () |> int)
+            | 0xDFuy -> StindI
+            | 0xE0uy -> ConvU
+            | 0xFEuy ->
+                match readByte () with
+                | 0x00uy -> Arglist
+                | 0x01uy -> Ceq
+                | 0x02uy -> Cgt
+                | 0x03uy -> CgtUn
+                | 0x04uy -> Clt
+                | 0x05uy -> CltUn
+                | 0x06uy -> Ldftn (readMetadataToken ())
+                | 0x07uy -> Ldvirtftn (readMetadataToken ())
+                | 0x09uy -> Ldarg (readUInt16 ())
+                | 0x0Auy -> Ldarga (readUInt16 ())
+                | 0x0Buy -> Starg (readUInt16 ())
+                | 0x0Cuy -> Ldloc (readUInt16 ())
+                | 0x0Duy -> Ldloca (readUInt16 ())
+                | 0x0Euy -> Stloc (readUInt16 ())
+                | 0x0Fuy -> Localloc
+                | 0x11uy -> Endfilter
+                | 0x12uy ->
+                    match unalignedPrefix with
+                    | Some _ -> failwith "repeated unaligned. prefixes"
+                    | None ->
+                        let alignVal = readUInt8 ()
+                        readInst constrainedPrefix noPrefix readonlyPrefix tailPrefix (Some alignVal) volatilePrefix
+                | 0x13uy ->
+                    if volatilePrefix then
+                        failwith "repeated volatile. prefixes"
+                    else
+                        readInst constrainedPrefix noPrefix readonlyPrefix tailPrefix unalignedPrefix true
+                | 0x14uy ->
+                    if tailPrefix then
+                        failwith "repeated tail. prefixes"
+                    else
+                        readInst constrainedPrefix noPrefix readonlyPrefix true unalignedPrefix volatilePrefix
+                | 0x15uy -> Initobj (readMetadataToken ())
+                | 0x16uy ->
+                    match constrainedPrefix with
+                    | Some _ -> failwith "repeated constrained. prefixes"
+                    | None ->
+                        let constrainedTok = Some (readMetadataToken ())
+                        readInst constrainedTok noPrefix readonlyPrefix tailPrefix unalignedPrefix volatilePrefix
+                | 0x17uy -> Cpblk
+                | 0x18uy -> Initblk
+                | 0x19uy ->
+                    // TODO is it worth doing anything with this?
+                    let currNo = readByte ()
+                    readInst constrainedPrefix (noPrefix ||| currNo) readonlyPrefix tailPrefix unalignedPrefix volatilePrefix
+                | 0x1Auy -> Rethrow
+                | 0x1Cuy -> Sizeof (readMetadataToken ())
+                | 0x1Duy -> Refanytype
+                | 0x1Euy ->
+                    if readonlyPrefix then
+                        failwith "repeated readonly. prefixes"
+                    else
+                        readInst constrainedPrefix noPrefix true tailPrefix unalignedPrefix volatilePrefix
+                | bc -> failwithf "unknown bytecode 0xFE 0x%X" bc
+            
+            | _ -> failwithf "unknown bytecode 0x%X" bc
+        
+        inst :: bytesToInsts byteTail
+
 type CodeType =
     | ILCodeType
     | NativeCodeType
@@ -1580,5 +1970,5 @@ type MethodDef (r : BinaryReader, secHdrs : SectionHeader list, mt : MetadataTab
                         codeSize
                         localVarSigTok
 
-                    Some ()
+                    Some (readInsts r codeSize)
 
