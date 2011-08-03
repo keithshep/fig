@@ -1455,9 +1455,9 @@ type Instruction =
     | Break
     | Brfalse of int
     | Brtrue of int
-    | Call of MetadataToken
-    | Calli of MetadataToken
-    | Callvirt of MetadataToken
+    | Call of bool * MetadataToken
+    | Calli of bool * MetadataToken
+    | Callvirt of MetadataToken option * bool * MetadataToken
     | ConvI1
     | ConvI2
     | ConvI4
@@ -1477,20 +1477,20 @@ type Instruction =
     | LdcI8 of int64
     | LdcR4 of single
     | LdcR8 of double
-    | LdindU1
-    | LdindI2
-    | LdindU2
-    | LdindI4
-    | LdindU4
-    | LdindI8
-    | LdindI
-    | LdindR4
-    | LdindR8
-    | LdindRef
+    | LdindU1 of byte option
+    | LdindI2 of byte option
+    | LdindU2 of byte option
+    | LdindI4 of byte option
+    | LdindU4 of byte option
+    | LdindI8 of byte option
+    | LdindI of byte option
+    | LdindR4 of byte option
+    | LdindR8 of byte option
+    | LdindRef of byte option
     | Ldloc of uint16
     | Ldloca of uint16
     | Ldnull
-    | Ldobj of MetadataToken
+    | Ldobj of byte option * MetadataToken
     | Ldstr of MetadataToken
     | Mul
     | Neg
@@ -1506,13 +1506,13 @@ type Instruction =
     | Shr
     | ShrUn
     | Starg of uint16
-    | StindRef
-    | StindI1
-    | StindI2
-    | StindI4
-    | StindI8
-    | StindR4
-    | StindR8
+    | StindRef of byte option
+    | StindI1 of byte option
+    | StindI2 of byte option
+    | StindI4 of byte option
+    | StindI8 of byte option
+    | StindR4 of byte option
+    | StindR8 of byte option
     | Stloc of uint16
     | Sub
     | Switch of int array
@@ -1522,13 +1522,13 @@ type Instruction =
     | ConvRUn
     | Unbox of MetadataToken
     | Throw
-    | Ldfld of MetadataToken
-    | Ldflda of MetadataToken
-    | Stfld of MetadataToken
+    | Ldfld of byte option * MetadataToken
+    | Ldflda of byte option * MetadataToken
+    | Stfld of byte option * MetadataToken
     | Ldsfld of MetadataToken
     | Ldsflda of MetadataToken
     | Stsfld of MetadataToken
-    | Stobj of MetadataToken
+    | Stobj of byte option * MetadataToken
     | ConvOvfI1Un
     | ConvOvfI2Un
     | ConvOvfI4Un
@@ -1590,7 +1590,7 @@ type Instruction =
     | SubOvfUn
     | Endfinally
     | Leave of int
-    | StindI
+    | StindI of byte option
     | ConvU
     | Arglist
     | Ceq
@@ -1604,7 +1604,7 @@ type Instruction =
     | Endfilter
     | Initobj of MetadataToken
     | Cpblk
-    | Initblk
+    | Initblk of byte option
     | Rethrow
     | Sizeof of MetadataToken
     | Refanytype
@@ -1681,7 +1681,7 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
         let rec readInst
                 (constrainedPrefix : MetadataToken option)
                 (noPrefix : byte)
-                (readonlyPrefix : bool)
+                (readonlyPrefix : bool) // TODO figure out what to do w/ readonly
                 (tailPrefix : bool)
                 (unalignedPrefix : byte option)
                 (volatilePrefix : bool) =
@@ -1725,8 +1725,8 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0x25uy -> Dup
             | 0x26uy -> Pop
             | 0x27uy -> Jmp (readMetadataToken ())
-            | 0x28uy -> Call (readMetadataToken ())
-            | 0x29uy -> Calli (readMetadataToken ())
+            | 0x28uy -> Call (tailPrefix, readMetadataToken ())
+            | 0x29uy -> Calli (tailPrefix, readMetadataToken ())
             | 0x2Auy -> Ret
             | 0x2Buy -> Br (readSByte () |> int)
             | 0x2Cuy -> Brfalse (readSByte () |> int)
@@ -1755,23 +1755,23 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0x43uy -> BleUn (readInt32 ())
             | 0x44uy -> BltUn (readInt32 ())
             | 0x45uy -> Switch [|for _ in 1u .. readUInt32 () -> readInt32 ()|]
-            | 0x47uy -> LdindU1
-            | 0x48uy -> LdindI2
-            | 0x49uy -> LdindU2
-            | 0x4Auy -> LdindI4
-            | 0x4Buy -> LdindU4
-            | 0x4Cuy -> LdindI8
-            | 0x4Duy -> LdindI
-            | 0x4Euy -> LdindR4
-            | 0x4Fuy -> LdindR8
-            | 0x50uy -> LdindRef
-            | 0x51uy -> StindRef
-            | 0x52uy -> StindI1
-            | 0x53uy -> StindI2
-            | 0x54uy -> StindI4
-            | 0x55uy -> StindI8
-            | 0x56uy -> StindR4
-            | 0x57uy -> StindR8
+            | 0x47uy -> LdindU1 unalignedPrefix
+            | 0x48uy -> LdindI2 unalignedPrefix
+            | 0x49uy -> LdindU2 unalignedPrefix
+            | 0x4Auy -> LdindI4 unalignedPrefix
+            | 0x4Buy -> LdindU4 unalignedPrefix
+            | 0x4Cuy -> LdindI8 unalignedPrefix
+            | 0x4Duy -> LdindI unalignedPrefix
+            | 0x4Euy -> LdindR4 unalignedPrefix
+            | 0x4Fuy -> LdindR8 unalignedPrefix
+            | 0x50uy -> LdindRef unalignedPrefix
+            | 0x51uy -> StindRef unalignedPrefix
+            | 0x52uy -> StindI1 unalignedPrefix
+            | 0x53uy -> StindI2 unalignedPrefix
+            | 0x54uy -> StindI4 unalignedPrefix
+            | 0x55uy -> StindI8 unalignedPrefix
+            | 0x56uy -> StindR4 unalignedPrefix
+            | 0x57uy -> StindR8 unalignedPrefix
             | 0x58uy -> Add
             | 0x59uy -> Sub
             | 0x5Auy -> Mul
@@ -1795,9 +1795,9 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0x6Cuy -> ConvR8
             | 0x6Duy -> ConvU4
             | 0x6Euy -> ConvU8
-            | 0x6Fuy -> Callvirt (readMetadataToken ())
+            | 0x6Fuy -> Callvirt (constrainedPrefix, tailPrefix, readMetadataToken ())
             | 0x70uy -> Cpobj (readMetadataToken ())
-            | 0x71uy -> Ldobj (readMetadataToken ())
+            | 0x71uy -> Ldobj (unalignedPrefix, readMetadataToken ())
             | 0x72uy -> Ldstr (readMetadataToken ())
             | 0x73uy -> Newobj (readMetadataToken ())
             | 0x74uy -> Castclass (readMetadataToken ())
@@ -1805,13 +1805,13 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0x76uy -> ConvRUn
             | 0x79uy -> Unbox (readMetadataToken ())
             | 0x7Auy -> Throw
-            | 0x7Buy -> Ldfld (readMetadataToken ())
-            | 0x7Cuy -> Ldflda (readMetadataToken ())
-            | 0x7Duy -> Stfld (readMetadataToken ())
+            | 0x7Buy -> Ldfld (unalignedPrefix, readMetadataToken ())
+            | 0x7Cuy -> Ldflda (unalignedPrefix, readMetadataToken ())
+            | 0x7Duy -> Stfld (unalignedPrefix, readMetadataToken ())
             | 0x7Euy -> Ldsfld (readMetadataToken ())
             | 0x7Fuy -> Ldsflda (readMetadataToken ())
             | 0x80uy -> Stsfld (readMetadataToken ())
-            | 0x81uy -> Stobj (readMetadataToken ())
+            | 0x81uy -> Stobj (unalignedPrefix, readMetadataToken ())
             | 0x82uy -> ConvOvfI1Un
             | 0x83uy -> ConvOvfI2Un
             | 0x84uy -> ConvOvfI4Un
@@ -1874,7 +1874,7 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0xDCuy -> Endfinally
             | 0xDDuy -> Leave (readInt32 ())
             | 0xDEuy -> Leave (readSByte () |> int)
-            | 0xDFuy -> StindI
+            | 0xDFuy -> StindI unalignedPrefix
             | 0xE0uy -> ConvU
             | 0xFEuy ->
                 match readByte () with
@@ -1918,7 +1918,7 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
                         let constrainedTok = Some (readMetadataToken ())
                         readInst constrainedTok noPrefix readonlyPrefix tailPrefix unalignedPrefix volatilePrefix
                 | 0x17uy -> Cpblk
-                | 0x18uy -> Initblk
+                | 0x18uy -> Initblk unalignedPrefix
                 | 0x19uy ->
                     // TODO is it worth doing anything with this?
                     let currNo = readByte ()
