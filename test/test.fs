@@ -23,7 +23,14 @@ let main args =
             match md.MethodBody with
             | None -> printfn "    EMPTY"
             | Some (insts, exceptionSecs) ->
-                printfn "last inst: %A" insts.[insts.Length - 1]
+                printfn "    INSTRUCTIONS:"
+                for inst in insts do
+                    printfn "        %A" inst
+
+                if not (Array.isEmpty exceptionSecs) then
+                    printfn "    EXCEPTION SECTION:"
+                    for exSec in exceptionSecs do
+                        printfn "        %A" exSec
 
     | _ -> failwith (sprintf "bad options %A" args)
 
