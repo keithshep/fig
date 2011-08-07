@@ -6,13 +6,9 @@ open System.Text
 let warnf fmt = eprintfn fmt
 let failwithf fmt = Printf.ksprintf failwith fmt
 
-// Misc. notes:
-//  - Info on Relative Virtual Address (RVA) can be found at 9.4
-//    Also, from 4.15
-//    RVA stands for Relative Virtual Address, the offset of the field from the
-//    base address at which its containing PE file is loaded into memory)
-
-type DLLReader(stream : Stream) =
+// PosStackBinaryReader is a binary reader that allows you to push and pop the
+// file position which can be more convenient than explicit seeks
+type PosStackBinaryReader(stream : Stream) =
     inherit BinaryReader(stream)
 
     let mutable posStack = []
@@ -795,7 +791,7 @@ type MetadataTables = {
     typeSpecs : TypeSpecRow array}
 
 let readMetadataTables
-        (r : DLLReader)
+        (r : PosStackBinaryReader)
         (secHdrs : SectionHeader list)
         (cliHeader : CLIHeader)
         (streamHeaders : Map<string, uint32 * uint32>) =
@@ -1020,7 +1016,7 @@ let readMetadataTables
                         // The column called Type is slightly misleading
                         // it actually indexes a constructor method
                         // the owner of that constructor method is
-                        //the Type of the Custom Attribute.
+                        // the Type of the Custom Attribute.
                         let typeKind, typeIndex = readCodedIndex CustomAttributeType
                         let valueIndex = readBlobHeapIndex ()
 
