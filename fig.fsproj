@@ -42,8 +42,11 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="src\Fig\CIL.fs">
-      <Link>CIL.fs</Link>
+    <Compile Include="src\Fig\AssemblyParser.fs">
+      <Link>AssemblyParser.fs</Link>
+    </Compile>
+    <Compile Include="src\Fig\AbstractCode.fs">
+      <Link>AbstractCode.fs</Link>
     </Compile>
     <Compile Include="test\test.fs">
       <Link>test.fs</Link>
