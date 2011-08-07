@@ -22,9 +22,8 @@ let main args =
             printfn "METHOD BODY"
             match md.MethodBody with
             | None -> printfn "    EMPTY"
-            | Some insts ->
-                for inst in insts do
-                    printfn "    %A" inst
+            | Some (insts, exceptionSecs) ->
+                printfn "last inst: %A" insts.[insts.Length - 1]
 
     | _ -> failwith (sprintf "bad options %A" args)
 

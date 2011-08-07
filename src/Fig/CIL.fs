@@ -1436,7 +1436,27 @@ let readMetadataTables
             typeSpecs = typeSpecs
         }
 
+// Partition III Section 1.9 defines metadata tokens
 type MetadataToken = MetadataTableKind option * int
+
+let toMetadataToken (mtBytes : uint32) =
+    let mutable rowOrIndex =
+        // The rows within metadata tables are numbered one upwards,
+        // whilst offsets in the heap are numbered zero upwards.
+        int (mtBytes &&& 0x00FFFFFFu)
+    let optTblKind =
+        match mtBytes >>> 24 with
+        | 0x70u ->
+            // 0x70 indicates this is an index into the string heap
+            None
+        | n ->
+            // adjust the row so that it's zero based
+            rowOrIndex <- rowOrIndex - 1
+            Some (enum<MetadataTableKind> (int n))
+
+    (optTblKind, rowOrIndex)
+
+let readMetadataToken (r : BinaryReader) = toMetadataToken (r.ReadUInt32 ())
 
 type Instruction =
     | Add
@@ -1660,23 +1680,9 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             codeSize := !codeSize - 8L
             r.ReadDouble ()
 
-        let readMetadataToken () =
-            let mtBytes = readUInt32 ()
-            let mutable rowOrIndex =
-                // The rows within metadata tables are numbered one upwards,
-                // whilst offsets in the heap are numbered zero upwards.
-                int (mtBytes &&& 0x00FFFFFFu)
-            let optTblKind =
-                match mtBytes >>> 24 with
-                | 0x70u ->
-                    // 0x70 indicates this is an index into the string heap
-                    None
-                | n ->
-                    // adjust the row so that it's zero based
-                    rowOrIndex <- rowOrIndex - 1
-                    Some (enum<MetadataTableKind> (int n))
-
-            (optTblKind, rowOrIndex)
+        let readMetaTok () =
+            codeSize := !codeSize - 4L
+            readMetadataToken r
 
         let rec readInst
                 (constrainedPrefix : MetadataToken option)
@@ -1724,9 +1730,9 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0x23uy -> LdcR8 (readDouble ())
             | 0x25uy -> Dup
             | 0x26uy -> Pop
-            | 0x27uy -> Jmp (readMetadataToken ())
-            | 0x28uy -> Call (tailPrefix, readMetadataToken ())
-            | 0x29uy -> Calli (tailPrefix, readMetadataToken ())
+            | 0x27uy -> Jmp (readMetaTok ())
+            | 0x28uy -> Call (tailPrefix, readMetaTok ())
+            | 0x29uy -> Calli (tailPrefix, readMetaTok ())
             | 0x2Auy -> Ret
             | 0x2Buy -> Br (readSByte () |> int)
             | 0x2Cuy -> Brfalse (readSByte () |> int)
@@ -1795,23 +1801,23 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0x6Cuy -> ConvR8
             | 0x6Duy -> ConvU4
             | 0x6Euy -> ConvU8
-            | 0x6Fuy -> Callvirt (constrainedPrefix, tailPrefix, readMetadataToken ())
-            | 0x70uy -> Cpobj (readMetadataToken ())
-            | 0x71uy -> Ldobj (unalignedPrefix, readMetadataToken ())
-            | 0x72uy -> Ldstr (readMetadataToken ())
-            | 0x73uy -> Newobj (readMetadataToken ())
-            | 0x74uy -> Castclass (readMetadataToken ())
-            | 0x75uy -> Isinst (readMetadataToken ())
+            | 0x6Fuy -> Callvirt (constrainedPrefix, tailPrefix, readMetaTok ())
+            | 0x70uy -> Cpobj (readMetaTok ())
+            | 0x71uy -> Ldobj (unalignedPrefix, readMetaTok ())
+            | 0x72uy -> Ldstr (readMetaTok ())
+            | 0x73uy -> Newobj (readMetaTok ())
+            | 0x74uy -> Castclass (readMetaTok ())
+            | 0x75uy -> Isinst (readMetaTok ())
             | 0x76uy -> ConvRUn
-            | 0x79uy -> Unbox (readMetadataToken ())
+            | 0x79uy -> Unbox (readMetaTok ())
             | 0x7Auy -> Throw
-            | 0x7Buy -> Ldfld (unalignedPrefix, readMetadataToken ())
-            | 0x7Cuy -> Ldflda (unalignedPrefix, readMetadataToken ())
-            | 0x7Duy -> Stfld (unalignedPrefix, readMetadataToken ())
-            | 0x7Euy -> Ldsfld (readMetadataToken ())
-            | 0x7Fuy -> Ldsflda (readMetadataToken ())
-            | 0x80uy -> Stsfld (readMetadataToken ())
-            | 0x81uy -> Stobj (unalignedPrefix, readMetadataToken ())
+            | 0x7Buy -> Ldfld (unalignedPrefix, readMetaTok ())
+            | 0x7Cuy -> Ldflda (unalignedPrefix, readMetaTok ())
+            | 0x7Duy -> Stfld (unalignedPrefix, readMetaTok ())
+            | 0x7Euy -> Ldsfld (readMetaTok ())
+            | 0x7Fuy -> Ldsflda (readMetaTok ())
+            | 0x80uy -> Stsfld (readMetaTok ())
+            | 0x81uy -> Stobj (unalignedPrefix, readMetaTok ())
             | 0x82uy -> ConvOvfI1Un
             | 0x83uy -> ConvOvfI2Un
             | 0x84uy -> ConvOvfI4Un
@@ -1822,10 +1828,10 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0x89uy -> ConvOvfU8Un
             | 0x8Auy -> ConvOvfIUn
             | 0x8Buy -> ConvOvfUUn
-            | 0x8Cuy -> Box (readMetadataToken ())
-            | 0x8Duy -> Newarr (readMetadataToken ())
+            | 0x8Cuy -> Box (readMetaTok ())
+            | 0x8Duy -> Newarr (readMetaTok ())
             | 0x8Euy -> Ldlen
-            | 0x8Fuy -> Ldelema (readMetadataToken ())
+            | 0x8Fuy -> Ldelema (readMetaTok ())
             | 0x90uy -> LdelemI1
             | 0x91uy -> LdelemU1
             | 0x92uy -> LdelemI2
@@ -1845,9 +1851,9 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0xA0uy -> StelemR4
             | 0xA1uy -> StelemR8
             | 0xA2uy -> StelemRef
-            | 0xA3uy -> Ldelem (readMetadataToken ())
-            | 0xA4uy -> Stelem (readMetadataToken ())
-            | 0xA5uy -> UnboxAny (readMetadataToken ())
+            | 0xA3uy -> Ldelem (readMetaTok ())
+            | 0xA4uy -> Stelem (readMetaTok ())
+            | 0xA5uy -> UnboxAny (readMetaTok ())
             | 0xB3uy -> ConvOvfI1
             | 0xB4uy -> ConvOvfU1
             | 0xB5uy -> ConvOvfI2
@@ -1856,10 +1862,10 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | 0xB8uy -> ConvOvfU4
             | 0xB9uy -> ConvOvfI8
             | 0xBAuy -> ConvOvfU8
-            | 0xC2uy -> Refanyval (readMetadataToken ())
+            | 0xC2uy -> Refanyval (readMetaTok ())
             | 0xC3uy -> Ckfinite
-            | 0xC6uy -> Mkrefany (readMetadataToken ())
-            | 0xD0uy -> Ldtoken (readMetadataToken ())
+            | 0xC6uy -> Mkrefany (readMetaTok ())
+            | 0xD0uy -> Ldtoken (readMetaTok ())
             | 0xD1uy -> ConvU2
             | 0xD2uy -> ConvU1
             | 0xD3uy -> ConvI
@@ -1884,8 +1890,8 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
                 | 0x03uy -> CgtUn
                 | 0x04uy -> Clt
                 | 0x05uy -> CltUn
-                | 0x06uy -> Ldftn (readMetadataToken ())
-                | 0x07uy -> Ldvirtftn (readMetadataToken ())
+                | 0x06uy -> Ldftn (readMetaTok ())
+                | 0x07uy -> Ldvirtftn (readMetaTok ())
                 | 0x09uy -> Ldarg (readUInt16 ())
                 | 0x0Auy -> Ldarga (readUInt16 ())
                 | 0x0Buy -> Starg (readUInt16 ())
@@ -1910,12 +1916,12 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
                         failwith "repeated tail. prefixes"
                     else
                         readInst constrainedPrefix noPrefix readonlyPrefix true unalignedPrefix volatilePrefix
-                | 0x15uy -> Initobj (readMetadataToken ())
+                | 0x15uy -> Initobj (readMetaTok ())
                 | 0x16uy ->
                     match constrainedPrefix with
                     | Some _ -> failwith "repeated constrained. prefixes"
                     | None ->
-                        let constrainedTok = Some (readMetadataToken ())
+                        let constrainedTok = Some (readMetaTok ())
                         readInst constrainedTok noPrefix readonlyPrefix tailPrefix unalignedPrefix volatilePrefix
                 | 0x17uy -> Cpblk
                 | 0x18uy -> Initblk unalignedPrefix
@@ -1924,7 +1930,7 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
                     let currNo = readByte ()
                     readInst constrainedPrefix (noPrefix ||| currNo) readonlyPrefix tailPrefix unalignedPrefix volatilePrefix
                 | 0x1Auy -> Rethrow
-                | 0x1Cuy -> Sizeof (readMetadataToken ())
+                | 0x1Cuy -> Sizeof (readMetaTok ())
                 | 0x1Duy -> Refanytype
                 | 0x1Euy ->
                     if readonlyPrefix then
@@ -1936,6 +1942,174 @@ let rec readInsts (r : BinaryReader) (codeSize : int64) =
             | bc -> failwithf "unknown bytecode 0x%X" bc
         
         readInst None 0uy false false None false :: readInsts r !codeSize
+
+type TryAndHandler = {
+    tryOffsetLen : uint32 * uint32
+    handlerOffsetLen : uint32 * uint32}
+
+type ExceptionClause =
+    | TypedException of TryAndHandler * MetadataToken
+    | Finally of TryAndHandler * MetadataToken // TODO do we really need MetadataToken here?
+    | Fault of TryAndHandler * MetadataToken // TODO do we really need MetadataToken here?
+
+    // Section 12.4.2.7: If an exception entry contains a filterstart, then
+    // filterstart strictly precedes handlerstart. The filter starts at the
+    // instruction specified by filterstart and contains all instructions up to
+    // (but not including) that specified by handlerstart. The lexically last
+    // instruction in the filter must be endfilter. If there is no filterstart
+    // then the filter is empty (hence it does not overlap with any region).
+    | Filter of TryAndHandler * uint32
+
+let toExceptionClause
+        (eFlags : uint32)
+        (tryOffset : uint32)
+        (tryLen : uint32)
+        (handlerOffset : uint32)
+        (handlerLen : uint32)
+        (offsetOrClassTok : uint32) =
+
+    let tryAndHdlr = {
+        tryOffsetLen = tryOffset, tryLen
+        handlerOffsetLen = handlerOffset, handlerLen}
+    match eFlags with
+    | 0x0000u -> TypedException (tryAndHdlr, toMetadataToken offsetOrClassTok)
+    | 0x0001u -> Filter (tryAndHdlr, offsetOrClassTok)
+    | 0x0002u -> Finally (tryAndHdlr, toMetadataToken offsetOrClassTok)
+    | 0x0004u -> Fault (tryAndHdlr, toMetadataToken offsetOrClassTok)
+    | _ -> failwithf "bad exception clause kind 0x%X" eFlags
+
+let readFatExceptionClauses (r : BinaryReader) =
+    // Section 25.4.3
+    let dataSize =
+        match r.ReadBytes 3 with
+        | [|b1; b2; b3|] ->
+            // these are little-endian, so little bytes first
+            uint32 b1 ||| (uint32 b2 <<< 8) ||| (uint32 b3 <<< 16)
+        | _ ->
+            failwith "unexpected end of file while reading data section"
+    let numClauses = (dataSize - 4u) / 24u
+
+    if (numClauses * 24u) + 4u <> dataSize then
+        failwithf "bad dataSize in fat section: %i" dataSize
+    
+    // See 25.4.6 reading fat clauses
+    [|for _ in 1u .. numClauses do
+        printfn "reading fat clause"
+        let eFlags = r.ReadUInt32 ()
+        let tryOffset = r.ReadUInt32 ()
+        let tryLen = r.ReadUInt32 ()
+        let handlerOffset = r.ReadUInt32 ()
+        let handlerLen = r.ReadUInt32 ()
+        let offsetOrClassTok = r.ReadUInt32 ()
+
+        printfn
+            "eFlags=0x%X, tryOffset=%i, tryLen=%i, handlerOffset=%i, handlerLen=%i, offsetOrClassTok=%i"
+            eFlags
+            tryOffset
+            tryLen
+            handlerOffset
+            handlerLen
+            offsetOrClassTok
+
+        yield toExceptionClause eFlags tryOffset tryLen handlerOffset handlerLen offsetOrClassTok|]
+
+let readSmallExceptionClauses (r : BinaryReader) =
+    // Section 25.4.2
+    let dataSize = r.ReadByte ()
+    let numClauses = (dataSize - 4uy) / 12uy
+    readShortEq r 0us "small method header reserved"
+    
+    if (numClauses * 12uy) + 4uy <> dataSize then
+        failwithf "bad dataSize in small section: %i" dataSize
+    
+    // See 25.4.6 reading small clauses
+    [|for _ in 1uy .. numClauses do
+        printfn "reading small clause"
+        let eFlags = r.ReadUInt16 () |> uint32
+        let tryOffset = r.ReadUInt16 () |> uint32
+        let tryLen = r.ReadByte () |> uint32
+        let handlerOffset = r.ReadUInt16 () |> uint32
+        let handlerLen = r.ReadByte () |> uint32
+        let offsetOrClassTok = r.ReadUInt32 ()
+
+        printfn
+            "eFlags=0x%X, tryOffset=%i, tryLen=%i, handlerOffset=%i, handlerLen=%i, offsetOrClassTok=%i"
+            eFlags
+            tryOffset
+            tryLen
+            handlerOffset
+            handlerLen
+            offsetOrClassTok
+
+        yield toExceptionClause eFlags tryOffset tryLen handlerOffset handlerLen offsetOrClassTok|]
+
+let readExceptionSections (r : BinaryReader) (moreSects : bool) (codeSize : uint32) =
+    let moreSects = ref moreSects
+    [|while !moreSects do
+        printfn "reading exception section"
+        
+        // the method data sits on a 4-byte boundary. Seek past
+        // boundary bytes
+        let codeRem = codeSize % 4u
+        if codeRem <> 0u then
+            let seekDist = 4L - int64 codeRem
+            r.BaseStream.Seek (seekDist, SeekOrigin.Current) |> ignore
+
+        let kindFlags = r.ReadByte ()
+        let isException = kindFlags &&& 0x01uy <> 0uy
+        if not isException then
+            failwith "expected exception flag to be set"
+        let optILTable = kindFlags &&& 0x02uy <> 0uy
+        if optILTable then
+            failwith "expected optILTable flag to be unset"
+        let isFatFormat = kindFlags &&& 0x40uy <> 0uy
+        moreSects := kindFlags &&& 0x80uy <> 0uy
+
+        printfn "exception is fat: %b" isFatFormat
+
+        if isFatFormat then
+            yield readFatExceptionClauses r
+        else
+            yield readSmallExceptionClauses r|]
+
+// Defined in Section 25.4
+let readMethodBody (r : BinaryReader) =
+    let fstByte = r.ReadByte ()
+
+    let isTinyFmt =
+        match fstByte &&& 0x03uy with
+        | 0x02uy -> true
+        | 0x03uy -> false
+        | n -> failwithf "bad method body format 0x%X" n
+
+    if isTinyFmt then
+        let mbSize = fstByte >>> 2
+        printfn "tiny header: size=%i" mbSize
+
+        readInsts r (int64 mbSize), [||]
+    else
+        let moreSects = fstByte &&& 0x08uy <> 0uy
+        let initLocals = fstByte &&& 0x10uy <> 0uy
+        let headerSize = r.ReadByte () >>> 4
+        if headerSize <> 3uy then
+            failwith "expected method body header size to be 3 but it's %i" headerSize
+        let maxStack = r.ReadUInt16 ()
+        let codeSize = r.ReadUInt32 ()
+        let localVarSigTok = r.ReadUInt32 ()
+
+        printfn
+            "fat header: moreSects=%b, initLocals=%b, headerSize=%i, maxStack=%i, codeSize=%i, localVarSigTok=%i"
+            moreSects
+            initLocals
+            headerSize
+            maxStack
+            codeSize
+            localVarSigTok
+
+        let insts = readInsts r (int64 codeSize)
+        let exceptionSecs = readExceptionSections r moreSects codeSize
+
+        insts, exceptionSecs
 
 type CodeType =
     | ILCodeType
@@ -1995,7 +2169,7 @@ type MethodDef (r : BinaryReader, secHdrs : SectionHeader list, mt : MetadataTab
             | 0x0006us -> Public
             | n -> failwithf "bad MemberAccessMask value: 0x%X" n
 
-    // 7. The following combined bit settings in Flags are invalid
+    // Section 22.26 item 7. The following combined bit settings in Flags are invalid
     // a. Static | Final
     // b. Static | Virtual
     // c. Static | NewSlot
@@ -2031,7 +2205,7 @@ type MethodDef (r : BinaryReader, secHdrs : SectionHeader list, mt : MetadataTab
     member x.MethodBody
         with get () =
             if mdRow.rva = 0u then
-                // 33. If RVA = 0, then either:
+                // Section 22.26 item 33. If RVA = 0, then either:
                 // o Flags.Abstract = 1, or
                 // o ImplFlags.Runtime = 1, or
                 // o Flags.PinvokeImpl = 1
@@ -2039,47 +2213,13 @@ type MethodDef (r : BinaryReader, secHdrs : SectionHeader list, mt : MetadataTab
                     failwith "bad method body RVA"
                 None
             else
-                // 34. If RVA != 0, then:
+                // Section 22.26 item 34. If RVA != 0, then:
                 // a. Flags.Abstract shall be 0, and
                 // b. ImplFlags.CodeTypeMask shall have exactly one of the following values: Native,  CIL, or
                 //    Runtime, and
                 // c. RVA shall point into the CIL code stream in this file
-
-                // TODO check conditions for 34
+                // TODO check these conditions
 
                 r.BaseStream.Seek (rvaToDiskPos secHdrs mdRow.rva, SeekOrigin.Begin) |> ignore
-
-                let fstByte = r.ReadByte ()
-
-                let isTinyFmt =
-                    match fstByte &&& 0x03uy with
-                    | 0x02uy -> true
-                    | 0x03uy -> false
-                    | n -> failwithf "bad method body format 0x%X" n
-
-                if isTinyFmt then
-                    let mbSize = fstByte >>> 2
-                    printfn "tiny header: size=%i" mbSize
-
-                    Some (readInsts r (int64 mbSize))
-                else
-                    let moreSects = fstByte &&& 0x08uy <> 0uy
-                    let initLocals = fstByte &&& 0x10uy <> 0uy
-                    let headerSize = r.ReadByte () >>> 4
-                    if headerSize <> 3uy then
-                        failwith "expected method body header size to be 3 but it's %i" headerSize
-                    let maxStack = r.ReadUInt16 ()
-                    let codeSize = r.ReadUInt32 ()
-                    let localVarSigTok = r.ReadUInt32 ()
-
-                    printfn
-                        "fat header: moreSects=%b, initLocals=%b, headerSize=%i, maxStack=%i, codeSize=%i, localVarSigTok=%i"
-                        moreSects
-                        initLocals
-                        headerSize
-                        maxStack
-                        codeSize
-                        localVarSigTok
-
-                    Some (readInsts r (int64 codeSize))
+                Some (readMethodBody r)
 
