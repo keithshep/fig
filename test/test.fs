@@ -24,12 +24,9 @@ let main args =
             match md.MethodBody with
             | None -> printfn "    EMPTY"
             | Some (insts, exceptionSecs) ->
-//                printfn "    INSTRUCTIONS:"
-//                for inst in insts do
-//                    printfn "        %A" inst
 
                 printfn "    ABST INSTRUCTIONS"
-                let blks = toAbstractInstruction insts
+                let blks = toAbstInstBlocks insts
                 for blkIndex in 0 .. blks.Length - 1 do
                     printfn "        BLOCK #%i" blkIndex
                     for inst in blks.[blkIndex] do

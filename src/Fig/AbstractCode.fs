@@ -286,7 +286,7 @@ and AbstractInstruction =
     | AbstSizeof of MetadataToken
     | AbstRefanytype
 
-let toAbstractInstruction (instsWithSizes : (Instruction * uint32) array) =
+let toAbstInstBlocks (instsWithSizes : (Instruction * uint32) array) =
     let numInsts = instsWithSizes.Length
     let insts, sizes = Array.unzip instsWithSizes
     let instPositions = Array.scan (+) 0u sizes
