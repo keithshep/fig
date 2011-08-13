@@ -354,7 +354,7 @@ let toAbstractInstruction (instsWithSizes : (Instruction * uint32) array) =
         | BleUn tgt -> AbstBleUn (tgtToBlkIndex instIndex tgt)
         | BltUn tgt -> AbstBltUn (tgtToBlkIndex instIndex tgt)
         | Br tgt -> AbstBr (tgtToBlkIndex instIndex tgt)
-        | Break -> AbstBreak // TODO this should change to a branch... i think
+        | Break -> AbstBreak
         | Brfalse tgt -> AbstBrfalse (tgtToBlkIndex instIndex tgt)
         | Brtrue tgt -> AbstBrtrue (tgtToBlkIndex instIndex tgt)
         | Call (isTail, metaTok) -> AbstCall (isTail, metaTok)
