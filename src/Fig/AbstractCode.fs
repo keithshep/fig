@@ -286,175 +286,240 @@ and AbstractInstruction =
     | AbstSizeof of MetadataToken
     | AbstRefanytype
 
-let toAbstractInstruction (inst : Instruction) =
-    match inst with
-    | Add -> AbstAdd
-    | And -> AbstAnd
-    | Beq tgt -> AbstBeq tgt // TODO change target to a block for all of the branches
-    | Bge tgt -> AbstBge tgt
-    | Bgt tgt -> AbstBgt tgt
-    | Ble tgt -> AbstBle tgt
-    | Blt tgt -> AbstBlt tgt
-    | BneUn tgt -> AbstBneUn tgt
-    | BgeUn tgt -> AbstBgeUn tgt
-    | BgtUn tgt -> AbstBgtUn tgt
-    | BleUn tgt -> AbstBleUn tgt
-    | BltUn tgt -> AbstBltUn tgt
-    | Br tgt -> AbstBr tgt
-    | Break -> AbstBreak
-    | Brfalse tgt -> AbstBrfalse tgt
-    | Brtrue tgt -> AbstBrtrue tgt
-    | Call (isTail, metaTok) -> AbstCall (isTail, metaTok)
-    | Calli (isTail, metaTok) -> AbstCalli (isTail, metaTok)
-    | Callvirt (constrainedOpt, isTail, metaTok) -> AbstCallvirt (constrainedOpt, isTail, metaTok)
-    | ConvI1 -> AbstConvI1
-    | ConvI2 -> AbstConvI2
-    | ConvI4 -> AbstConvI4
-    | ConvI8 -> AbstConvI8
-    | ConvR4 -> AbstConvR4
-    | ConvR8 -> AbstConvR8
-    | ConvU4 -> AbstConvU4
-    | ConvU8 -> AbstConvU8
-    | Cpobj typeMetaTok -> AbstCpobj typeMetaTok
-    | Div -> AbstDiv
-    | DivUn -> AbstDivUn
-    | Dup -> AbstDup
-    | Jmp methodMetaTok -> AbstJmp methodMetaTok
-    | Ldarg argIndex -> AbstLdarg argIndex
-    | Ldarga argIndex -> AbstLdarga argIndex
-    | LdcI4 c -> AbstLdcI4 c
-    | LdcI8 c -> AbstLdcI8 c
-    | LdcR4 c -> AbstLdcR4 c
-    | LdcR8 c -> AbstLdcR8 c
-    | LdindU1 unalignedOpt -> AbstLdindU1 unalignedOpt
-    | LdindI2 unalignedOpt -> AbstLdindI2 unalignedOpt
-    | LdindU2 unalignedOpt -> AbstLdindU2 unalignedOpt
-    | LdindI4 unalignedOpt -> AbstLdindI4 unalignedOpt
-    | LdindU4 unalignedOpt -> AbstLdindU4 unalignedOpt
-    | LdindI8 unalignedOpt -> AbstLdindI8 unalignedOpt
-    | LdindI unalignedOpt -> AbstLdindI unalignedOpt
-    | LdindR4 unalignedOpt -> AbstLdindR4 unalignedOpt
-    | LdindR8 unalignedOpt -> AbstLdindR8 unalignedOpt
-    | LdindRef unalignedOpt -> AbstLdindRef unalignedOpt
-    | Ldloc varIndex -> AbstLdloc varIndex
-    | Ldloca varIndex -> AbstLdloca varIndex
-    | Ldnull -> AbstLdnull
-    | Ldobj (unalignedOpt, typeTok) -> AbstLdobj (unalignedOpt, typeTok)
-    | Ldstr strTok -> AbstLdstr strTok
-    | Mul -> AbstMul
-    | Neg -> AbstNeg
-    | Nop -> AbstNop
-    | Not -> AbstNot
-    | Newobj ctorTok -> AbstNewobj ctorTok
-    | Or -> AbstOr
-    | Pop -> AbstPop
-    | Rem -> AbstRem
-    | RemUn -> AbstRemUn
-    | Ret -> AbstRet
-    | Shl -> AbstShl
-    | Shr -> AbstShr
-    | ShrUn -> AbstShrUn
-    | Starg argIndex -> AbstStarg argIndex
-    | StindRef unalignedOpt -> AbstStindRef unalignedOpt
-    | StindI1 unalignedOpt -> AbstStindI1 unalignedOpt
-    | StindI2 unalignedOpt -> AbstStindI2 unalignedOpt
-    | StindI4 unalignedOpt -> AbstStindI4 unalignedOpt
-    | StindI8 unalignedOpt -> AbstStindI8 unalignedOpt
-    | StindR4 unalignedOpt -> AbstStindR4 unalignedOpt
-    | StindR8 unalignedOpt -> AbstStindR8 unalignedOpt
-    | Stloc varIndex -> AbstStloc varIndex
-    | Sub -> AbstSub
-    | Switch tgtArray -> AbstSwitch tgtArray
-    | Xor -> AbstXor
-    | Castclass typeTok -> AbstCastclass typeTok
-    | Isinst typeTok -> AbstIsinst typeTok
-    | ConvRUn -> AbstConvRUn
-    | Unbox valTypeTok -> AbstUnbox valTypeTok
-    | Throw -> AbstThrow
-    | Ldfld (unalignedOpt, fieldTok) -> AbstLdfld (unalignedOpt, fieldTok)
-    | Ldflda (unalignedOpt, fieldTok) -> AbstLdflda (unalignedOpt, fieldTok)
-    | Stfld (unalignedOpt, fieldTok) -> AbstStfld (unalignedOpt, fieldTok)
-    | Ldsfld fieldTok -> AbstLdsfld fieldTok
-    | Ldsflda fieldTok -> AbstLdsflda fieldTok
-    | Stsfld fieldTok -> AbstStsfld fieldTok
-    | Stobj (unalignedOpt, typeTok) -> AbstStobj (unalignedOpt, typeTok)
-    | ConvOvfI1Un -> AbstConvOvfI1Un
-    | ConvOvfI2Un -> AbstConvOvfI2Un
-    | ConvOvfI4Un -> AbstConvOvfI4Un
-    | ConvOvfI8Un -> AbstConvOvfI8Un
-    | ConvOvfU1Un -> AbstConvOvfU1Un
-    | ConvOvfU2Un -> AbstConvOvfU2Un
-    | ConvOvfU4Un -> AbstConvOvfU4Un
-    | ConvOvfU8Un -> AbstConvOvfU8Un
-    | ConvOvfIUn -> AbstConvOvfIUn
-    | ConvOvfUUn -> AbstConvOvfUUn
-    | Box typeTok -> AbstBox typeTok
-    | Newarr elemTypeTok -> AbstNewarr elemTypeTok
-    | Ldlen -> AbstLdlen
-    | Ldelema elemTypeTok -> AbstLdelema elemTypeTok
-    | LdelemI1 -> AbstLdelemI1
-    | LdelemU1 -> AbstLdelemU1
-    | LdelemI2 -> AbstLdelemI2
-    | LdelemU2 -> AbstLdelemU2
-    | LdelemI4 -> AbstLdelemI4
-    | LdelemU4 -> AbstLdelemU4
-    | LdelemI8 -> AbstLdelemI8
-    | LdelemI -> AbstLdelemI
-    | LdelemR4 -> AbstLdelemR4
-    | LdelemR8 -> AbstLdelemR8
-    | LdelemRef -> AbstLdelemRef
-    | StelemI -> AbstStelemI
-    | StelemI1 -> AbstStelemI1
-    | StelemI2 -> AbstStelemI2
-    | StelemI4 -> AbstStelemI4
-    | StelemI8 -> AbstStelemI8
-    | StelemR4 -> AbstStelemR4
-    | StelemR8 -> AbstStelemR8
-    | StelemRef -> AbstStelemRef
-    | Ldelem elemTypeTok -> AbstLdelem elemTypeTok
-    | Stelem elemTypeTok -> AbstStelem elemTypeTok
-    | UnboxAny typeTok -> AbstUnboxAny typeTok
-    | ConvOvfI1 -> AbstConvOvfI1
-    | ConvOvfU1 -> AbstConvOvfU1
-    | ConvOvfI2 -> AbstConvOvfI2
-    | ConvOvfU2 -> AbstConvOvfU2
-    | ConvOvfI4 -> AbstConvOvfI4
-    | ConvOvfU4 -> AbstConvOvfU4
-    | ConvOvfI8 -> AbstConvOvfI8
-    | ConvOvfU8 -> AbstConvOvfU8
-    | Refanyval valTypeTok -> AbstRefanyval valTypeTok
-    | Ckfinite -> AbstCkfinite
-    | Mkrefany typeTok -> AbstMkrefany typeTok
-    | Ldtoken metaTok -> AbstLdtoken metaTok
-    | ConvU2 -> AbstConvU2
-    | ConvU1 -> AbstConvU1
-    | ConvI -> AbstConvI
-    | ConvOvfI -> AbstConvOvfI
-    | ConvOvfU -> AbstConvOvfU
-    | AddOvf -> AbstAddOvf
-    | AddOvfUn -> AbstAddOvfUn
-    | MulOvf -> AbstMulOvf
-    | MulOvfUn -> AbstMulOvfUn
-    | SubOvf -> AbstSubOvf
-    | SubOvfUn -> AbstSubOvfUn
-    | Endfinally -> AbstEndfinally
-    | Leave tgt -> AbstLeave tgt
-    | StindI unalignedOpt -> AbstStindI unalignedOpt
-    | ConvU -> AbstConvU
-    | Arglist -> AbstArglist
-    | Ceq -> AbstCeq
-    | Cgt -> AbstCgt
-    | CgtUn -> AbstCgtUn
-    | Clt -> AbstClt
-    | CltUn -> AbstCltUn
-    | Ldftn methodTok -> AbstLdftn methodTok
-    | Ldvirtftn methodTok -> AbstLdvirtftn methodTok
-    | Localloc -> AbstLocalloc
-    | Endfilter -> AbstEndfilter
-    | Initobj typeTok -> AbstInitobj typeTok
-    | Cpblk -> AbstCpblk
-    | Initblk unalignedOpt -> AbstInitblk unalignedOpt
-    | Rethrow -> AbstRethrow
-    | Sizeof typeTok -> AbstSizeof typeTok
-    | Refanytype -> AbstRefanytype
+let toAbstractInstruction (instsWithSizes : (Instruction * uint32) array) =
+    let numInsts = instsWithSizes.Length
+    let insts, sizes = Array.unzip instsWithSizes
+    let instPositions = Array.scan (+) 0u sizes
+    let codeSize = instPositions.[numInsts]
+    let instPositions = instPositions.[0 .. numInsts - 1]
+
+    let tgtToInstIndex (srcInstIndex : int) (relTgt : int) =
+        let currInstPos = instPositions.[srcInstIndex]
+        let nextInstPos = currInstPos + sizes.[srcInstIndex]
+        let absTgtPos = int nextInstPos + relTgt
+
+        if absTgtPos < 0 then
+            failwithf "bad instruction position: %i, valid positions are: %A" absTgtPos instPositions
+
+        let posIndex = System.Array.BinarySearch (instPositions, uint32 absTgtPos)
+        if posIndex >= 0 then
+            posIndex
+        else
+            failwithf "bad instruction position: %i, valid positions are: %A" absTgtPos instPositions
+
+    // calculate block starts
+    let blockStarts = ref (Set.singleton 0)
+    for instIndex = 0 to insts.Length - 1 do
+        let addTgt (relTgt : int) =
+            blockStarts := (!blockStarts).Add (tgtToInstIndex instIndex relTgt)
+        match insts.[instIndex] with
+        | Beq tgt
+        | Bge tgt
+        | Bgt tgt
+        | Ble tgt
+        | Blt tgt
+        | BneUn tgt
+        | BgeUn tgt
+        | BgtUn tgt
+        | BleUn tgt
+        | BltUn tgt
+        | Br tgt
+        | Brfalse tgt
+        | Brtrue tgt
+        | Leave tgt -> addTgt tgt
+        | Switch tgtArray -> Array.iter addTgt tgtArray
+        | _ -> ()
+    let blockStarts = Array.sort (Array.ofSeq !blockStarts)
+
+    let tgtToBlkIndex (srcInstIndex : int) (relTgt : int) =
+        let tgtInstIndex = tgtToInstIndex srcInstIndex relTgt
+        let blkIndex = System.Array.BinarySearch (blockStarts, tgtInstIndex)
+        if blkIndex >= 0 then
+            blkIndex
+        else
+            failwithf "the target index (%i) does not point to a block start" tgtInstIndex
+    
+    let toAbstInst instIndex =
+        match insts.[instIndex] with
+        | Add -> AbstAdd
+        | And -> AbstAnd
+        | Beq tgt -> AbstBeq (tgtToBlkIndex instIndex tgt) // TODO change target to a block for all of the branches
+        | Bge tgt -> AbstBge (tgtToBlkIndex instIndex tgt)
+        | Bgt tgt -> AbstBgt (tgtToBlkIndex instIndex tgt)
+        | Ble tgt -> AbstBle (tgtToBlkIndex instIndex tgt)
+        | Blt tgt -> AbstBlt (tgtToBlkIndex instIndex tgt)
+        | BneUn tgt -> AbstBneUn (tgtToBlkIndex instIndex tgt)
+        | BgeUn tgt -> AbstBgeUn (tgtToBlkIndex instIndex tgt)
+        | BgtUn tgt -> AbstBgtUn (tgtToBlkIndex instIndex tgt)
+        | BleUn tgt -> AbstBleUn (tgtToBlkIndex instIndex tgt)
+        | BltUn tgt -> AbstBltUn (tgtToBlkIndex instIndex tgt)
+        | Br tgt -> AbstBr (tgtToBlkIndex instIndex tgt)
+        | Break -> AbstBreak // TODO this should change to a branch... i think
+        | Brfalse tgt -> AbstBrfalse (tgtToBlkIndex instIndex tgt)
+        | Brtrue tgt -> AbstBrtrue (tgtToBlkIndex instIndex tgt)
+        | Call (isTail, metaTok) -> AbstCall (isTail, metaTok)
+        | Calli (isTail, metaTok) -> AbstCalli (isTail, metaTok)
+        | Callvirt (constrainedOpt, isTail, metaTok) -> AbstCallvirt (constrainedOpt, isTail, metaTok)
+        | ConvI1 -> AbstConvI1
+        | ConvI2 -> AbstConvI2
+        | ConvI4 -> AbstConvI4
+        | ConvI8 -> AbstConvI8
+        | ConvR4 -> AbstConvR4
+        | ConvR8 -> AbstConvR8
+        | ConvU4 -> AbstConvU4
+        | ConvU8 -> AbstConvU8
+        | Cpobj typeMetaTok -> AbstCpobj typeMetaTok
+        | Div -> AbstDiv
+        | DivUn -> AbstDivUn
+        | Dup -> AbstDup
+        | Jmp methodMetaTok -> AbstJmp methodMetaTok
+        | Ldarg argIndex -> AbstLdarg argIndex
+        | Ldarga argIndex -> AbstLdarga argIndex
+        | LdcI4 c -> AbstLdcI4 c
+        | LdcI8 c -> AbstLdcI8 c
+        | LdcR4 c -> AbstLdcR4 c
+        | LdcR8 c -> AbstLdcR8 c
+        | LdindU1 unalignedOpt -> AbstLdindU1 unalignedOpt
+        | LdindI2 unalignedOpt -> AbstLdindI2 unalignedOpt
+        | LdindU2 unalignedOpt -> AbstLdindU2 unalignedOpt
+        | LdindI4 unalignedOpt -> AbstLdindI4 unalignedOpt
+        | LdindU4 unalignedOpt -> AbstLdindU4 unalignedOpt
+        | LdindI8 unalignedOpt -> AbstLdindI8 unalignedOpt
+        | LdindI unalignedOpt -> AbstLdindI unalignedOpt
+        | LdindR4 unalignedOpt -> AbstLdindR4 unalignedOpt
+        | LdindR8 unalignedOpt -> AbstLdindR8 unalignedOpt
+        | LdindRef unalignedOpt -> AbstLdindRef unalignedOpt
+        | Ldloc varIndex -> AbstLdloc varIndex
+        | Ldloca varIndex -> AbstLdloca varIndex
+        | Ldnull -> AbstLdnull
+        | Ldobj (unalignedOpt, typeTok) -> AbstLdobj (unalignedOpt, typeTok)
+        | Ldstr strTok -> AbstLdstr strTok
+        | Mul -> AbstMul
+        | Neg -> AbstNeg
+        | Nop -> AbstNop
+        | Not -> AbstNot
+        | Newobj ctorTok -> AbstNewobj ctorTok
+        | Or -> AbstOr
+        | Pop -> AbstPop
+        | Rem -> AbstRem
+        | RemUn -> AbstRemUn
+        | Ret -> AbstRet
+        | Shl -> AbstShl
+        | Shr -> AbstShr
+        | ShrUn -> AbstShrUn
+        | Starg argIndex -> AbstStarg argIndex
+        | StindRef unalignedOpt -> AbstStindRef unalignedOpt
+        | StindI1 unalignedOpt -> AbstStindI1 unalignedOpt
+        | StindI2 unalignedOpt -> AbstStindI2 unalignedOpt
+        | StindI4 unalignedOpt -> AbstStindI4 unalignedOpt
+        | StindI8 unalignedOpt -> AbstStindI8 unalignedOpt
+        | StindR4 unalignedOpt -> AbstStindR4 unalignedOpt
+        | StindR8 unalignedOpt -> AbstStindR8 unalignedOpt
+        | Stloc varIndex -> AbstStloc varIndex
+        | Sub -> AbstSub
+        | Switch tgtArray -> AbstSwitch (Array.map (tgtToBlkIndex instIndex) tgtArray)
+        | Xor -> AbstXor
+        | Castclass typeTok -> AbstCastclass typeTok
+        | Isinst typeTok -> AbstIsinst typeTok
+        | ConvRUn -> AbstConvRUn
+        | Unbox valTypeTok -> AbstUnbox valTypeTok
+        | Throw -> AbstThrow
+        | Ldfld (unalignedOpt, fieldTok) -> AbstLdfld (unalignedOpt, fieldTok)
+        | Ldflda (unalignedOpt, fieldTok) -> AbstLdflda (unalignedOpt, fieldTok)
+        | Stfld (unalignedOpt, fieldTok) -> AbstStfld (unalignedOpt, fieldTok)
+        | Ldsfld fieldTok -> AbstLdsfld fieldTok
+        | Ldsflda fieldTok -> AbstLdsflda fieldTok
+        | Stsfld fieldTok -> AbstStsfld fieldTok
+        | Stobj (unalignedOpt, typeTok) -> AbstStobj (unalignedOpt, typeTok)
+        | ConvOvfI1Un -> AbstConvOvfI1Un
+        | ConvOvfI2Un -> AbstConvOvfI2Un
+        | ConvOvfI4Un -> AbstConvOvfI4Un
+        | ConvOvfI8Un -> AbstConvOvfI8Un
+        | ConvOvfU1Un -> AbstConvOvfU1Un
+        | ConvOvfU2Un -> AbstConvOvfU2Un
+        | ConvOvfU4Un -> AbstConvOvfU4Un
+        | ConvOvfU8Un -> AbstConvOvfU8Un
+        | ConvOvfIUn -> AbstConvOvfIUn
+        | ConvOvfUUn -> AbstConvOvfUUn
+        | Box typeTok -> AbstBox typeTok
+        | Newarr elemTypeTok -> AbstNewarr elemTypeTok
+        | Ldlen -> AbstLdlen
+        | Ldelema elemTypeTok -> AbstLdelema elemTypeTok
+        | LdelemI1 -> AbstLdelemI1
+        | LdelemU1 -> AbstLdelemU1
+        | LdelemI2 -> AbstLdelemI2
+        | LdelemU2 -> AbstLdelemU2
+        | LdelemI4 -> AbstLdelemI4
+        | LdelemU4 -> AbstLdelemU4
+        | LdelemI8 -> AbstLdelemI8
+        | LdelemI -> AbstLdelemI
+        | LdelemR4 -> AbstLdelemR4
+        | LdelemR8 -> AbstLdelemR8
+        | LdelemRef -> AbstLdelemRef
+        | StelemI -> AbstStelemI
+        | StelemI1 -> AbstStelemI1
+        | StelemI2 -> AbstStelemI2
+        | StelemI4 -> AbstStelemI4
+        | StelemI8 -> AbstStelemI8
+        | StelemR4 -> AbstStelemR4
+        | StelemR8 -> AbstStelemR8
+        | StelemRef -> AbstStelemRef
+        | Ldelem elemTypeTok -> AbstLdelem elemTypeTok
+        | Stelem elemTypeTok -> AbstStelem elemTypeTok
+        | UnboxAny typeTok -> AbstUnboxAny typeTok
+        | ConvOvfI1 -> AbstConvOvfI1
+        | ConvOvfU1 -> AbstConvOvfU1
+        | ConvOvfI2 -> AbstConvOvfI2
+        | ConvOvfU2 -> AbstConvOvfU2
+        | ConvOvfI4 -> AbstConvOvfI4
+        | ConvOvfU4 -> AbstConvOvfU4
+        | ConvOvfI8 -> AbstConvOvfI8
+        | ConvOvfU8 -> AbstConvOvfU8
+        | Refanyval valTypeTok -> AbstRefanyval valTypeTok
+        | Ckfinite -> AbstCkfinite
+        | Mkrefany typeTok -> AbstMkrefany typeTok
+        | Ldtoken metaTok -> AbstLdtoken metaTok
+        | ConvU2 -> AbstConvU2
+        | ConvU1 -> AbstConvU1
+        | ConvI -> AbstConvI
+        | ConvOvfI -> AbstConvOvfI
+        | ConvOvfU -> AbstConvOvfU
+        | AddOvf -> AbstAddOvf
+        | AddOvfUn -> AbstAddOvfUn
+        | MulOvf -> AbstMulOvf
+        | MulOvfUn -> AbstMulOvfUn
+        | SubOvf -> AbstSubOvf
+        | SubOvfUn -> AbstSubOvfUn
+        | Endfinally -> AbstEndfinally
+        | Leave tgt -> AbstLeave (tgtToBlkIndex instIndex tgt)
+        | StindI unalignedOpt -> AbstStindI unalignedOpt
+        | ConvU -> AbstConvU
+        | Arglist -> AbstArglist
+        | Ceq -> AbstCeq
+        | Cgt -> AbstCgt
+        | CgtUn -> AbstCgtUn
+        | Clt -> AbstClt
+        | CltUn -> AbstCltUn
+        | Ldftn methodTok -> AbstLdftn methodTok
+        | Ldvirtftn methodTok -> AbstLdvirtftn methodTok
+        | Localloc -> AbstLocalloc
+        | Endfilter -> AbstEndfilter
+        | Initobj typeTok -> AbstInitobj typeTok
+        | Cpblk -> AbstCpblk
+        | Initblk unalignedOpt -> AbstInitblk unalignedOpt
+        | Rethrow -> AbstRethrow
+        | Sizeof typeTok -> AbstSizeof typeTok
+        | Refanytype -> AbstRefanytype
+
+    let instBlocks =
+        [|for blkIndex = 0 to blockStarts.Length - 1 do
+            let fstInstIndex = blockStarts.[blkIndex]
+            let lstInstIndex =
+                if blkIndex = blockStarts.Length - 1 then
+                    numInsts - 1
+                else
+                    blockStarts.[blkIndex + 1] - 1
+            yield [|for instIndex in fstInstIndex .. lstInstIndex -> toAbstInst instIndex|]|]
+    
+    instBlocks
 
