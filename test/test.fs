@@ -23,13 +23,12 @@ let main args =
             printfn "METHOD BODY"
             match md.MethodBody with
             | None -> printfn "    EMPTY"
-            | Some (insts, exceptionSecs) ->
+            | Some (instBlks, exceptionSecs) ->
 
                 printfn "    ABST INSTRUCTIONS"
-                let blks = toAbstInstBlocks insts
-                for blkIndex in 0 .. blks.Length - 1 do
+                for blkIndex in 0 .. instBlks.Length - 1 do
                     printfn "        BLOCK #%i" blkIndex
-                    for inst in blks.[blkIndex] do
+                    for inst in instBlks.[blkIndex] do
                         printfn "            %A" inst
 
                 if not (Array.isEmpty exceptionSecs) then
