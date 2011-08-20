@@ -7,12 +7,12 @@ set -x
 
 ./build.bash
 dmcs -target:library -out:build/cstest.dll test/cstest.cs
-fsc --nologo --out:build/test.exe -r CIL.dll -r LLVMFSharp.dll -r build/fig.dll test/test.fs
+fsc --nologo --out:build/ParseCIL.exe -r CIL.dll -r LLVMFSharp.dll -r build/fig.dll test/ParseCIL.fs
 fsc --nologo --out:build/CompileCIL.exe -r CIL.dll -r LLVMFSharp.dll -r build/fig.dll test/CompileCIL.fs
 
 # test out the our new CIL parsing module against some simple F# functions
 fsc --nologo --target:library --out:build/SimpleFunctions.dll test/SimpleFunctions.fs
-mono build/test.exe build/SimpleFunctions.dll
+mono build/ParseCIL.exe build/SimpleFunctions.dll
 
 # now use our LLVM compiler to create a .o file from our simple F# functions
 mono build/CompileCIL.exe build/SimpleFunctions.dll build/SimpleFunctions.bc
