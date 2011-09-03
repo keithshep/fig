@@ -1,4 +1,4 @@
-module Fig.Code
+module Fig.CecilExt
 
 open Mono.Cecil
 open Mono.Cecil.Cil
@@ -637,6 +637,7 @@ type MethodBody with
                 codeBlocks.[blockIndex].Instructions <- readBlock blockIndex
             codeBlocks
 
+(*
 // an indented version of the printf function
 let iprintfn depth fmt =
     let printIndented s =
@@ -645,6 +646,7 @@ let iprintfn depth fmt =
         printfn "%s" s
     Printf.ksprintf printIndented fmt
 
+// test driver code
 [<EntryPoint>]
 let main args =
     match args with
@@ -671,3 +673,4 @@ let main args =
         0
     | _ ->
         failwith "bad command line args"
+*)
