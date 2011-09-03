@@ -39,9 +39,15 @@ and AbstractInstruction =
     | Break
     | Brfalse of CodeBlock
     | Brtrue of CodeBlock
+    
+    // call* instructions all start with bool "tail." prefix indicator.
+    // See: EMCA-335 Partition III 2.4
     | Call of bool * MethodReference
     | Calli of bool * CallSite
-    | Callvirt of TypeReference option * bool * MethodReference
+    
+    // callvirt can also take a "constrained." prefix
+    // See: EMCA-335 Partition III 2.1
+    | Callvirt of bool * TypeReference option * MethodReference
     | ConvI1
     | ConvI2
     | ConvI4
@@ -61,21 +67,29 @@ and AbstractInstruction =
     | LdcI8 of int64
     | LdcR4 of single
     | LdcR8 of double
-    | LdindI1 of byte option
-    | LdindU1 of byte option
-    | LdindI2 of byte option
-    | LdindU2 of byte option
-    | LdindI4 of byte option
-    | LdindU4 of byte option
-    | LdindI8 of byte option
-    | LdindI of byte option
-    | LdindR4 of byte option
-    | LdindR8 of byte option
-    | LdindRef of byte option
+    
+    // ldind* instructions hold a byte option for the "unaligned." prefix
+    // and a bool for the "volatile." prefix
+    // See: EMCA-335 Partition III 2.5 & 2.6
+    | LdindI1 of byte option * bool
+    | LdindU1 of byte option * bool
+    | LdindI2 of byte option * bool
+    | LdindU2 of byte option * bool
+    | LdindI4 of byte option * bool
+    | LdindU4 of byte option * bool
+    | LdindI8 of byte option * bool
+    | LdindI of byte option * bool
+    | LdindR4 of byte option * bool
+    | LdindR8 of byte option * bool
+    | LdindRef of byte option * bool
     | Ldloc of VariableDefinition
     | Ldloca of VariableDefinition
     | Ldnull
-    | Ldobj of byte option * TypeReference
+
+    // Ldobj instruction hold a byte option for the "unaligned." prefix
+    // and a bool for the "volatile." prefix
+    // See: EMCA-335 Partition III 2.5 & 2.6
+    | Ldobj of byte option * bool * TypeReference
     | Ldstr of string
     | Mul
     | Neg
@@ -91,13 +105,17 @@ and AbstractInstruction =
     | Shr
     | ShrUn
     | Starg of ParameterDefinition
-    | StindRef of byte option
-    | StindI1 of byte option
-    | StindI2 of byte option
-    | StindI4 of byte option
-    | StindI8 of byte option
-    | StindR4 of byte option
-    | StindR8 of byte option
+    
+    // Stind* instructions hold a byte option for the "unaligned." prefix
+    // and a bool for the "volatile." prefix
+    // See: EMCA-335 Partition III 2.5 & 2.6
+    | StindRef of byte option * bool
+    | StindI1 of byte option * bool
+    | StindI2 of byte option * bool
+    | StindI4 of byte option * bool
+    | StindI8 of byte option * bool
+    | StindR4 of byte option * bool
+    | StindR8 of byte option * bool
     | Stloc of VariableDefinition
     | Sub
     | Switch of CodeBlock array
@@ -107,13 +125,23 @@ and AbstractInstruction =
     | ConvRUn
     | Unbox of TypeReference
     | Throw
-    | Ldfld of byte option * FieldReference
-    | Ldflda of byte option * FieldReference
-    | Stfld of byte option * FieldReference
-    | Ldsfld of FieldReference
-    | Ldsflda of FieldReference
-    | Stsfld of FieldReference
-    | Stobj of byte option * TypeReference
+
+    // ldfld*/stfld instructions hold a byte option for the "unaligned." prefix
+    // and a bool for the "volatile." prefix
+    // See: EMCA-335 Partition III 2.5 & 2.6
+    | Ldfld of byte option * bool * FieldReference
+    | Ldflda of byte option * bool * FieldReference
+    | Stfld of byte option * bool * FieldReference
+    
+    // ldsfld*/stsfld instructions hold a bool indicator for the "volatile." prefix
+    | Ldsfld of bool * FieldReference
+    | Ldsflda of bool * FieldReference
+    | Stsfld of bool * FieldReference
+    
+    // stobj instruction holds a byte option for the "unaligned." prefix
+    // and a bool for the "volatile." prefix
+    // See: EMCA-335 Partition III 2.5 & 2.6
+    | Stobj of byte option * bool * TypeReference
     | ConvOvfI1Un
     | ConvOvfI2Un
     | ConvOvfI4Un
@@ -127,7 +155,11 @@ and AbstractInstruction =
     | Box of TypeReference
     | Newarr of TypeReference
     | Ldlen
-    | Ldelema of TypeReference
+    
+    // ldelema instruction holds a bool to indicate that it is preceded by a
+    // "readonly." prefix
+    // See: EMCA-335 Partition III 2.3
+    | Ldelema of bool * TypeReference
     | LdelemI1
     | LdelemU1
     | LdelemI2
@@ -175,7 +207,11 @@ and AbstractInstruction =
     | SubOvfUn
     | Endfinally
     | Leave of CodeBlock
-    | StindI of byte option
+
+    // stindi instructions hold a byte option for the "unaligned." prefix
+    // and a bool for the "volatile." prefix
+    // See: EMCA-335 Partition III 2.5 & 2.6
+    | StindI of byte option * bool
     | ConvU
     | Arglist
     | Ceq
@@ -189,7 +225,11 @@ and AbstractInstruction =
     | Endfilter
     | Initobj of TypeReference
     | Cpblk
-    | Initblk of byte option
+
+    // initblk instructions hold a byte option for the "unaligned." prefix
+    // and a bool for the "volatile." prefix
+    // See: EMCA-335 Partition III 2.5 & 2.6
+    | Initblk of byte option * bool
     | Rethrow
     | Sizeof of TypeReference
     | Refanytype
@@ -285,7 +325,7 @@ type MethodBody with
                 let rec nextInst
                         (constrainedPrefix : TypeReference option)
                         (noPrefix : byte)
-                        (readonlyPrefix : bool) // TODO figure out what to do w/ readonly
+                        (readonlyPrefix : bool)
                         (tailPrefix : bool)
                         (unalignedPrefix : byte option)
                         (volatilePrefix : bool) =
@@ -328,24 +368,24 @@ type MethodBody with
                             [|for destInst in inst.Operand :?> Instruction array do
                                 yield blockForInst destInst|]
                         Switch destBlocks
-                    | Code.Ldind_I1 -> LdindI1 unalignedPrefix
-                    | Code.Ldind_U1 -> LdindU1 unalignedPrefix
-                    | Code.Ldind_I2 -> LdindI2 unalignedPrefix
-                    | Code.Ldind_U2 -> LdindU2 unalignedPrefix
-                    | Code.Ldind_I4 -> LdindI4 unalignedPrefix
-                    | Code.Ldind_U4 -> LdindU4 unalignedPrefix
-                    | Code.Ldind_I8 -> LdindI8 unalignedPrefix
-                    | Code.Ldind_I -> LdindI unalignedPrefix
-                    | Code.Ldind_R4 -> LdindR4 unalignedPrefix
-                    | Code.Ldind_R8 -> LdindR8 unalignedPrefix
-                    | Code.Ldind_Ref -> LdindRef unalignedPrefix
-                    | Code.Stind_Ref -> StindRef unalignedPrefix
-                    | Code.Stind_I1 -> StindI1 unalignedPrefix
-                    | Code.Stind_I2 -> StindI2 unalignedPrefix
-                    | Code.Stind_I4 -> StindI4 unalignedPrefix
-                    | Code.Stind_I8 -> StindI8 unalignedPrefix
-                    | Code.Stind_R4 -> StindR4 unalignedPrefix
-                    | Code.Stind_R8 -> StindR8 unalignedPrefix
+                    | Code.Ldind_I1 -> LdindI1 (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_U1 -> LdindU1 (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_I2 -> LdindI2 (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_U2 -> LdindU2 (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_I4 -> LdindI4 (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_U4 -> LdindU4 (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_I8 -> LdindI8 (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_I -> LdindI (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_R4 -> LdindR4 (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_R8 -> LdindR8 (unalignedPrefix, volatilePrefix)
+                    | Code.Ldind_Ref -> LdindRef (unalignedPrefix, volatilePrefix)
+                    | Code.Stind_Ref -> StindRef (unalignedPrefix, volatilePrefix)
+                    | Code.Stind_I1 -> StindI1 (unalignedPrefix, volatilePrefix)
+                    | Code.Stind_I2 -> StindI2 (unalignedPrefix, volatilePrefix)
+                    | Code.Stind_I4 -> StindI4 (unalignedPrefix, volatilePrefix)
+                    | Code.Stind_I8 -> StindI8 (unalignedPrefix, volatilePrefix)
+                    | Code.Stind_R4 -> StindR4 (unalignedPrefix, volatilePrefix)
+                    | Code.Stind_R8 -> StindR8 (unalignedPrefix, volatilePrefix)
                     | Code.Add -> Add
                     | Code.Sub -> Sub
                     | Code.Mul -> Mul
@@ -369,9 +409,9 @@ type MethodBody with
                     | Code.Conv_R8 -> ConvR8
                     | Code.Conv_U4 -> ConvU4
                     | Code.Conv_U8 -> ConvU8
-                    | Code.Callvirt -> Callvirt (constrainedPrefix, tailPrefix, inst.Operand :?> MethodReference)
+                    | Code.Callvirt -> Callvirt (tailPrefix, constrainedPrefix, inst.Operand :?> MethodReference)
                     | Code.Cpobj -> Cpobj (inst.Operand :?> TypeReference)
-                    | Code.Ldobj -> Ldobj (unalignedPrefix, inst.Operand :?> TypeReference)
+                    | Code.Ldobj -> Ldobj (unalignedPrefix, volatilePrefix, inst.Operand :?> TypeReference)
                     | Code.Ldstr -> Ldstr (inst.Operand :?> string)
                     | Code.Newobj -> Newobj (inst.Operand :?> MethodReference)
                     | Code.Castclass -> Castclass (inst.Operand :?> TypeReference)
@@ -379,13 +419,13 @@ type MethodBody with
                     | Code.Conv_R_Un -> ConvRUn
                     | Code.Unbox -> Unbox (inst.Operand :?> TypeReference)
                     | Code.Throw -> Throw
-                    | Code.Ldfld -> Ldfld (unalignedPrefix, inst.Operand :?> FieldReference)
-                    | Code.Ldflda -> Ldflda (unalignedPrefix, inst.Operand :?> FieldReference)
-                    | Code.Stfld -> Stfld (unalignedPrefix, inst.Operand :?> FieldReference)
-                    | Code.Ldsfld -> Ldsfld (inst.Operand :?> FieldReference)
-                    | Code.Ldsflda -> Ldsflda (inst.Operand :?> FieldReference)
-                    | Code.Stsfld -> Stsfld (inst.Operand :?> FieldReference)
-                    | Code.Stobj -> Stobj (unalignedPrefix, inst.Operand :?> TypeReference)
+                    | Code.Ldfld -> Ldfld (unalignedPrefix, volatilePrefix, inst.Operand :?> FieldReference)
+                    | Code.Ldflda -> Ldflda (unalignedPrefix, volatilePrefix, inst.Operand :?> FieldReference)
+                    | Code.Stfld -> Stfld (unalignedPrefix, volatilePrefix, inst.Operand :?> FieldReference)
+                    | Code.Ldsfld -> Ldsfld (volatilePrefix, inst.Operand :?> FieldReference)
+                    | Code.Ldsflda -> Ldsflda (volatilePrefix, inst.Operand :?> FieldReference)
+                    | Code.Stsfld -> Stsfld (volatilePrefix, inst.Operand :?> FieldReference)
+                    | Code.Stobj -> Stobj (unalignedPrefix, volatilePrefix, inst.Operand :?> TypeReference)
                     | Code.Conv_Ovf_I1_Un -> ConvOvfI1Un
                     | Code.Conv_Ovf_I2_Un -> ConvOvfI2Un
                     | Code.Conv_Ovf_I4_Un -> ConvOvfI4Un
@@ -399,7 +439,7 @@ type MethodBody with
                     | Code.Box -> Box (inst.Operand :?> TypeReference)
                     | Code.Newarr -> Newarr (inst.Operand :?> TypeReference)
                     | Code.Ldlen -> Ldlen
-                    | Code.Ldelema -> Ldelema (inst.Operand :?> TypeReference)
+                    | Code.Ldelema -> Ldelema (readonlyPrefix, inst.Operand :?> TypeReference)
                     | Code.Ldelem_I1 -> LdelemI1
                     | Code.Ldelem_U1 -> LdelemU1
                     | Code.Ldelem_I2 -> LdelemI2
@@ -447,7 +487,7 @@ type MethodBody with
                     | Code.Sub_Ovf_Un -> SubOvfUn
                     | Code.Endfinally -> Endfinally
                     | Code.Leave -> Leave <| brDestCodeBlock ()
-                    | Code.Stind_I -> StindI unalignedPrefix
+                    | Code.Stind_I -> StindI (unalignedPrefix, volatilePrefix)
                     | Code.Conv_U -> ConvU
                     | Code.Arglist -> Arglist
                     | Code.Ceq -> Ceq
@@ -515,7 +555,7 @@ type MethodBody with
                                 unalignedPrefix
                                 volatilePrefix
                     | Code.Cpblk -> Cpblk
-                    | Code.Initblk -> Initblk unalignedPrefix
+                    | Code.Initblk -> Initblk (unalignedPrefix, volatilePrefix)
                     | Code.No ->
                         // TODO is it worth doing anything with this?
                         let op = inst.Operand :?> byte
