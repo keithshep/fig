@@ -7,8 +7,8 @@ set -x
 
 ./build.bash
 dmcs -target:library -out:build/cstest.dll test/cstest.cs
-fsc --nologo --out:build/ParseCIL.exe -r CIL.dll -r LLVMFSharp.dll -r build/fig.dll test/ParseCIL.fs
-fsc --nologo --out:build/CompileCIL.exe -r CIL.dll -r LLVMFSharp.dll -r build/fig.dll test/CompileCIL.fs
+fsc --nologo --out:build/ParseCIL.exe -r Mono.Cecil.dll -r Mono.Cecil.Rocks.dll -r build/fig.dll test/ParseCIL.fs
+fsc --nologo --out:build/CompileCIL.exe -r CIL.dll -r Mono.Cecil.dll -r Mono.Cecil.Rocks.dll -r LLVMFSharp.dll -r build/fig.dll test/CompileCIL.fs
 
 # test out the our new CIL parsing module against some simple F# functions
 fsc --nologo --target:library --out:build/SimpleFunctions.dll test/SimpleFunctions.fs
