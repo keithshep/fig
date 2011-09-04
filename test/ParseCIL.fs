@@ -1,7 +1,5 @@
 open Fig.CecilExt
 open Mono.Cecil
-open Mono.Cecil.Cil
-open Mono.Cecil.Rocks
 
 // an indented version of the printf function
 let iprintfn depth fmt =
