@@ -6,10 +6,93 @@ open Mono.Cecil.Rocks
 
 let failwithf fmt = Printf.ksprintf failwith fmt
 
+/// a safer type reference
+type SaferTypeRef =
+    | Void
+    | Boolean
+    | Char
+    | SByte
+    | Byte
+    | Int16
+    | UInt16
+    | Int32
+    | UInt32
+    | Int64
+    | UInt64
+    | Single
+    | Double
+    | String
+    | Pointer of PointerType
+    | ByReference of ByReferenceType
+    | ValueType of TypeReference
+    | Class of TypeReference
+    | Var of GenericParameter
+    | Array of ArrayType
+    | GenericInstance of GenericInstanceType
+    | TypedByReference
+    | IntPtr
+    | UIntPtr
+    | FunctionPointer of FunctionPointerType
+    | Object
+    | MVar of GenericParameter
+    | RequiredModifier of RequiredModifierType
+    | OptionalModifier of OptionalModifierType
+    | Sentinel of SentinelType
+    | Pinned of PinnedType
+
+/// converts a standard cecil TypeReference object into one of our
+/// SaferTypeRef discriminated unions
+let toSaferType (ty : TypeReference) =
+    match ty.MetadataType with
+    | MetadataType.Void             -> Void
+    | MetadataType.Boolean          -> Boolean
+    | MetadataType.Char             -> Char
+    | MetadataType.SByte            -> SByte
+    | MetadataType.Byte             -> Byte
+    | MetadataType.Int16            -> Int16
+    | MetadataType.UInt16           -> UInt16
+    | MetadataType.Int32            -> Int32
+    | MetadataType.UInt32           -> UInt32
+    | MetadataType.Int64            -> Int64
+    | MetadataType.UInt64           -> UInt64
+    | MetadataType.Single           -> Single
+    | MetadataType.Double           -> Double
+    | MetadataType.String           -> String
+    | MetadataType.Pointer          -> Pointer (ty :?> PointerType)
+    | MetadataType.ByReference      -> ByReference (ty :?> ByReferenceType)
+    | MetadataType.ValueType        -> ValueType ty
+    | MetadataType.Class            -> Class ty
+    | MetadataType.Var              -> Var (ty :?> GenericParameter)
+    | MetadataType.Array            -> Array (ty :?> ArrayType)
+    | MetadataType.GenericInstance  -> GenericInstance (ty :?> GenericInstanceType)
+    | MetadataType.TypedByReference -> TypedByReference
+    | MetadataType.IntPtr           -> IntPtr
+    | MetadataType.UIntPtr          -> UIntPtr
+    | MetadataType.FunctionPointer  -> FunctionPointer (ty :?> FunctionPointerType)
+    | MetadataType.Object           -> Object
+    | MetadataType.MVar             -> MVar (ty :?> GenericParameter)
+    | MetadataType.RequiredModifier -> RequiredModifier (ty :?> RequiredModifierType)
+    | MetadataType.OptionalModifier -> OptionalModifier (ty :?> OptionalModifierType)
+    | MetadataType.Sentinel         -> Sentinel (ty :?> SentinelType)
+    | MetadataType.Pinned           -> Pinned (ty :?> PinnedType)
+    | _ ->
+        failwithf "unexpected MetadataType: %A" ty.MetadataType
+
+/// extend cecil's MethodBody class
+type MethodBody with
+    /// get's all parameters including any implicit this parameters
+    member x.AllParameters
+        with get () = [
+            let meth = x.Method
+            if meth.HasThis then
+                yield x.ThisParameter
+            for p in meth.Parameters do
+                yield p]
+
 /// CodeBlock is used to break method body instructions into blocks where
 /// every branch or switch instruction should land on the start of a code block
 type CodeBlock (offsetBytes : int) =
-    let mutable myInsts = [] : AbstractInstruction list
+    let mutable myInsts = [] : SaferInstruction list
     
     /// the instructions in this code block
     member x.Instructions
@@ -18,11 +101,11 @@ type CodeBlock (offsetBytes : int) =
     
     /// the offset in bytes is relative to the function body so it acts
     /// as a unique ID for a given block in a function
-    member x.OffsetBytes with get () = offsetBytes
+    member x.OffsetBytes = offsetBytes
 
 /// A typesafe and simplified view of cecil's Instruction class
 /// See: ECMA-335 Partition III
-and AbstractInstruction =
+and SaferInstruction =
     | Add
     | And
     | Beq of CodeBlock
