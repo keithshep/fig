@@ -78,26 +78,15 @@ let toSaferType (ty : TypeReference) =
     | _ ->
         failwithf "unexpected MetadataType: %A" ty.MetadataType
 
-/// extend cecil's MethodBody class
-type MethodBody with
-    /// get's all parameters including any implicit this parameters
-    member x.AllParameters
-        with get () = [
-            let meth = x.Method
-            if meth.HasThis then
-                yield x.ThisParameter
-            for p in meth.Parameters do
-                yield p]
-
 /// CodeBlock is used to break method body instructions into blocks where
 /// every branch or switch instruction should land on the start of a code block
 type CodeBlock (offsetBytes : int) =
-    let mutable myInsts = [] : SaferInstruction list
+    let mutable instructions = [] : SaferInstruction list
     
     /// the instructions in this code block
     member x.Instructions
-        with get () = myInsts
-        and set insts = myInsts <- insts
+        with get () = instructions
+        and set insts = instructions <- insts
     
     /// the offset in bytes is relative to the function body so it acts
     /// as a unique ID for a given block in a function
@@ -317,8 +306,17 @@ and SaferInstruction =
     | Sizeof of TypeReference
     | Refanytype
 
-/// extend cecil's MethodBody class with a CodeBlocks function
+/// extend cecil's MethodBody class
 type MethodBody with
+
+    /// get's all parameters including any implicit this parameters
+    member x.AllParameters
+        with get () = [|
+            let meth = x.Method
+            if meth.HasThis then
+                yield x.ThisParameter
+            for p in meth.Parameters do
+                yield p|]
 
     /// This function gives a "view" of the Instructions property which is
     /// simplified (fewer instruction types with explicit code blocks) and more
