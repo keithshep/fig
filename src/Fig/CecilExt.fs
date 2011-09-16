@@ -6,6 +6,18 @@ open Mono.Cecil.Rocks
 
 let failwithf fmt = Printf.ksprintf failwith fmt
 
+/// for keeping track of what types will be on the stack
+/// See EMCA 335: Partition IV C.2, Partition III 1.5
+type StackType =
+    | Int32
+    | Int64
+    | NativeInt
+    | Float32
+    | Float64
+    | ObjectRef
+//    | ManagedPointer
+//    | UnmanagedPointer
+
 /// a safer type reference
 type SaferTypeRef =
     | Void
@@ -305,6 +317,102 @@ and SaferInstruction =
     | Rethrow
     | Sizeof of TypeReference
     | Refanytype
+
+and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB : StackBehaviour) =
+
+    member x.Instruction = inst
+    
+    member x.PopTypes (stackTypes : StackType list) =
+        match popB with
+        | StackBehaviour.Pop0 ->
+            stackTypes
+        | StackBehaviour.Pop1
+        | StackBehaviour.Popi
+        | StackBehaviour.Popref ->
+            match stackTypes with
+            | _ :: stackTail -> stackTail
+            | [] -> failwith "unexpected empty stack"
+        | StackBehaviour.Pop1_pop1
+        | StackBehaviour.Popi_pop1
+        | StackBehaviour.Popi_popi
+        | StackBehaviour.Popi_popi8
+        | StackBehaviour.Popi_popr4
+        | StackBehaviour.Popi_popr8
+        | StackBehaviour.Popref_pop1
+        | StackBehaviour.Popref_popi ->
+            match stackTypes with
+            | _ :: _ :: stackTail -> stackTail
+            | _ -> failwith "expected at least two items in the stack"
+        | StackBehaviour.Popi_popi_popi
+        | StackBehaviour.Popref_popi_popi
+        | StackBehaviour.Popref_popi_popi8
+        | StackBehaviour.Popref_popi_popr4
+        | StackBehaviour.Popref_popi_popr8
+        | StackBehaviour.Popref_popi_popref ->
+            match stackTypes with
+            | _ :: _ :: _ :: stackTail -> stackTail
+            | _ -> failwith "expected at least three items in the stack"
+        | StackBehaviour.PopAll ->
+            []
+        | StackBehaviour.Varpop ->
+            let methSigPopCount (methSig : IMethodSignature) =
+                let paramLen = uint32 methSig.Parameters.Count
+                if methSig.HasThis then
+                    paramLen + 1u
+                else
+                    paramLen
+
+            let popCount =
+                match inst with
+                | Call (_, methRef)
+                | Callvirt (_, _, methRef)
+                | Newobj methRef ->
+                    methSigPopCount methRef
+                | Calli (_, callSite) ->
+                    methSigPopCount callSite
+                | Ret ->
+                    match stackTypes with
+                    | [] -> 0u
+                    | [_] -> 1u
+                    | _ -> failwith "a ret instruction should only have 0 or 1 items on the stack"
+                | _ ->
+                    failwithf "unexpected variable pop for instruction: %A" inst
+
+            let rec drop xs n =
+                if n = 0u then
+                    xs
+                else
+                    match xs with
+                    | x :: xt -> drop xt (n - 1u)
+                    | [] -> failwith "stack too low"
+            
+            drop stackTypes popCount
+
+        | _ ->
+            failwithf "unexpected pop behavior %A" popB
+
+    member x.PushTypes (stackTypes : StackType list) =
+        match pushB with
+        | StackBehaviour.Push0 ->
+            stackTypes
+        | StackBehaviour.Push1 ->
+            failwith "implement me"
+        | StackBehaviour.Push1_push1 ->
+            failwith "implement me"
+        | StackBehaviour.Pushi ->
+            StackType.NativeInt :: stackTypes
+        | StackBehaviour.Pushi8 ->
+            StackType.Int64 :: stackTypes
+        | StackBehaviour.Pushr4 ->
+            StackType.Float32 :: stackTypes
+        | StackBehaviour.Pushr8 ->
+            StackType.Float64 :: stackTypes
+        | StackBehaviour.Pushref ->
+            StackType.ObjectRef :: stackTypes
+        | StackBehaviour.Varpush ->
+            failwith "implement me"
+        | _ ->
+            failwithf "unexpected push behavior %A" pushB
 
 /// extend cecil's MethodBody class
 type MethodBody with

@@ -1,10 +1,18 @@
 module Fig.LLVMCodeGen
 
-open Microsoft.FSharp.Compiler.AbstractIL.IL
-open Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader
+open Fig.CecilExt
+
+open Mono.Cecil
+open Mono.Cecil.Cil
 
 open LLVM.Generated.Core
 open LLVM.Core
+
+let nullableAsOption (n : System.Nullable<'a>) =
+    if n.HasValue then
+        Some n.Value
+    else
+        None
 
 let rec splitAt i xs =
     if i = 0 then
@@ -16,73 +24,327 @@ let rec splitAt i xs =
             let splitFst, splitSnd = splitAt (i - 1) xt
             (x :: splitFst, splitSnd)
 
-type FunMap = Map<string, Map<ILType * string * (ILType list), ValueRef>>
+type FunMap = Map<string, Map<string , ValueRef>>
 
-type JointTypeDef (td : ILTypeDef, tyHandle : TypeHandleRef) =
+type TypeHandleRef with
+    member x.ResolvedType with get () = resolveTypeHandle x
+
+(*
+type JointTypeDef (td : TypeDefinition, tyHandle : TypeHandleRef) =
     member x.CILType with get() = td
     member x.LLVMType with get() = resolveTypeHandle tyHandle
     member x.LLVMTypeHandle with get() = tyHandle
+*)
 
-let rec toLLVMType (typeHandles : Map<string, JointTypeDef>) (ty : ILType) =
-    match ty with
-    | ILType.Void -> voidType ()
-    | ILType.Array (ilArrayShape, ilType) ->
-        match ilArrayShape with
-        | ILArrayShape [(Some 0, None)] ->
-            // LLVM docs say:
-            // "... 'variable sized array' addressing can be implemented in LLVM
-            // with a zero length array type". So, we implement this as a struct
-            // which contains a length element and an array element
-            let elemTy = toLLVMType typeHandles ilType
-            let basicArrTy = pointerType (arrayType elemTy 0u) 0u
-            // FIXME array len should correspond to "native unsigned int" not int32
-            pointerType (structType [|int32Type (); basicArrTy|] false) 0u
-        | _ ->
-            failwith (sprintf "dont know how to deal with array shape %A" ilArrayShape)
-    | ILType.Value typeSpec ->
-        match typeSpec.tspecTypeRef.trefName with
-        | "System.Int32"
-        | "System.UInt32"   -> int32Type ()
-        | "System.Int64"
-        | "System.UInt64"   -> int64Type ()
-        | "System.SByte"    -> int8Type ()
-        
-        // TODO compiler seems to be generating boolean as I4 but the CIL docs
-        // say that a single byte should be used to represent a boolean
-        | "System.Boolean"  -> int32Type ()
-        | "System.Double"   -> doubleType ()
-        | tyStr -> failwith ("unknown value type: " + tyStr)
-    | ILType.Boxed ilTypeSpec ->  //FIXME!!
-        pointerType typeHandles.[ilTypeSpec.Name].LLVMType 0u
-    | ILType.Ptr ilType -> failwith "ptr type"
-    | ILType.Byref ilType -> failwith "byref type"
-    | ILType.FunctionPointer ilCallingSignature -> failwith "funPtr type"
-    | ILType.TypeVar ui -> failwith "typevar type"
-    | ILType.Modified (required, modifierRef, ilType) -> failwith "modified type"
+let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReference) =
+    let noImpl () = failwithf "no impl for %A type yet" ty.MetadataType
+    
+    match toSaferType ty with
+    | Void -> voidType ()
+
+    // TODO compiler seems to be generating boolean as I4 but the CIL docs
+    // say that a single byte should be used to represent a boolean
+    | Boolean -> int32Type ()
+    | Char -> noImpl ()
+    | SByte
+    | Byte -> int8Type ()
+    | Int16
+    | UInt16 -> noImpl ()
+    | Int32
+    | UInt32 -> int32Type ()
+    | Int64
+    | UInt64 -> int64Type ()
+    | Single -> noImpl ()
+    | Double -> doubleType ()
+    | String
+    | Pointer _ // PointerType
+    | ByReference _ // ByReferenceType
+    | ValueType _ // TypeReference
+    | Class _ // TypeReference
+    | Var _ -> // GenericParameter
+        noImpl ()
+    | Array arrTy ->
+        if arrTy.Rank = 1 then
+            let dim0 = arrTy.Dimensions.[0]
+            match nullableAsOption dim0.LowerBound, nullableAsOption dim0.UpperBound with
+            | (Some 0, None) -> //(0, null) ->
+                // LLVM docs say:
+                // "... 'variable sized array' addressing can be implemented in LLVM
+                // with a zero length array type". So, we implement this as a struct
+                // which contains a length element and an array element
+                let elemTy = toLLVMType typeHandles arrTy.ElementType
+                let basicArrTy = pointerType (arrayType elemTy 0u) 0u
+                // FIXME array len should correspond to "native unsigned int" not int32
+                pointerType (structType [|int32Type (); basicArrTy|] false) 0u
+            | _ ->
+                failwith "dont know how to deal with given array shape yet"
+        else
+            failwithf "arrays of rank %i not yet implemented" arrTy.Rank
+    | GenericInstance _ // GenericInstanceType
+    | TypedByReference
+    | IntPtr
+    | UIntPtr
+    | FunctionPointer _ // FunctionPointerType
+    | Object
+    | MVar _ // GenericParameter
+    | RequiredModifier _ // RequiredModifierType
+    | OptionalModifier _ // OptionalModifierType
+    | Sentinel _ // SentinelType
+    | Pinned _ -> // PinnedType
+        noImpl ()
 
 let rec genInstructions
         (bldr : BuilderRef)
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (args : ValueRef list)
-        (locals : ValueRef list)
-        (typeHandles : Map<string, JointTypeDef>)
+        (args : ValueRef array)
+        (locals : ValueRef array)
+        (typeHandles : Map<string, TypeHandleRef>)
         (funMap : FunMap)
         (blockMap : Map<int, BasicBlockRef>)
-        (ilBB : ILBasicBlock)
+        (ilBB : CodeBlock)
         (instStack : ValueRef list)
-        (insts : ILInstr list) =
+        (insts : SaferInstruction list) =
 
     match insts with
-    | [] ->
-        match ilBB.Fallthrough with
-        | Some lbl  -> buildBr bldr blockMap.[lbl] |> ignore
-        | None      -> ()
+    | [] -> ()
     | inst :: instTail ->
         let goNext (instStack : ValueRef list) =
             genInstructions bldr moduleRef methodVal args locals typeHandles funMap blockMap ilBB instStack instTail
         let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst)
+
+        match inst with
+        | Add ->
+            // The add instruction adds value2 to value1 and pushes the result
+            // on the stack. Overflow is not detected for integral operations
+            // (but see add.ovf); floating-point overflow returns +inf or -inf.
+            match instStack with
+            | value2 :: value1 :: stackTail ->
+                let addResult =
+                    match getTypeKind <| typeOf value1 with
+                    | TypeKind.FloatTypeKind | TypeKind.DoubleTypeKind ->
+                        buildFAdd bldr value1 value2 "tmpFAdd"
+                    | TypeKind.IntegerTypeKind ->
+                        buildAdd bldr value1 value2 "tmpAdd"
+                    | ty ->
+                        failwith (sprintf "don't know how to add type: %A" ty)
+                goNext (addResult :: stackTail)
+            | _ ->
+                failwith "instruction stack too low"
+        | _ -> noImpl ()
+        (*
+        | And
+        | Beq of CodeBlock
+        | Bge of CodeBlock
+        | Bgt of CodeBlock
+        | Ble of CodeBlock
+        | Blt of CodeBlock
+        | BneUn of CodeBlock
+        | BgeUn of CodeBlock
+        | BgtUn of CodeBlock
+        | BleUn of CodeBlock
+        | BltUn of CodeBlock
+        | Br of CodeBlock
+        | Break
+        | Brfalse of CodeBlock
+        | Brtrue of CodeBlock
         
+        // call* instructions all start with bool "tail." prefix indicator.
+        // See: EMCA-335 Partition III 2.4
+        | Call of bool * MethodReference
+        | Calli of bool * CallSite
+        
+        // callvirt can also take a "constrained." prefix
+        // See: EMCA-335 Partition III 2.1
+        | Callvirt of bool * TypeReference option * MethodReference
+        | ConvI1
+        | ConvI2
+        | ConvI4
+        | ConvI8
+        | ConvR4
+        | ConvR8
+        | ConvU4
+        | ConvU8
+        | Cpobj of TypeReference
+        | Div
+        | DivUn
+        | Dup
+        | Jmp of MethodReference
+        | Ldarg of ParameterDefinition
+        | Ldarga of ParameterDefinition
+        | LdcI4 of int
+        | LdcI8 of int64
+        | LdcR4 of single
+        | LdcR8 of double
+        
+        // ldind* instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | LdindI1 of byte option * bool
+        | LdindU1 of byte option * bool
+        | LdindI2 of byte option * bool
+        | LdindU2 of byte option * bool
+        | LdindI4 of byte option * bool
+        | LdindU4 of byte option * bool
+        | LdindI8 of byte option * bool
+        | LdindI of byte option * bool
+        | LdindR4 of byte option * bool
+        | LdindR8 of byte option * bool
+        | LdindRef of byte option * bool
+        | Ldloc of VariableDefinition
+        | Ldloca of VariableDefinition
+        | Ldnull
+    
+        // Ldobj instruction hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | Ldobj of byte option * bool * TypeReference
+        | Ldstr of string
+        | Mul
+        | Neg
+        | Nop
+        | Not
+        | Newobj of MethodReference
+        | Or
+        | Pop
+        | Rem
+        | RemUn
+        | Ret
+        | Shl
+        | Shr
+        | ShrUn
+        | Starg of ParameterDefinition
+        
+        // Stind* instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | StindRef of byte option * bool
+        | StindI1 of byte option * bool
+        | StindI2 of byte option * bool
+        | StindI4 of byte option * bool
+        | StindI8 of byte option * bool
+        | StindR4 of byte option * bool
+        | StindR8 of byte option * bool
+        | Stloc of VariableDefinition
+        | Sub
+        | Switch of CodeBlock array
+        | Xor
+        | Castclass of TypeReference
+        | Isinst of TypeReference
+        | ConvRUn
+        | Unbox of TypeReference
+        | Throw
+    
+        // ldfld*/stfld instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | Ldfld of byte option * bool * FieldReference
+        | Ldflda of byte option * bool * FieldReference
+        | Stfld of byte option * bool * FieldReference
+        
+        // ldsfld*/stsfld instructions hold a bool indicator for the "volatile." prefix
+        | Ldsfld of bool * FieldReference
+        | Ldsflda of bool * FieldReference
+        | Stsfld of bool * FieldReference
+        
+        // stobj instruction holds a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | Stobj of byte option * bool * TypeReference
+        | ConvOvfI1Un
+        | ConvOvfI2Un
+        | ConvOvfI4Un
+        | ConvOvfI8Un
+        | ConvOvfU1Un
+        | ConvOvfU2Un
+        | ConvOvfU4Un
+        | ConvOvfU8Un
+        | ConvOvfIUn
+        | ConvOvfUUn
+        | Box of TypeReference
+        | Newarr of TypeReference
+        | Ldlen
+        
+        // ldelema instruction holds a bool to indicate that it is preceded by a
+        // "readonly." prefix
+        // See: EMCA-335 Partition III 2.3
+        | Ldelema of bool * TypeReference
+        | LdelemI1
+        | LdelemU1
+        | LdelemI2
+        | LdelemU2
+        | LdelemI4
+        | LdelemU4
+        | LdelemI8
+        | LdelemI
+        | LdelemR4
+        | LdelemR8
+        | LdelemRef
+        | StelemI
+        | StelemI1
+        | StelemI2
+        | StelemI4
+        | StelemI8
+        | StelemR4
+        | StelemR8
+        | StelemRef
+        | Ldelem of TypeReference
+        | Stelem of TypeReference
+        | UnboxAny of TypeReference
+        | ConvOvfI1
+        | ConvOvfU1
+        | ConvOvfI2
+        | ConvOvfU2
+        | ConvOvfI4
+        | ConvOvfU4
+        | ConvOvfI8
+        | ConvOvfU8
+        | Refanyval of TypeReference
+        | Ckfinite
+        | Mkrefany of TypeReference
+        | Ldtoken of IMetadataTokenProvider
+        | ConvU2
+        | ConvU1
+        | ConvI
+        | ConvOvfI
+        | ConvOvfU
+        | AddOvf
+        | AddOvfUn
+        | MulOvf
+        | MulOvfUn
+        | SubOvf
+        | SubOvfUn
+        | Endfinally
+        | Leave of CodeBlock
+    
+        // stindi instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | StindI of byte option * bool
+        | ConvU
+        | Arglist
+        | Ceq
+        | Cgt
+        | CgtUn
+        | Clt
+        | CltUn
+        | Ldftn of MethodReference
+        | Ldvirtftn of MethodReference
+        | Localloc
+        | Endfilter
+        | Initobj of TypeReference
+        | Cpblk
+    
+        // initblk instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | Initblk of byte option * bool
+        | Rethrow
+        | Sizeof of TypeReference
+        | Refanytype
+        *)
+
+(*
         match inst with
         // Basic
         | AI_add ->
@@ -543,198 +805,145 @@ let rec genInstructions
         | EI_ilzero _ //of ILType
         | EI_ldlen_multi _      //of int32 * int32
         | I_other _ -> noImpl ()   //of IlxExtensionInstr
-
-let genBasicBlock
-        (moduleRef : ModuleRef)
-        (methodVal : ValueRef)
-        (args : ValueRef list)
-        (locals : ValueRef list)
-        (typeHandles : Map<string, JointTypeDef>)
-        (funMap : FunMap)
-        (blockMap : Map<int, BasicBlockRef>)
-        (ilBB : ILBasicBlock) =
-    use bldr = new Builder(blockMap.[ilBB.Label])
-    genInstructions bldr moduleRef methodVal args locals typeHandles funMap blockMap ilBB [] (List.ofArray ilBB.Instructions)
-
-let rec genCode
-        (moduleRef : ModuleRef)
-        (methodVal : ValueRef)
-        (args : ValueRef list)
-        (locals : ValueRef list)
-        (typeHandles : Map<string, JointTypeDef>)
-        (funMap : FunMap)
-        (blockMap : Map<int, BasicBlockRef>)
-        (c : ILCode) =
-
-    let genNextCode = genCode moduleRef methodVal args locals typeHandles funMap blockMap
-    
-    match c with
-    | ILBasicBlock bb -> genBasicBlock moduleRef methodVal args locals typeHandles funMap blockMap bb
-    | GroupBlock (debugMappings, codes) ->
-        for c in codes do
-            genNextCode c
-    | RestrictBlock (codeLabels, code) ->
-        genNextCode code
-    | TryBlock (tCode, exceptionBlock) ->
-        failwith "try block not implemented"
-//        genNextCode (depth + 2) tCode
-//        match exceptionBlock with
-//        | FaultBlock code ->
-//            genNextCode (depth + 2) code
-//        | FinallyBlock ilCode ->
-//            genNextCode (depth + 2) ilCode
-//        | FilterCatchBlock filterCatchList ->
-//            iprintfn (depth + 1) "filterCatchBlock TODO"
+*)
 
 let genAlloca
         (bldr : BuilderRef)
-        (typeHandles : Map<string, JointTypeDef>)
-        (t : ILType)
+        (typeHandles : Map<string, TypeHandleRef>)
+        (t : TypeReference)
         (name : string) =
     buildAlloca bldr (toLLVMType typeHandles t) (name + "Alloca")
 
-let genLocal (bldr : BuilderRef) (typeHandles : Map<string, JointTypeDef>) (l : ILLocal) =
-    genAlloca bldr typeHandles l.Type "local"
+let genLocal (bldr : BuilderRef) (typeHandles : Map<string, TypeHandleRef>) (l : VariableDefinition) =
+    genAlloca bldr typeHandles l.VariableType (match l.Name with null -> "local" | n -> n)
 
-let genParam (bldr : BuilderRef) (typeHandles : Map<string, JointTypeDef>) (p : ILParameter) =
-    genAlloca bldr typeHandles p.Type (match p.Name with Some n -> n | None -> "param")
-
-let addBlockDecs (methodVal : ValueRef) (c : ILCode) =
-    let rec go (c : ILCode) =
-        match c with
-        | ILBasicBlock bb -> [(bb.Label, appendBasicBlock methodVal ("block_" + string bb.Label))]
-        | GroupBlock (debugMappings, codes) -> List.collect go codes
-        | RestrictBlock (codeLabels, code) -> go code
-        | TryBlock (tCode, exceptionBlock) -> failwith "TryBlock not yet implemented"
-
-    go c
+let genParam (bldr : BuilderRef) (typeHandles : Map<string, TypeHandleRef>) (p : ParameterDefinition) =
+    genAlloca bldr typeHandles p.ParameterType (match p.Name with null -> "param" | n -> n)
 
 let genMethodBody
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (typeHandles : Map<string, JointTypeDef>)
+        (typeHandles : Map<string, TypeHandleRef>)
         (funMap : FunMap)
-        (td : ILTypeDef)
-        (md : ILMethodDef)
-        (mb : ILMethodBody) =
+        (td : TypeDefinition)
+        (md : MethodDefinition) =
+
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
-
-    let args =
-        match md.CallingConv.ThisConv with
-        | ILThisConvention.Instance ->
-            let selfTy = pointerType typeHandles.[td.Name].LLVMType 0u
-            let selfAlloca = buildAlloca bldr selfTy "selfAlloca"
-            selfAlloca :: List.map (genParam bldr typeHandles) md.Parameters
-        | ILThisConvention.InstanceExplicit ->
-            failwith "instance explicit not implemented"
-        | ILThisConvention.Static ->
-            List.map (genParam bldr typeHandles) md.Parameters
-
-    //let args = List.map (genParam bldr typeHandles) md.Parameters
+    let args = Array.map (genParam bldr typeHandles) md.Body.AllParameters
     for i = 0 to args.Length - 1 do
         buildStore bldr (getParam methodVal (uint32 i)) args.[i] |> ignore
-
-    let locals = List.map (genLocal bldr typeHandles) mb.Locals
-    let blockDecs = addBlockDecs methodVal mb.Code
-
+    let locals = Array.map (genLocal bldr typeHandles) (Array.ofSeq md.Body.Variables)
+    let blocks = md.Body.CodeBlocks
+    let blockDecs =
+        [for b in blocks do
+            let blockName = "block_" + string b.OffsetBytes
+            yield (b.OffsetBytes, appendBasicBlock methodVal blockName)]
     match blockDecs with
     | [] -> failwith ("empty method body: " + md.Name)
     | (_, fstBlockDec) :: _ ->
         buildBr bldr fstBlockDec |> ignore
-        genCode moduleRef methodVal args locals typeHandles funMap (Map.ofList blockDecs) mb.Code
+        //genCode moduleRef methodVal args locals typeHandles funMap (Map.ofList blockDecs) blocks
+        let blockMap = Map.ofList blockDecs
+        for i in 0 .. blocks.Length - 1 do
+            use bldr = new Builder(blockMap.[blocks.[i].OffsetBytes])
+            genInstructions
+                bldr
+                moduleRef
+                methodVal
+                args
+                locals
+                typeHandles
+                funMap
+                blockMap
+                blocks.[i]
+                []
+                blocks.[i].Instructions
+            
+            // generate a fall-through jump to the next block
+            // TODO: make sure this is OK even when current block ends with a terminating instruction
+            if i < blocks.Length - 1 then
+                buildBr bldr blockMap.[blocks.[i + 1].OffsetBytes] |> ignore
 
 let genMethodDef
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, JointTypeDef>)
+        (typeHandles : Map<string, TypeHandleRef>)
         (funMap : FunMap)
-        (td : ILTypeDef)
-        (md : ILMethodDef) =
-    match md.mdBody.Contents with
-    | MethodBody.IL mb ->
+        (td : TypeDefinition)
+        (md : MethodDefinition) =
+    
+    if md.HasBody then
         let fn = getNamedFunction moduleRef md.Name
-        genMethodBody moduleRef fn typeHandles funMap td md mb
-    | MethodBody.PInvoke pInvokeMethod -> failwith "PInvoke body"
-    | MethodBody.Abstract -> failwith "abstract body"
-    | MethodBody.Native -> failwith "native body"
+        genMethodBody moduleRef fn typeHandles funMap td md
+    else
+        failwith "can only use genMethodDef for functions with a body"
 
 let rec genTypeDef
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, JointTypeDef>)
+        (typeHandles : Map<string, TypeHandleRef>)
         (funMap : FunMap)
-        (td : ILTypeDef) =
+        (td : TypeDefinition) =
     Seq.iter (genTypeDef moduleRef typeHandles funMap) td.NestedTypes
     Seq.iter (genMethodDef moduleRef typeHandles funMap td) td.Methods
 
 let declareMethodDef
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, JointTypeDef>)
-        (td : ILTypeDef)
-        (md : ILMethodDef) =
-    let implicitThis =
-        match md.CallingConv.ThisConv with
-        | ILThisConvention.Instance -> true
-        | ILThisConvention.InstanceExplicit -> failwith "instance explicit not implemented"
-        | ILThisConvention.Static -> false
-    let paramTys = [for p in md.Parameters -> toLLVMType typeHandles p.Type]
-    let paramTys =
-        if implicitThis then
-            let thisTy = pointerType typeHandles.[td.Name].LLVMType 0u
-            thisTy :: paramTys
-        else
-            paramTys
-    let retTy = toLLVMType typeHandles md.Return.Type
-    let funcTy = functionType retTy (Array.ofList paramTys)
-    match md.mdBody.Contents with
-    | MethodBody.IL mb ->
+        (typeHandles : Map<string, TypeHandleRef>)
+        (td : TypeDefinition)
+        (md : MethodDefinition) =
+
+    if md.HasBody then
+        let paramTys = [|for p in md.Body.AllParameters -> toLLVMType typeHandles p.ParameterType|]
+        let retTy = toLLVMType typeHandles md.ReturnType
+        let funcTy = functionType retTy paramTys
         let fn = addFunction moduleRef md.Name funcTy
-        let getExplicitParam i =
-            let i = if implicitThis then i + 1 else i
-            getParam fn (uint32 i)
-        if implicitThis then
-            setValueName (getParam fn 0u) "selfPtr" |> ignore
-        for i = 0 to md.Parameters.Length - 1 do
-            match md.Parameters.[i].Name with
-            | Some name -> setValueName (getExplicitParam i) name |> ignore
-            | None -> setValueName (getExplicitParam i) ("arg" + string i) |> ignore
-        (md.Return.Type, md.Name, [for p in md.Parameters -> p.Type]), fn
-    | MethodBody.PInvoke _
-    | MethodBody.Abstract
-    | MethodBody.Native -> failwith "unsupported method body type"
+        
+        let nameFun (i : int) (p : ParameterDefinition) =
+            let llvmParam = getParam fn (uint32 i)
+            match p.Name with
+            | null -> setValueName llvmParam ("arg" + string i) |> ignore
+            | name -> setValueName llvmParam name |> ignore
+        Array.iteri nameFun md.Body.AllParameters
+        
+        (md.FullName, fn)
+    else
+        failwith "don't know how to declare method without a body"
 
 let rec declareMethodDefs
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, JointTypeDef>)
-        (td : ILTypeDef) =
+        (typeHandles : Map<string, TypeHandleRef>)
+        (td : TypeDefinition) =
     let nestedDecs = List.concat [for t in td.NestedTypes -> declareMethodDefs moduleRef typeHandles t]
     let methodDecs = [for m in td.Methods -> declareMethodDef moduleRef typeHandles td m]
     (td.Name, Map.ofList methodDecs) :: nestedDecs
 
-let declareType (typeHandles : Map<string, JointTypeDef>) (td : ILTypeDef) =
-    let stFields = [|for f in td.Fields.AsList -> toLLVMType typeHandles f.Type|]
+let declareType (typeHandles : Map<string, TypeHandleRef>) (td : TypeDefinition) =
+    let stFields = [|for f in td.Fields -> toLLVMType typeHandles f.FieldType|]
     let stTy = structType stFields false
-    refineType typeHandles.[td.Name].LLVMType stTy
+    refineType typeHandles.[td.Name].ResolvedType stTy
 
-let declareTypes (tds : ILTypeDef list) =
+let declareTypes (tds : TypeDefinition list) =
     // the reason that we build the type map before generating anything with
     // LLVM is that it allows us to remove the "forward declarations" of types
     // in the IL code. Since the real declarations all occur after the forward
     // declarations they will be the ones left behind in the map
-    let rec flattenAndName (td : ILTypeDef) =
-        (td.Name, td) :: List.collect flattenAndName td.NestedTypes.AsList
+    let rec flattenAndName (td : TypeDefinition) =
+        (td.Name, td) :: List.collect flattenAndName (List.ofSeq td.NestedTypes)
     let tyMap = Map.ofList (List.collect flattenAndName tds)
 
     // generate the llvm ty handles that will hold all struct references
     // then perform the declarations
-    let typeHandles = Map.map (fun _ td -> new JointTypeDef(td, createTypeHandle (opaqueType ()))) tyMap
+    let typeHandles = Map.map (fun _ td -> createTypeHandle (opaqueType ())) tyMap
     for _, td in Map.toList tyMap do
         declareType typeHandles td
     typeHandles
 
-let genTypeDefs (moduleRef : ModuleRef) (typeDefs : ILTypeDefs) =
-    let typeHandles = declareTypes typeDefs.AsList
-    for name, jointTyDef in Map.toList typeHandles do
-        addTypeName moduleRef name jointTyDef.LLVMType |> ignore
-    let funMap = Map.ofList <| List.concat [for t in typeDefs -> declareMethodDefs moduleRef typeHandles t]
-    Seq.iter (genTypeDef moduleRef typeHandles funMap) typeDefs
+let genTypeDefs (llvmModuleRef : ModuleRef) (cilTypeDefs : seq<TypeDefinition>) =
+    let cilTypeDefs = List.ofSeq cilTypeDefs
+    let typeHandles = declareTypes cilTypeDefs
+    for name, tyHandle in Map.toList typeHandles do
+        addTypeName llvmModuleRef name tyHandle.ResolvedType |> ignore
+    let funMap = Map.ofList <| List.concat [for t in cilTypeDefs -> declareMethodDefs llvmModuleRef typeHandles t]
+    ()
+    //Seq.iter (genTypeDef llvmModuleRef typeHandles funMap) cilTypeDefs
 
