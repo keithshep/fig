@@ -392,27 +392,245 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             failwithf "unexpected pop behavior %A" popB
 
     member x.PushTypes (stackTypes : StackType list) =
-        match pushB with
-        | StackBehaviour.Push0 ->
-            stackTypes
-        | StackBehaviour.Push1 ->
-            failwith "implement me"
-        | StackBehaviour.Push1_push1 ->
-            failwith "implement me"
-        | StackBehaviour.Pushi ->
-            StackType.NativeInt :: stackTypes
-        | StackBehaviour.Pushi8 ->
-            StackType.Int64 :: stackTypes
-        | StackBehaviour.Pushr4 ->
-            StackType.Float32 :: stackTypes
-        | StackBehaviour.Pushr8 ->
-            StackType.Float64 :: stackTypes
-        | StackBehaviour.Pushref ->
-            StackType.ObjectRef :: stackTypes
-        | StackBehaviour.Varpush ->
-            failwith "implement me"
-        | _ ->
-            failwithf "unexpected push behavior %A" pushB
+        match inst with
+        | Add | Div | Mul | Rem | Sub ->
+
+            // binary numeric operations defined in
+            // Partition III 1.5
+            // TODO: assuming valid bytecode here
+            match stackTypes with
+            | StackType.Int32 :: StackType.Int32 :: stackTail ->
+                StackType.Int32 :: stackTail
+
+            | StackType.ObjectRef :: StackType.ObjectRef :: stackTail ->
+                StackType.NativeInt :: stackTail
+
+            | _ :: StackType.ObjectRef :: stackTail
+            | StackType.ObjectRef :: _ :: stackTail ->
+                StackType.ObjectRef :: stackTail
+
+            | _ :: StackType.NativeInt :: stackTail
+            | StackType.NativeInt :: _ :: stackTail ->
+                StackType.NativeInt :: stackTail
+            
+            | StackType.Float64 :: _ :: stackTail
+            | _ :: StackType.Float64 :: stackTail ->
+                StackType.Float64 :: stackTail
+            
+            | StackType.Float32 :: _ :: stackTail
+            | _ :: StackType.Float32 :: stackTail ->
+                StackType.Float32 :: stackTail
+            
+            | _ ->
+                failwith "invalid stack for binary numeric operation"
+
+(*
+        | And
+        | Beq of CodeBlock
+        | Bge of CodeBlock
+        | Bgt of CodeBlock
+        | Ble of CodeBlock
+        | Blt of CodeBlock
+        | BneUn of CodeBlock
+        | BgeUn of CodeBlock
+        | BgtUn of CodeBlock
+        | BleUn of CodeBlock
+        | BltUn of CodeBlock
+        | Br of CodeBlock
+        | Break
+        | Brfalse of CodeBlock
+        | Brtrue of CodeBlock
+        
+        // call* instructions all start with bool "tail." prefix indicator.
+        // See: EMCA-335 Partition III 2.4
+        | Call of bool * MethodReference
+        | Calli of bool * CallSite
+        
+        // callvirt can also take a "constrained." prefix
+        // See: EMCA-335 Partition III 2.1
+        | Callvirt of bool * TypeReference option * MethodReference
+        | ConvI1
+        | ConvI2
+        | ConvI4
+        | ConvI8
+        | ConvR4
+        | ConvR8
+        | ConvU4
+        | ConvU8
+        | Cpobj of TypeReference
+        | DivUn
+        | Dup
+        | Jmp of MethodReference
+        | Ldarg of ParameterDefinition
+        | Ldarga of ParameterDefinition
+        | LdcI4 of int
+        | LdcI8 of int64
+        | LdcR4 of single
+        | LdcR8 of double
+        
+        // ldind* instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | LdindI1 of byte option * bool
+        | LdindU1 of byte option * bool
+        | LdindI2 of byte option * bool
+        | LdindU2 of byte option * bool
+        | LdindI4 of byte option * bool
+        | LdindU4 of byte option * bool
+        | LdindI8 of byte option * bool
+        | LdindI of byte option * bool
+        | LdindR4 of byte option * bool
+        | LdindR8 of byte option * bool
+        | LdindRef of byte option * bool
+        | Ldloc of VariableDefinition
+        | Ldloca of VariableDefinition
+        | Ldnull
+    
+        // Ldobj instruction hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | Ldobj of byte option * bool * TypeReference
+        | Ldstr of string
+        | Neg
+        | Nop
+        | Not
+        | Newobj of MethodReference
+        | Or
+        | Pop
+        | RemUn
+        | Ret
+        | Shl
+        | Shr
+        | ShrUn
+        | Starg of ParameterDefinition
+        
+        // Stind* instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | StindRef of byte option * bool
+        | StindI1 of byte option * bool
+        | StindI2 of byte option * bool
+        | StindI4 of byte option * bool
+        | StindI8 of byte option * bool
+        | StindR4 of byte option * bool
+        | StindR8 of byte option * bool
+        | Stloc of VariableDefinition
+        | Switch of CodeBlock array
+        | Xor
+        | Castclass of TypeReference
+        | Isinst of TypeReference
+        | ConvRUn
+        | Unbox of TypeReference
+        | Throw
+    
+        // ldfld*/stfld instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | Ldfld of byte option * bool * FieldReference
+        | Ldflda of byte option * bool * FieldReference
+        | Stfld of byte option * bool * FieldReference
+        
+        // ldsfld*/stsfld instructions hold a bool indicator for the "volatile." prefix
+        | Ldsfld of bool * FieldReference
+        | Ldsflda of bool * FieldReference
+        | Stsfld of bool * FieldReference
+        
+        // stobj instruction holds a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | Stobj of byte option * bool * TypeReference
+        | ConvOvfI1Un
+        | ConvOvfI2Un
+        | ConvOvfI4Un
+        | ConvOvfI8Un
+        | ConvOvfU1Un
+        | ConvOvfU2Un
+        | ConvOvfU4Un
+        | ConvOvfU8Un
+        | ConvOvfIUn
+        | ConvOvfUUn
+        | Box of TypeReference
+        | Newarr of TypeReference
+        | Ldlen
+        
+        // ldelema instruction holds a bool to indicate that it is preceded by a
+        // "readonly." prefix
+        // See: EMCA-335 Partition III 2.3
+        | Ldelema of bool * TypeReference
+        | LdelemI1
+        | LdelemU1
+        | LdelemI2
+        | LdelemU2
+        | LdelemI4
+        | LdelemU4
+        | LdelemI8
+        | LdelemI
+        | LdelemR4
+        | LdelemR8
+        | LdelemRef
+        | StelemI
+        | StelemI1
+        | StelemI2
+        | StelemI4
+        | StelemI8
+        | StelemR4
+        | StelemR8
+        | StelemRef
+        | Ldelem of TypeReference
+        | Stelem of TypeReference
+        | UnboxAny of TypeReference
+        | ConvOvfI1
+        | ConvOvfU1
+        | ConvOvfI2
+        | ConvOvfU2
+        | ConvOvfI4
+        | ConvOvfU4
+        | ConvOvfI8
+        | ConvOvfU8
+        | Refanyval of TypeReference
+        | Ckfinite
+        | Mkrefany of TypeReference
+        | Ldtoken of IMetadataTokenProvider
+        | ConvU2
+        | ConvU1
+        | ConvI
+        | ConvOvfI
+        | ConvOvfU
+        | AddOvf
+        | AddOvfUn
+        | MulOvf
+        | MulOvfUn
+        | SubOvf
+        | SubOvfUn
+        | Endfinally
+        | Leave of CodeBlock
+    
+        // stindi instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | StindI of byte option * bool
+        | ConvU
+        | Arglist
+        | Ceq
+        | Cgt
+        | CgtUn
+        | Clt
+        | CltUn
+        | Ldftn of MethodReference
+        | Ldvirtftn of MethodReference
+        | Localloc
+        | Endfilter
+        | Initobj of TypeReference
+        | Cpblk
+    
+        // initblk instructions hold a byte option for the "unaligned." prefix
+        // and a bool for the "volatile." prefix
+        // See: EMCA-335 Partition III 2.5 & 2.6
+        | Initblk of byte option * bool
+        | Rethrow
+        | Sizeof of TypeReference
+        | Refanytype
+*)
 
 /// extend cecil's MethodBody class
 type MethodBody with
