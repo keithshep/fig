@@ -6,16 +6,25 @@ open Mono.Cecil.Rocks
 
 let failwithf fmt = Printf.ksprintf failwith fmt
 
+let rec splitAt i xs =
+    if i = 0 then
+        ([], xs)
+    else
+        match xs with
+        | [] -> failwith "not enough elements for split"
+        | x :: xt ->
+            let splitFst, splitSnd = splitAt (i - 1) xt
+            (x :: splitFst, splitSnd)
+
 /// for keeping track of what types will be on the stack
 /// See EMCA 335: Partition IV C.2, Partition III 1.5
 type StackType =
     | Int32
     | Int64
     | NativeInt
-    | Float32
-    | Float64
+    | Float
     | ObjectRef
-//    | ManagedPointer
+    | ManagedPointer
 //    | UnmanagedPointer
 
 /// a safer type reference
@@ -325,12 +334,12 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
     member x.PopTypes (stackTypes : StackType list) =
         match popB with
         | StackBehaviour.Pop0 ->
-            stackTypes
+            ([], stackTypes)
         | StackBehaviour.Pop1
         | StackBehaviour.Popi
         | StackBehaviour.Popref ->
             match stackTypes with
-            | _ :: stackTail -> stackTail
+            | a :: stackTail -> ([a], stackTail)
             | [] -> failwith "unexpected empty stack"
         | StackBehaviour.Pop1_pop1
         | StackBehaviour.Popi_pop1
@@ -341,7 +350,7 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         | StackBehaviour.Popref_pop1
         | StackBehaviour.Popref_popi ->
             match stackTypes with
-            | _ :: _ :: stackTail -> stackTail
+            | a :: b :: stackTail -> ([a; b], stackTail)
             | _ -> failwith "expected at least two items in the stack"
         | StackBehaviour.Popi_popi_popi
         | StackBehaviour.Popref_popi_popi
@@ -350,15 +359,15 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         | StackBehaviour.Popref_popi_popr8
         | StackBehaviour.Popref_popi_popref ->
             match stackTypes with
-            | _ :: _ :: _ :: stackTail -> stackTail
+            | a :: b :: c :: stackTail -> ([a; b; c], stackTail)
             | _ -> failwith "expected at least three items in the stack"
         | StackBehaviour.PopAll ->
-            []
+            (stackTypes, [])
         | StackBehaviour.Varpop ->
             let methSigPopCount (methSig : IMethodSignature) =
-                let paramLen = uint32 methSig.Parameters.Count
+                let paramLen = methSig.Parameters.Count
                 if methSig.HasThis then
-                    paramLen + 1u
+                    paramLen + 1
                 else
                     paramLen
 
@@ -372,74 +381,176 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
                     methSigPopCount callSite
                 | Ret ->
                     match stackTypes with
-                    | [] -> 0u
-                    | [_] -> 1u
+                    | [] -> 0
+                    | [_] -> 1
                     | _ -> failwith "a ret instruction should only have 0 or 1 items on the stack"
                 | _ ->
                     failwithf "unexpected variable pop for instruction: %A" inst
 
-            let rec drop xs n =
-                if n = 0u then
-                    xs
-                else
-                    match xs with
-                    | x :: xt -> drop xt (n - 1u)
-                    | [] -> failwith "stack too low"
-            
-            drop stackTypes popCount
+            splitAt popCount stackTypes
 
         | _ ->
             failwithf "unexpected pop behavior %A" popB
 
-    member x.PushTypes (stackTypes : StackType list) =
+    member x.PushTypes (poppedTypes : StackType list) =
         match inst with
         | Add | Div | Mul | Rem | Sub ->
 
             // binary numeric operations defined in
             // Partition III 1.5
             // TODO: assuming valid bytecode here
-            match stackTypes with
-            | StackType.Int32 :: StackType.Int32 :: stackTail ->
-                StackType.Int32 :: stackTail
-
-            | StackType.ObjectRef :: StackType.ObjectRef :: stackTail ->
-                StackType.NativeInt :: stackTail
-
-            | _ :: StackType.ObjectRef :: stackTail
-            | StackType.ObjectRef :: _ :: stackTail ->
-                StackType.ObjectRef :: stackTail
-
-            | _ :: StackType.NativeInt :: stackTail
-            | StackType.NativeInt :: _ :: stackTail ->
-                StackType.NativeInt :: stackTail
-            
-            | StackType.Float64 :: _ :: stackTail
-            | _ :: StackType.Float64 :: stackTail ->
-                StackType.Float64 :: stackTail
-            
-            | StackType.Float32 :: _ :: stackTail
-            | _ :: StackType.Float32 :: stackTail ->
-                StackType.Float32 :: stackTail
-            
+            match poppedTypes with
+            | [StackType.Int32; StackType.Int32] ->
+                [StackType.Int32]
+            | [StackType.Float; StackType.Float] ->
+                [StackType.Float]
+            | [StackType.ManagedPointer; StackType.ManagedPointer] ->
+                [StackType.NativeInt]
+            | [_; StackType.ManagedPointer] | [StackType.ManagedPointer; _] ->
+                [StackType.ManagedPointer]
+            | [_; StackType.NativeInt] | [StackType.NativeInt; _] ->
+                [StackType.NativeInt]
             | _ ->
                 failwith "invalid stack for binary numeric operation"
 
+        | Neg | Not ->
+            poppedTypes
+        
+        // Binary Comparison or Branch Operations
+        // Used for beq, beq.s, bge, bge.s, bge.un, bge.un.s, bgt, bgt.s,
+        // bgt.un, bgt.un.s, ble, ble.s, ble.un, ble.un.s, blt, blt.s, blt.un,
+        // blt.un.s, bne.un, bne.un.s, ceq, cgt, cgt.un, clt, clt.un
+        | Beq _ | Bge _ | Bgt _ | Ble _ | Blt _
+        | BneUn _ | BgeUn _ | BgtUn _ | BleUn _ | BltUn _ ->
+            []
+        | Ceq | Cgt | CgtUn | Clt | CltUn ->
+            [StackType.Int32]
+        
+        // The shl and shr instructions return the same type as their first operand
+        // and their second operand shall be of type int32 or native int
+        | Shl | Shr | ShrUn ->
+            match poppedTypes with
+            | [StackType.Int32; fstOpType] | [StackType.NativeInt; fstOpType] ->
+                [fstOpType]
+            | _ ->
+                failwith "bad stack types for shift op"
+        
+        // Integer Operations: Used for and, div.un, not, or, rem.un, xor
+        // Note: I put Not with Neg above
+        | And | DivUn | Or | RemUn | Xor ->
+            match poppedTypes with
+            | [StackType.Int32; StackType.Int32] ->
+                [StackType.Int32]
+            | [StackType.Int64; StackType.Int64] ->
+                [StackType.Int64]
+            | [StackType.NativeInt; _] | [_; StackType.NativeInt] ->
+                [StackType.NativeInt]
+            | _ ->
+                failwith "bad stack types for integer op"
+        
+        // Overflow Arithmetic Operations: Used for add.ovf, add.ovf.un,
+        // mul.ovf, mul.ovf.un, sub.ovf, and sub.ovf.un
+        | AddOvf | AddOvfUn | MulOvf | MulOvfUn | SubOvf | SubOvfUn ->
+            match poppedTypes with
+            | [StackType.Int32; StackType.Int32] ->
+                [StackType.Int32]
+            | [StackType.Int64; StackType.Int64] ->
+                [StackType.Int64]
+            | [StackType.ManagedPointer; StackType.ManagedPointer] ->
+                [StackType.NativeInt]
+            | [_; StackType.ManagedPointer] | [StackType.ManagedPointer; _] ->
+                [StackType.ManagedPointer]
+            | [StackType.NativeInt; _] | [_; StackType.NativeInt] ->
+                [StackType.NativeInt]
+            | _ ->
+                failwith "bad stack types for overflow arithmetic op"
+
+        // data conversion
+        | ConvI1 | ConvI2 | ConvI4 | ConvU4 | ConvU2 | ConvU1
+        | ConvOvfI1 | ConvOvfU1 | ConvOvfI2 | ConvOvfU2 | ConvOvfI4 | ConvOvfU4
+        | ConvOvfI1Un | ConvOvfI2Un | ConvOvfI4Un | ConvOvfU1Un | ConvOvfU2Un | ConvOvfU4Un ->
+            [StackType.Int32]
+        | ConvI8 | ConvU8 | ConvOvfI8Un | ConvOvfU8Un | ConvOvfI8 | ConvOvfU8 ->
+            [StackType.Int64]
+        | ConvR4 | ConvR8 | ConvRUn ->
+            [StackType.Float]
+        | ConvI | ConvU | ConvOvfIUn | ConvOvfUUn | ConvOvfI | ConvOvfU ->
+            [StackType.NativeInt]
+
+        | Brfalse _ | Brtrue _ ->
+            match poppedTypes with
+            | [_] -> []
+            | _ -> failwith "unexpected stack state for brfalse or brtrue"
+
+        | Br _ ->
+            match poppedTypes with
+            | [] -> []
+            | _ -> failwith "bad stack state for br"
+
+        | LdindI1 _ | LdindU1 _ | LdindI2 _ | LdindU2 _ | LdindI4 _ | LdindU4 _ ->
+            match poppedTypes with
+            | [NativeInt] | [ManagedPointer] -> [StackType.Int32]
+            | _ -> failwith "bad stack types for ldindi4"
+        | LdindI8 _ ->
+            match poppedTypes with
+            | [NativeInt] | [ManagedPointer] -> [StackType.Int64]
+            | _ -> failwith "bad stack types for ldindi8"
+        | LdindI _ ->
+            match poppedTypes with
+            | [NativeInt] | [ManagedPointer] -> [StackType.NativeInt]
+            | _ -> failwith "bad stack types for ldindi"
+        | LdindR4 _ | LdindR8 _ ->
+            match poppedTypes with
+            | [NativeInt] | [ManagedPointer] -> [StackType.Float]
+            | _ -> failwith "bad stack types for ldindr4 or ldindr8"
+        | LdindRef _ ->
+            match poppedTypes with
+            | [NativeInt] | [ManagedPointer] -> [StackType.ObjectRef]
+            | _ -> failwith "bad stack types for ldindref"
+
+        | Break ->
+            match poppedTypes with
+            | [] -> []
+            | _ -> failwith "bad stack types for break"
+
+        | LdcI4 _ ->
+            match poppedTypes with
+            | [] -> [StackType.Int32]
+            | _ -> failwithf "bad stack types for %A" inst
+        | LdcI8 _ ->
+            match poppedTypes with
+            | [] -> [StackType.Int64]
+            | _ -> failwithf "bad stack types for %A" inst
+        | LdcR4 _ | LdcR8 _ ->
+            match poppedTypes with
+            | [] -> [StackType.Float]
+            | _ -> failwithf "bad stack types for %A" inst
+
+        | LdelemI1 | LdelemU1 | LdelemI2 | LdelemU2 | LdelemI4 | LdelemU4 ->
+            [StackType.Int32]
+        | LdelemI8 ->
+            [StackType.Int64]
+        | LdelemI ->
+            [StackType.NativeInt]
+        | LdelemR4 | LdelemR8 ->
+            [StackType.Float]
+        | LdelemRef ->
+            [StackType.ObjectRef]
+
+        | StelemI | StelemI1 | StelemI2 | StelemI4
+        | StelemI8 | StelemR4 | StelemR8 | StelemRef | Stelem _ ->
+            match poppedTypes with
+            | [_; StackType.Int32; StackType.ObjectRef]
+            | [_; StackType.NativeInt; StackType.ObjectRef] ->
+                []
+            | _ ->
+                failwithf "bad stack types for %A" inst
+
+        | StindRef _ | StindI1 _ | StindI2 _ | StindI4 _
+        | StindI8 _ | StindR4 _ | StindR8 _ | StindI _ ->
+            []
+
 (*
-        | And
-        | Beq of CodeBlock
-        | Bge of CodeBlock
-        | Bgt of CodeBlock
-        | Ble of CodeBlock
-        | Blt of CodeBlock
-        | BneUn of CodeBlock
-        | BgeUn of CodeBlock
-        | BgtUn of CodeBlock
-        | BleUn of CodeBlock
-        | BltUn of CodeBlock
-        | Br of CodeBlock
-        | Break
-        | Brfalse of CodeBlock
-        | Brtrue of CodeBlock
         
         // call* instructions all start with bool "tail." prefix indicator.
         // See: EMCA-335 Partition III 2.4
@@ -449,39 +560,15 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         // callvirt can also take a "constrained." prefix
         // See: EMCA-335 Partition III 2.1
         | Callvirt of bool * TypeReference option * MethodReference
-        | ConvI1
-        | ConvI2
-        | ConvI4
-        | ConvI8
-        | ConvR4
-        | ConvR8
-        | ConvU4
-        | ConvU8
         | Cpobj of TypeReference
-        | DivUn
         | Dup
         | Jmp of MethodReference
         | Ldarg of ParameterDefinition
         | Ldarga of ParameterDefinition
-        | LdcI4 of int
-        | LdcI8 of int64
-        | LdcR4 of single
-        | LdcR8 of double
         
         // ldind* instructions hold a byte option for the "unaligned." prefix
         // and a bool for the "volatile." prefix
         // See: EMCA-335 Partition III 2.5 & 2.6
-        | LdindI1 of byte option * bool
-        | LdindU1 of byte option * bool
-        | LdindI2 of byte option * bool
-        | LdindU2 of byte option * bool
-        | LdindI4 of byte option * bool
-        | LdindU4 of byte option * bool
-        | LdindI8 of byte option * bool
-        | LdindI of byte option * bool
-        | LdindR4 of byte option * bool
-        | LdindR8 of byte option * bool
-        | LdindRef of byte option * bool
         | Ldloc of VariableDefinition
         | Ldloca of VariableDefinition
         | Ldnull
@@ -491,35 +578,19 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         // See: EMCA-335 Partition III 2.5 & 2.6
         | Ldobj of byte option * bool * TypeReference
         | Ldstr of string
-        | Neg
         | Nop
-        | Not
         | Newobj of MethodReference
-        | Or
         | Pop
-        | RemUn
         | Ret
-        | Shl
-        | Shr
-        | ShrUn
         | Starg of ParameterDefinition
         
         // Stind* instructions hold a byte option for the "unaligned." prefix
         // and a bool for the "volatile." prefix
         // See: EMCA-335 Partition III 2.5 & 2.6
-        | StindRef of byte option * bool
-        | StindI1 of byte option * bool
-        | StindI2 of byte option * bool
-        | StindI4 of byte option * bool
-        | StindI8 of byte option * bool
-        | StindR4 of byte option * bool
-        | StindR8 of byte option * bool
         | Stloc of VariableDefinition
         | Switch of CodeBlock array
-        | Xor
         | Castclass of TypeReference
         | Isinst of TypeReference
-        | ConvRUn
         | Unbox of TypeReference
         | Throw
     
@@ -539,16 +610,6 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         // and a bool for the "volatile." prefix
         // See: EMCA-335 Partition III 2.5 & 2.6
         | Stobj of byte option * bool * TypeReference
-        | ConvOvfI1Un
-        | ConvOvfI2Un
-        | ConvOvfI4Un
-        | ConvOvfI8Un
-        | ConvOvfU1Un
-        | ConvOvfU2Un
-        | ConvOvfU4Un
-        | ConvOvfU8Un
-        | ConvOvfIUn
-        | ConvOvfUUn
         | Box of TypeReference
         | Newarr of TypeReference
         | Ldlen
@@ -557,65 +618,19 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         // "readonly." prefix
         // See: EMCA-335 Partition III 2.3
         | Ldelema of bool * TypeReference
-        | LdelemI1
-        | LdelemU1
-        | LdelemI2
-        | LdelemU2
-        | LdelemI4
-        | LdelemU4
-        | LdelemI8
-        | LdelemI
-        | LdelemR4
-        | LdelemR8
-        | LdelemRef
-        | StelemI
-        | StelemI1
-        | StelemI2
-        | StelemI4
-        | StelemI8
-        | StelemR4
-        | StelemR8
-        | StelemRef
         | Ldelem of TypeReference
-        | Stelem of TypeReference
         | UnboxAny of TypeReference
-        | ConvOvfI1
-        | ConvOvfU1
-        | ConvOvfI2
-        | ConvOvfU2
-        | ConvOvfI4
-        | ConvOvfU4
-        | ConvOvfI8
-        | ConvOvfU8
         | Refanyval of TypeReference
         | Ckfinite
         | Mkrefany of TypeReference
         | Ldtoken of IMetadataTokenProvider
-        | ConvU2
-        | ConvU1
-        | ConvI
-        | ConvOvfI
-        | ConvOvfU
-        | AddOvf
-        | AddOvfUn
-        | MulOvf
-        | MulOvfUn
-        | SubOvf
-        | SubOvfUn
         | Endfinally
         | Leave of CodeBlock
     
         // stindi instructions hold a byte option for the "unaligned." prefix
         // and a bool for the "volatile." prefix
         // See: EMCA-335 Partition III 2.5 & 2.6
-        | StindI of byte option * bool
-        | ConvU
         | Arglist
-        | Ceq
-        | Cgt
-        | CgtUn
-        | Clt
-        | CltUn
         | Ldftn of MethodReference
         | Ldvirtftn of MethodReference
         | Localloc

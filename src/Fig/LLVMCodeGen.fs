@@ -14,16 +14,6 @@ let nullableAsOption (n : System.Nullable<'a>) =
     else
         None
 
-let rec splitAt i xs =
-    if i = 0 then
-        ([], xs)
-    else
-        match xs with
-        | [] -> failwith "not enough elements for split"
-        | x :: xt ->
-            let splitFst, splitSnd = splitAt (i - 1) xt
-            (x :: splitFst, splitSnd)
-
 type FunMap = Map<string, Map<string , ValueRef>>
 
 type TypeHandleRef with
