@@ -35,6 +35,15 @@
     <DocumentationFile>bin\Release\fig.XML</DocumentationFile>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="LLVMFSharp">
+      <HintPath>LLVMFSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="Mono.Cecil">
+      <HintPath>Mono.Cecil.dll</HintPath>
+    </Reference>
+    <Reference Include="Mono.Cecil.Rocks">
+      <HintPath>Mono.Cecil.Rocks.dll</HintPath>
+    </Reference>
     <Reference Include="mscorlib" />
     <Reference Include="FSharp.Core" />
     <Reference Include="System" />
@@ -42,14 +51,11 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="src\Fig\AssemblyParser.fs">
-      <Link>AssemblyParser.fs</Link>
+    <Compile Include="src\Fig\CecilExt.fs">
+      <Link>CecilExt.fs</Link>
     </Compile>
-    <Compile Include="src\Fig\AbstractCode.fs">
-      <Link>AbstractCode.fs</Link>
-    </Compile>
-    <Compile Include="test\test.fs">
-      <Link>test.fs</Link>
+    <Compile Include="src\Fig\LLVMCodeGen.fs">
+      <Link>LLVMCodeGen.fs</Link>
     </Compile>
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\FSharp\1.0\Microsoft.FSharp.Targets" Condition="!Exists('$(MSBuildBinPath)\Microsoft.Build.Tasks.v4.0.dll')" />

@@ -695,6 +695,10 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         | Calli (_, callSite) ->
             asIntermediateType callSite.ReturnType :: stackTail
 
+        | Newobj methodRef ->
+            printfn "!!!!!!!! CONSTRUCTOR RETURN TYPE %A !!!!!!!!" (toSaferType methodRef.ReturnType)
+            asIntermediateType methodRef.DeclaringType :: stackTail
+
         | Cpobj _ ->
             match poppedTypes with
             | [(NativeInt | ManagedPointer); (NativeInt | ManagedPointer)] ->
@@ -721,6 +725,13 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             | _ ->
                 badStack ()
 
+        | Ldelem typeRef ->
+            match poppedTypes with
+            | [(StackType.Int32 | StackType.NativeInt); StackType.ObjectRef] ->
+                asIntermediateType typeRef :: stackTail
+            | _ ->
+                badStack ()
+
         | Ldarg paramDef ->
             match poppedTypes with
             | [] -> asIntermediateType paramDef.ParameterType :: stackTail
@@ -730,24 +741,70 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             match poppedTypes with
             | [] -> asIntermediateType varDef.VariableType :: stackTail
             | _ -> badStack ()
+
+        
+        | Ldobj (_, _, typeRef) ->
+            match poppedTypes with
+            | [(NativeInt | ManagedPointer)] -> asIntermediateType typeRef :: stackTail
+            | _ -> badStack ()
+
+        | Switch _ ->
+            stackTail
+
+        | Isinst _ | Castclass _ ->
+            match poppedTypes with
+            | [ObjectRef] -> ObjectRef :: stackTail
+            | _ -> badStack ()
+
+        | Ldfld (_, _, fieldRef) | Ldsfld (_, fieldRef) ->
+            match poppedTypes with
+            | [(ObjectRef | ManagedPointer | NativeInt)] ->
+                asIntermediateType fieldRef.FieldType :: stackTail
+            | _ ->
+                badStack ()
+
+        | Unbox typeRef ->
+            match poppedTypes with
+            | [ObjectRef] -> asIntermediateType typeRef :: stackTail
+            | _ -> badStack ()
+
+        | UnboxAny typeRef ->
+            match poppedTypes with
+            | [ObjectRef] -> asIntermediateType typeRef :: stackTail
+            | _ -> badStack ()
+
+        | Mkrefany typeRef ->
+            match poppedTypes with
+            | [(ManagedPointer | NativeInt)] -> ObjectRef :: stackTail
+            | _ -> badStack ()
+
+        | Refanyval typeRef ->
+            // Correct CIL ensures that typedRef is a valid typed reference (created by a previous call to mkrefany).
+            match poppedTypes with
+            | [ObjectRef] -> asIntermediateType typeRef :: stackTail
+            | _ -> badStack ()
+
+        | Ldtoken iMetadataTokenProvider ->
+            match poppedTypes with
+            | [] -> ObjectRef :: stackTail
+            | _ -> badStack ()
+
+        | Arglist ->
+            match poppedTypes with
+            | [] -> ObjectRef :: stackTail
+            | _ -> badStack ()
+
+        | Ldvirtftn _ ->
+            match poppedTypes with
+            | [ObjectRef] -> NativeInt :: stackTail
+            | _ -> badStack ()
+            
+        | Localloc ->
+            match poppedTypes, stackTail with
+            | ([(NativeInt | StackType.Int32)], []) -> [NativeInt]
+            | _ -> badStack ()
+
 (*
-        | Ldobj of byte option * bool * TypeReference
-        | Newobj of MethodReference
-        | Switch of CodeBlock array
-        | Castclass of TypeReference
-        | Isinst of TypeReference
-        | Unbox of TypeReference
-        | Ldfld of byte option * bool * FieldReference
-        | Ldsfld of bool * FieldReference
-        | Ldsflda of bool * FieldReference
-        | Ldelem of TypeReference
-        | UnboxAny of TypeReference
-        | Refanyval of TypeReference
-        | Mkrefany of TypeReference
-        | Ldtoken of IMetadataTokenProvider
-        | Arglist
-        | Ldvirtftn of MethodReference
-        | Localloc
         | Endfilter
         | Initobj of TypeReference
         | Cpblk
@@ -755,6 +812,8 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         | Rethrow
         | Sizeof of TypeReference
         | Refanytype
+
+        | Ldsflda of bool * FieldReference
 *)
 
 /// extend cecil's MethodBody class
