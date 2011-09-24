@@ -25,7 +25,6 @@ type StackType =
     | Float
     | ObjectRef
     | ManagedPointer
-//    | UnmanagedPointer
 
 /// a safer type reference
 type SaferTypeRef =
@@ -745,7 +744,7 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         
         | Ldobj (_, _, typeRef) ->
             match poppedTypes with
-            | [(NativeInt | ManagedPointer)] -> asIntermediateType typeRef :: stackTail
+            | [NativeInt | ManagedPointer] -> asIntermediateType typeRef :: stackTail
             | _ -> badStack ()
 
         | Switch _ ->
@@ -758,7 +757,7 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
 
         | Ldfld (_, _, fieldRef) | Ldsfld (_, fieldRef) ->
             match poppedTypes with
-            | [(ObjectRef | ManagedPointer | NativeInt)] ->
+            | [ObjectRef | ManagedPointer | NativeInt] ->
                 asIntermediateType fieldRef.FieldType :: stackTail
             | _ ->
                 badStack ()
@@ -775,13 +774,18 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
 
         | Mkrefany typeRef ->
             match poppedTypes with
-            | [(ManagedPointer | NativeInt)] -> ObjectRef :: stackTail
+            | [ManagedPointer | NativeInt] -> ObjectRef :: stackTail
             | _ -> badStack ()
 
         | Refanyval typeRef ->
             // Correct CIL ensures that typedRef is a valid typed reference (created by a previous call to mkrefany).
             match poppedTypes with
             | [ObjectRef] -> asIntermediateType typeRef :: stackTail
+            | _ -> badStack ()
+
+        | Refanytype ->
+            match poppedTypes with
+            | [ObjectRef] -> ObjectRef :: stackTail
             | _ -> badStack ()
 
         | Ldtoken iMetadataTokenProvider ->
@@ -801,20 +805,44 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             
         | Localloc ->
             match poppedTypes, stackTail with
-            | ([(NativeInt | StackType.Int32)], []) -> [NativeInt]
+            | [NativeInt | StackType.Int32], [] -> [NativeInt]
             | _ -> badStack ()
 
-(*
-        | Endfilter
-        | Initobj of TypeReference
-        | Cpblk
-        | Initblk of byte option * bool
-        | Rethrow
-        | Sizeof of TypeReference
-        | Refanytype
+        | Endfilter ->
+            match poppedTypes with
+            | [StackType.Int32] -> stackTail
+            | _ -> badStack ()
 
-        | Ldsflda of bool * FieldReference
-*)
+        | Initobj typeRef ->
+            match poppedTypes with
+            | [ManagedPointer | NativeInt] -> stackTail
+            | _ -> badStack ()
+
+        | Cpblk | Initblk _ ->
+            match poppedTypes with
+            | [StackType.Int32; (ManagedPointer | NativeInt); (ManagedPointer | NativeInt)] ->
+                stackTail
+            | _ ->
+                badStack ()
+
+        | Rethrow ->
+            match poppedTypes with
+            | [] -> stackTail
+            | _ -> badStack ()
+
+        | Sizeof _ ->
+            match poppedTypes with
+            | [] -> StackType.Int32 :: stackTail
+            | _ -> badStack ()
+
+        | Ldsflda (_, fieldRef) ->
+            match poppedTypes with
+            | [] ->
+                let fieldDef = fieldRef.Resolve ()
+                let pushType = if fieldDef.RVA = 0 then ManagedPointer else NativeInt
+                pushType :: stackTail
+            | _ ->
+                badStack ()
 
 /// extend cecil's MethodBody class
 type MethodBody with
