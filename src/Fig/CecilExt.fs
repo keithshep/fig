@@ -1264,5 +1264,26 @@ type MethodBody with
         for blockIndex in 0 .. basicBlocks.Length - 1 do
             basicBlocks.[blockIndex].Instructions <- readBlockInsts blockIndex
 
+        // fill in the initial stack types for all basic blocks
+        let alreadyInferredIDs = ref (Set.empty : int Set)
+        let rec inferSuccStackTypes (initTypes : StackType list) (bb : BasicBlock) =
+            if (!alreadyInferredIDs).Contains bb.OffsetBytes then
+                // since we've already inferred stack types for this basic block we
+                // just want to assert that the types are the same this time around
+                if initTypes <> bb.InitStackTypes then
+                    failwithf
+                        "missmatch in initial basic block stack types: %A vs %A"
+                        initTypes
+                        bb.InitStackTypes
+            else
+                bb.InitStackTypes <- initTypes
+                alreadyInferredIDs := (!alreadyInferredIDs).Add bb.OffsetBytes
+
+                let mutable nextInitTypes = initTypes
+                for inst in bb.Instructions do
+                    nextInitTypes <- inst.UpdateTypes nextInitTypes
+                List.iter (inferSuccStackTypes nextInitTypes) bb.Successors
+        inferSuccStackTypes [] basicBlocks.[0]
+
         basicBlocks
 
