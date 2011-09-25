@@ -57,6 +57,9 @@
     <Compile Include="src\Fig\LLVMCodeGen.fs">
       <Link>LLVMCodeGen.fs</Link>
     </Compile>
+    <Compile Include="test\CompileCIL.fs">
+      <Link>CompileCIL.fs</Link>
+    </Compile>
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\FSharp\1.0\Microsoft.FSharp.Targets" Condition="!Exists('$(MSBuildBinPath)\Microsoft.Build.Tasks.v4.0.dll')" />
   <Import Project="$(MSBuildExtensionsPath32)\..\Microsoft F#\v4.0\Microsoft.FSharp.Targets" Condition=" Exists('$(MSBuildBinPath)\Microsoft.Build.Tasks.v4.0.dll')" />

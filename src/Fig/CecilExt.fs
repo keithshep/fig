@@ -167,7 +167,7 @@ let asIntermediateType (t : TypeReference) =
 /// exited by the last instruction
 type BasicBlock (offsetBytes : int) =
     let mutable initStackTypes = [] : StackType list
-    let mutable instructions = [] : SaferInstruction list
+    let mutable instructions = [] : AnnotatedInstruction list
     
     /// the the types of the variables that should be on the stack when this
     /// block is run
@@ -186,7 +186,7 @@ type BasicBlock (offsetBytes : int) =
 
     /// determines all possible successors to this basic block
     member x.Successors =
-        match instructions.[instructions.Length - 1] with
+        match instructions.[instructions.Length - 1].Instruction with
         | Beq (ifBB, elseBB) | Bge (ifBB, elseBB) | Bgt (ifBB, elseBB)
         | Ble (ifBB, elseBB) | Blt (ifBB, elseBB) | BneUn (ifBB, elseBB)
         | BgeUn (ifBB, elseBB) | BgtUn (ifBB, elseBB) | BleUn (ifBB, elseBB)
@@ -1254,7 +1254,11 @@ type MethodBody with
             // to read the block we just iterate through instructions
             // using the nextInst function defined above
             [while !currInstIndex <= lstInstIndex do
-                yield nextInst None 0uy false false None false]
+                let saferInst = nextInst None 0uy false false None false
+                let lastCecilInst = insts.[!currInstIndex - 1]
+                let popB = lastCecilInst.OpCode.StackBehaviourPop
+                let pushB = lastCecilInst.OpCode.StackBehaviourPush
+                yield new AnnotatedInstruction(saferInst, popB, pushB)]
         
         // fill in the instructions property for all code blocks and return
         for blockIndex in 0 .. basicBlocks.Length - 1 do

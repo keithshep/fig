@@ -92,9 +92,9 @@ let rec genInstructions
         (typeHandles : Map<string, TypeHandleRef>)
         (funMap : FunMap)
         (blockMap : Map<int, BasicBlockRef>)
-        (ilBB : CodeBlock)
+        (ilBB : BasicBlock)
         (instStack : ValueRef list)
-        (insts : SaferInstruction list) =
+        (insts : AnnotatedInstruction list) =
 
     match insts with
     | [] -> ()
@@ -103,7 +103,7 @@ let rec genInstructions
             genInstructions bldr moduleRef methodVal args locals typeHandles funMap blockMap ilBB instStack instTail
         let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst)
 
-        match inst with
+        match inst.Instruction with
         | Add ->
             // The add instruction adds value2 to value1 and pushes the result
             // on the stack. Overflow is not detected for integral operations
