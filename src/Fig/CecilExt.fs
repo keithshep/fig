@@ -163,9 +163,9 @@ let asIntermediateType (t : TypeReference) =
     | Pinned pinnedType ->
         iHaveNoClue ()
 
-/// CodeBlock is used to break method body instructions into blocks where
-/// every branch or switch instruction should land on the start of a code block
-type CodeBlock (offsetBytes : int) =
+/// a basic block is always entered by the first instruction and
+/// exited by the last instruction
+type BasicBlock (offsetBytes : int) =
     let mutable initStackTypes = [] : StackType list
     let mutable instructions = [] : SaferInstruction list
     
@@ -180,31 +180,44 @@ type CodeBlock (offsetBytes : int) =
         with get () = instructions
         and set insts = instructions <- insts
     
-    member x.LastInst = instructions.[instructions.Length - 1]
-
     /// the offset in bytes is relative to the function body so it acts
     /// as a unique ID for a given block in a function
     member x.OffsetBytes = offsetBytes
+
+    /// determines all possible successors to this basic block
+    member x.Successors =
+        match instructions.[instructions.Length - 1] with
+        | Beq (ifBB, elseBB) | Bge (ifBB, elseBB) | Bgt (ifBB, elseBB)
+        | Ble (ifBB, elseBB) | Blt (ifBB, elseBB) | BneUn (ifBB, elseBB)
+        | BgeUn (ifBB, elseBB) | BgtUn (ifBB, elseBB) | BleUn (ifBB, elseBB)
+        | BltUn (ifBB, elseBB) | Brfalse (ifBB, elseBB) | Brtrue (ifBB, elseBB) ->
+            [ifBB; elseBB]
+        | Br bb | Leave bb ->
+            [bb]
+        | Switch (caseBBs, fallthroughBB) ->
+            fallthroughBB :: List.ofArray caseBBs
+        | _ ->
+            []
 
 /// A typesafe and simplified view of cecil's Instruction class
 /// See: ECMA-335 Partition III
 and SaferInstruction =
     | Add
     | And
-    | Beq of CodeBlock * CodeBlock
-    | Bge of CodeBlock * CodeBlock
-    | Bgt of CodeBlock * CodeBlock
-    | Ble of CodeBlock * CodeBlock
-    | Blt of CodeBlock * CodeBlock
-    | BneUn of CodeBlock * CodeBlock
-    | BgeUn of CodeBlock * CodeBlock
-    | BgtUn of CodeBlock * CodeBlock
-    | BleUn of CodeBlock * CodeBlock
-    | BltUn of CodeBlock * CodeBlock
-    | Br of CodeBlock
+    | Beq of BasicBlock * BasicBlock
+    | Bge of BasicBlock * BasicBlock
+    | Bgt of BasicBlock * BasicBlock
+    | Ble of BasicBlock * BasicBlock
+    | Blt of BasicBlock * BasicBlock
+    | BneUn of BasicBlock * BasicBlock
+    | BgeUn of BasicBlock * BasicBlock
+    | BgtUn of BasicBlock * BasicBlock
+    | BleUn of BasicBlock * BasicBlock
+    | BltUn of BasicBlock * BasicBlock
+    | Br of BasicBlock
     | Break
-    | Brfalse of CodeBlock * CodeBlock
-    | Brtrue of CodeBlock * CodeBlock
+    | Brfalse of BasicBlock * BasicBlock
+    | Brtrue of BasicBlock * BasicBlock
     
     // call* instructions all start with bool "tail." prefix indicator.
     // See: EMCA-335 Partition III 2.4
@@ -284,7 +297,7 @@ and SaferInstruction =
     | StindR8 of byte option * bool
     | Stloc of VariableDefinition
     | Sub
-    | Switch of CodeBlock array * CodeBlock
+    | Switch of BasicBlock array * BasicBlock
     | Xor
     | Castclass of TypeReference
     | Isinst of TypeReference
@@ -372,7 +385,7 @@ and SaferInstruction =
     | SubOvf
     | SubOvfUn
     | Endfinally
-    | Leave of CodeBlock
+    | Leave of BasicBlock
 
     // stindi instructions hold a byte option for the "unaligned." prefix
     // and a bool for the "volatile." prefix
@@ -869,7 +882,7 @@ type MethodBody with
     /// type-safe
     ///
     /// TODO: do something with x.ExceptionHandlers
-    member x.CodeBlocks =
+    member x.BasicBlocks =
         // SimplifyMacros will expand all "macro" instructions for us.
         // See: MethodBodyRocks.SimplifyMacros
         x.SimplifyMacros ()
@@ -908,14 +921,14 @@ type MethodBody with
     
         // code blocks will be determined by the destination instructions
         // of all branch instructions. Also always include the 1st instruction
-        let codeBlocks =
+        let basicBlocks =
             Set.ofSeq blockStartOffsets
             |> Array.ofSeq
             |> Array.sort
-            |> Array.map (fun offset -> new CodeBlock(offset))
+            |> Array.map (fun offset -> new BasicBlock(offset))
         
         // all of the remaining code in this function is for filling in the
-        // "Instructions" property for the codeBlocks we just created
+        // "Instructions" property for the BasicBlocks we just created
         
         let instOffsets = [|for inst in insts -> inst.Offset|]
         let indexOfInstAt offset =
@@ -925,7 +938,7 @@ type MethodBody with
             else
                 failwithf "bad instruction offset: %i" offset
         let blockInstStartIndexes =
-            [|for bl in codeBlocks -> indexOfInstAt bl.OffsetBytes|]
+            [|for bl in basicBlocks -> indexOfInstAt bl.OffsetBytes|]
         let blockInstCounts = [|
             for ii in 0 .. blockInstStartIndexes.Length - 1 do
                 let currStart = blockInstStartIndexes.[ii]
@@ -941,7 +954,7 @@ type MethodBody with
             let i = indexOfInstAt inst.Offset
             let bIndex = System.Array.BinarySearch (blockInstStartIndexes, i)
             if bIndex >= 0 then
-                codeBlocks.[bIndex]
+                basicBlocks.[bIndex]
             else
                 failwithf "there is no block starting at instruction index %i" i
         
@@ -974,7 +987,7 @@ type MethodBody with
                 let inst = insts.[!currInstIndex]
                 currInstIndex := !currInstIndex + 1
                 
-                let brDestCodeBlock () =
+                let brDestBasicBlock () =
                     blockForInst (inst.Operand :?> Instruction)
                 
                 match inst.OpCode.Code with
@@ -991,24 +1004,24 @@ type MethodBody with
                 | Code.Call -> Call (tailPrefix, inst.Operand :?> MethodReference)
                 | Code.Calli -> Calli (tailPrefix, inst.Operand :?> CallSite)
                 | Code.Ret -> Ret
-                | Code.Br -> Br <| brDestCodeBlock ()
-                | Code.Brfalse -> Brfalse (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Brtrue -> Brtrue (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Beq -> Beq (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Bge -> Bge (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Bgt -> Bgt (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Ble -> Ble (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Blt -> Blt (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Bne_Un -> BneUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Bge_Un -> BgeUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Bgt_Un -> BgtUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Ble_Un -> BleUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
-                | Code.Blt_Un -> BltUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Br -> Br <| brDestBasicBlock ()
+                | Code.Brfalse -> Brfalse (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Brtrue -> Brtrue (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Beq -> Beq (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Bge -> Bge (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Bgt -> Bgt (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Ble -> Ble (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Blt -> Blt (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Bne_Un -> BneUn (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Bge_Un -> BgeUn (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Bgt_Un -> BgtUn (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Ble_Un -> BleUn (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
+                | Code.Blt_Un -> BltUn (brDestBasicBlock (), basicBlocks.[blockIndex + 1])
                 | Code.Switch ->
                     let destBlocks =
                         [|for destInst in inst.Operand :?> Instruction array do
                             yield blockForInst destInst|]
-                    Switch (destBlocks, codeBlocks.[blockIndex + 1])
+                    Switch (destBlocks, basicBlocks.[blockIndex + 1])
                 | Code.Ldind_I1 -> LdindI1 (unalignedPrefix, volatilePrefix)
                 | Code.Ldind_U1 -> LdindU1 (unalignedPrefix, volatilePrefix)
                 | Code.Ldind_I2 -> LdindI2 (unalignedPrefix, volatilePrefix)
@@ -1127,7 +1140,7 @@ type MethodBody with
                 | Code.Sub_Ovf -> SubOvf
                 | Code.Sub_Ovf_Un -> SubOvfUn
                 | Code.Endfinally -> Endfinally
-                | Code.Leave -> Leave <| brDestCodeBlock ()
+                | Code.Leave -> Leave <| brDestBasicBlock ()
                 | Code.Stind_I -> StindI (unalignedPrefix, volatilePrefix)
                 | Code.Conv_U -> ConvU
                 | Code.Arglist -> Arglist
@@ -1244,8 +1257,8 @@ type MethodBody with
                 yield nextInst None 0uy false false None false]
         
         // fill in the instructions property for all code blocks and return
-        for blockIndex in 0 .. codeBlocks.Length - 1 do
-            codeBlocks.[blockIndex].Instructions <- readBlockInsts blockIndex
+        for blockIndex in 0 .. basicBlocks.Length - 1 do
+            basicBlocks.[blockIndex].Instructions <- readBlockInsts blockIndex
 
-        codeBlocks
+        basicBlocks
 

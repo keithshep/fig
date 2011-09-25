@@ -824,7 +824,7 @@ let genMethodBody
     for i = 0 to args.Length - 1 do
         buildStore bldr (getParam methodVal (uint32 i)) args.[i] |> ignore
     let locals = Array.map (genLocal bldr typeHandles) (Array.ofSeq md.Body.Variables)
-    let blocks = md.Body.CodeBlocks
+    let blocks = md.Body.BasicBlocks
     let blockDecs =
         [for b in blocks do
             let blockName = "block_" + string b.OffsetBytes
