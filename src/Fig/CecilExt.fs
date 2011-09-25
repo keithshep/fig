@@ -166,13 +166,22 @@ let asIntermediateType (t : TypeReference) =
 /// CodeBlock is used to break method body instructions into blocks where
 /// every branch or switch instruction should land on the start of a code block
 type CodeBlock (offsetBytes : int) =
+    let mutable initStackTypes = [] : StackType list
     let mutable instructions = [] : SaferInstruction list
     
+    /// the the types of the variables that should be on the stack when this
+    /// block is run
+    member x.InitStackTypes
+        with get () = initStackTypes
+        and set tys = initStackTypes <- tys
+
     /// the instructions in this code block
     member x.Instructions
         with get () = instructions
         and set insts = instructions <- insts
     
+    member x.LastInst = instructions.[instructions.Length - 1]
+
     /// the offset in bytes is relative to the function body so it acts
     /// as a unique ID for a given block in a function
     member x.OffsetBytes = offsetBytes
@@ -182,20 +191,20 @@ type CodeBlock (offsetBytes : int) =
 and SaferInstruction =
     | Add
     | And
-    | Beq of CodeBlock
-    | Bge of CodeBlock
-    | Bgt of CodeBlock
-    | Ble of CodeBlock
-    | Blt of CodeBlock
-    | BneUn of CodeBlock
-    | BgeUn of CodeBlock
-    | BgtUn of CodeBlock
-    | BleUn of CodeBlock
-    | BltUn of CodeBlock
+    | Beq of CodeBlock * CodeBlock
+    | Bge of CodeBlock * CodeBlock
+    | Bgt of CodeBlock * CodeBlock
+    | Ble of CodeBlock * CodeBlock
+    | Blt of CodeBlock * CodeBlock
+    | BneUn of CodeBlock * CodeBlock
+    | BgeUn of CodeBlock * CodeBlock
+    | BgtUn of CodeBlock * CodeBlock
+    | BleUn of CodeBlock * CodeBlock
+    | BltUn of CodeBlock * CodeBlock
     | Br of CodeBlock
     | Break
-    | Brfalse of CodeBlock
-    | Brtrue of CodeBlock
+    | Brfalse of CodeBlock * CodeBlock
+    | Brtrue of CodeBlock * CodeBlock
     
     // call* instructions all start with bool "tail." prefix indicator.
     // See: EMCA-335 Partition III 2.4
@@ -275,7 +284,7 @@ and SaferInstruction =
     | StindR8 of byte option * bool
     | Stloc of VariableDefinition
     | Sub
-    | Switch of CodeBlock array
+    | Switch of CodeBlock array * CodeBlock
     | Xor
     | Castclass of TypeReference
     | Isinst of TypeReference
@@ -937,7 +946,7 @@ type MethodBody with
                 failwithf "there is no block starting at instruction index %i" i
         
         // creates a single code block of instructions
-        let readBlock (blockIndex : int) =
+        let readBlockInsts (blockIndex : int) =
             let fstInstIndex = blockInstStartIndexes.[blockIndex]
             let fstInst = insts.[fstInstIndex]
             let lstInstIndex = fstInstIndex + blockInstCounts.[blockIndex] - 1
@@ -983,23 +992,23 @@ type MethodBody with
                 | Code.Calli -> Calli (tailPrefix, inst.Operand :?> CallSite)
                 | Code.Ret -> Ret
                 | Code.Br -> Br <| brDestCodeBlock ()
-                | Code.Brfalse -> Brfalse <| brDestCodeBlock ()
-                | Code.Brtrue -> Brtrue <| brDestCodeBlock ()
-                | Code.Beq -> Beq <| brDestCodeBlock ()
-                | Code.Bge -> Bge <| brDestCodeBlock ()
-                | Code.Bgt -> Bgt <| brDestCodeBlock ()
-                | Code.Ble -> Ble <| brDestCodeBlock ()
-                | Code.Blt -> Blt <| brDestCodeBlock ()
-                | Code.Bne_Un -> BneUn <| brDestCodeBlock ()
-                | Code.Bge_Un -> BgeUn <| brDestCodeBlock ()
-                | Code.Bgt_Un -> BgtUn <| brDestCodeBlock ()
-                | Code.Ble_Un -> BleUn <| brDestCodeBlock ()
-                | Code.Blt_Un -> BltUn <| brDestCodeBlock ()
+                | Code.Brfalse -> Brfalse (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Brtrue -> Brtrue (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Beq -> Beq (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Bge -> Bge (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Bgt -> Bgt (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Ble -> Ble (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Blt -> Blt (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Bne_Un -> BneUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Bge_Un -> BgeUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Bgt_Un -> BgtUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Ble_Un -> BleUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
+                | Code.Blt_Un -> BltUn (brDestCodeBlock (), codeBlocks.[blockIndex + 1])
                 | Code.Switch ->
                     let destBlocks =
                         [|for destInst in inst.Operand :?> Instruction array do
                             yield blockForInst destInst|]
-                    Switch destBlocks
+                    Switch (destBlocks, codeBlocks.[blockIndex + 1])
                 | Code.Ldind_I1 -> LdindI1 (unalignedPrefix, volatilePrefix)
                 | Code.Ldind_U1 -> LdindU1 (unalignedPrefix, volatilePrefix)
                 | Code.Ldind_I2 -> LdindI2 (unalignedPrefix, volatilePrefix)
@@ -1212,48 +1221,18 @@ type MethodBody with
                             tailPrefix
                             unalignedPrefix
                             volatilePrefix
-                | Code.Ldarg_0
-                | Code.Ldarg_1
-                | Code.Ldarg_2
-                | Code.Ldarg_3
-                | Code.Ldloc_0
-                | Code.Ldloc_1
-                | Code.Ldloc_2
-                | Code.Ldloc_3
-                | Code.Stloc_0
-                | Code.Stloc_1
-                | Code.Stloc_2
-                | Code.Stloc_3
-                | Code.Ldarg_S
-                | Code.Ldarga_S
-                | Code.Starg_S
-                | Code.Ldloc_S
-                | Code.Ldloca_S
-                | Code.Stloc_S
-                | Code.Ldc_I4_M1
-                | Code.Ldc_I4_0
-                | Code.Ldc_I4_1
-                | Code.Ldc_I4_2
-                | Code.Ldc_I4_3
-                | Code.Ldc_I4_4
-                | Code.Ldc_I4_5
-                | Code.Ldc_I4_6
-                | Code.Ldc_I4_7
-                | Code.Ldc_I4_8
-                | Code.Ldc_I4_S
-                | Code.Br_S
-                | Code.Brfalse_S
-                | Code.Brtrue_S
-                | Code.Beq_S
-                | Code.Bge_S
-                | Code.Bgt_S
-                | Code.Ble_S
-                | Code.Blt_S
-                | Code.Bne_Un_S
-                | Code.Bge_Un_S
-                | Code.Bgt_Un_S
-                | Code.Ble_Un_S
-                | Code.Blt_Un_S
+                | Code.Ldarg_0 | Code.Ldarg_1 | Code.Ldarg_2 | Code.Ldarg_3
+                | Code.Ldloc_0 | Code.Ldloc_1 | Code.Ldloc_2 | Code.Ldloc_3
+                | Code.Stloc_0 | Code.Stloc_1 | Code.Stloc_2 | Code.Stloc_3
+                | Code.Ldarg_S | Code.Ldarga_S | Code.Starg_S | Code.Ldloc_S
+                | Code.Ldloca_S | Code.Stloc_S
+                | Code.Ldc_I4_M1 | Code.Ldc_I4_0 | Code.Ldc_I4_1 | Code.Ldc_I4_2
+                | Code.Ldc_I4_3 | Code.Ldc_I4_4 | Code.Ldc_I4_5 | Code.Ldc_I4_6
+                | Code.Ldc_I4_7 | Code.Ldc_I4_8 | Code.Ldc_I4_S
+                | Code.Br_S | Code.Brfalse_S | Code.Brtrue_S
+                | Code.Beq_S | Code.Bge_S | Code.Bgt_S | Code.Ble_S | Code.Blt_S
+                | Code.Bne_Un_S | Code.Bge_Un_S | Code.Bgt_Un_S
+                | Code.Ble_Un_S | Code.Blt_Un_S
                 | Code.Leave_S ->
                     failwithf "this instruction should have been removed by cecil MethodBodyRocks.SimplifyMacros: %A" inst.OpCode.Code
                 | _ ->
@@ -1266,6 +1245,7 @@ type MethodBody with
         
         // fill in the instructions property for all code blocks and return
         for blockIndex in 0 .. codeBlocks.Length - 1 do
-            codeBlocks.[blockIndex].Instructions <- readBlock blockIndex
+            codeBlocks.[blockIndex].Instructions <- readBlockInsts blockIndex
+
         codeBlocks
 
