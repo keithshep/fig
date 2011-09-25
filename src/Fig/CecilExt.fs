@@ -869,23 +869,38 @@ type MethodBody with
         // collection of all branch destinations (from switch and br instructions)
         // these will be used to figure out where our code blocks start
         // and stop
-        let branchDestOffsets = seq {
-            for inst in insts do
+        //
+        // TODO this is incomplete. need to consider exceptions
+        let blockStartOffsets = seq {
+            yield 0
+            for i in 0 .. insts.Length - 1 do
+                let inst = insts.[i]
+
+                // if this is a branch, switch or return the next instruction is
+                // a block start
+                if i + 1 < insts.Length then
+                    match inst.OpCode.FlowControl with
+                    | FlowControl.Branch | FlowControl.Cond_Branch
+                    | FlowControl.Return (* | FlowControl.Throw *) ->
+                        yield insts.[i + 1].Offset
+                    | _ ->
+                        ()
+
+                // add any branch or switch targets
                 match inst.OpCode.OperandType with
-                | OperandType.ShortInlineBrTarget
-                | OperandType.InlineBrTarget ->
+                | OperandType.ShortInlineBrTarget | OperandType.InlineBrTarget ->
                     let destInst = inst.Operand :?> Instruction
                     yield destInst.Offset
                 | OperandType.InlineSwitch ->
                     for destInst in inst.Operand :?> Instruction array do
                         yield destInst.Offset
-                | _ -> ()}
+                | _ ->
+                    ()}
     
         // code blocks will be determined by the destination instructions
         // of all branch instructions. Also always include the 1st instruction
         let codeBlocks =
-            Set.ofSeq branchDestOffsets
-            |> Set.add 0
+            Set.ofSeq blockStartOffsets
             |> Array.ofSeq
             |> Array.sort
             |> Array.map (fun offset -> new CodeBlock(offset))
