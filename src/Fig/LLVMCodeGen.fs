@@ -14,17 +14,10 @@ let nullableAsOption (n : System.Nullable<'a>) =
     else
         None
 
-type FunMap = Map<string, Map<string , ValueRef>>
+type FunMap = Map<string , ValueRef>
 
 type TypeHandleRef with
     member x.ResolvedType with get () = resolveTypeHandle x
-
-(*
-type JointTypeDef (td : TypeDefinition, tyHandle : TypeHandleRef) =
-    member x.CILType with get() = td
-    member x.LLVMType with get() = resolveTypeHandle tyHandle
-    member x.LLVMTypeHandle with get() = tyHandle
-*)
 
 let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReference) =
     let noImpl () = failwithf "no impl for %A type yet" ty.MetadataType
@@ -47,11 +40,11 @@ let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReferenc
     | Single -> noImpl ()
     | Double -> doubleType ()
     | String
-    | Pointer _ // PointerType
-    | ByReference _ // ByReferenceType
-    | ValueType _ // TypeReference
-    | Class _ // TypeReference
-    | Var _ -> // GenericParameter
+    | Pointer _
+    | ByReference _
+    | ValueType _
+    | Class _
+    | Var _ ->
         noImpl ()
     | Array arrTy ->
         if arrTy.Rank = 1 then
@@ -70,17 +63,17 @@ let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReferenc
                 failwith "dont know how to deal with given array shape yet"
         else
             failwithf "arrays of rank %i not yet implemented" arrTy.Rank
-    | GenericInstance _ // GenericInstanceType
+    | GenericInstance _
     | TypedByReference
     | IntPtr
     | UIntPtr
-    | FunctionPointer _ // FunctionPointerType
+    | FunctionPointer _
     | Object
-    | MVar _ // GenericParameter
-    | RequiredModifier _ // RequiredModifierType
-    | OptionalModifier _ // OptionalModifierType
-    | Sentinel _ // SentinelType
-    | Pinned _ -> // PinnedType
+    | MVar _
+    | RequiredModifier _
+    | OptionalModifier _
+    | Sentinel _
+    | Pinned _ ->
         noImpl ()
 
 let rec genInstructions
@@ -104,6 +97,7 @@ let rec genInstructions
         let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst)
 
         match inst.Instruction with
+        // Basic
         | Add ->
             // The add instruction adds value2 to value1 and pushes the result
             // on the stack. Overflow is not detected for integral operations
@@ -121,243 +115,10 @@ let rec genInstructions
                 goNext (addResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
-        | _ -> noImpl ()
-        (*
-        | And
-        | Beq of CodeBlock
-        | Bge of CodeBlock
-        | Bgt of CodeBlock
-        | Ble of CodeBlock
-        | Blt of CodeBlock
-        | BneUn of CodeBlock
-        | BgeUn of CodeBlock
-        | BgtUn of CodeBlock
-        | BleUn of CodeBlock
-        | BltUn of CodeBlock
-        | Br of CodeBlock
-        | Break
-        | Brfalse of CodeBlock
-        | Brtrue of CodeBlock
-        
-        // call* instructions all start with bool "tail." prefix indicator.
-        // See: EMCA-335 Partition III 2.4
-        | Call of bool * MethodReference
-        | Calli of bool * CallSite
-        
-        // callvirt can also take a "constrained." prefix
-        // See: EMCA-335 Partition III 2.1
-        | Callvirt of bool * TypeReference option * MethodReference
-        | ConvI1
-        | ConvI2
-        | ConvI4
-        | ConvI8
-        | ConvR4
-        | ConvR8
-        | ConvU4
-        | ConvU8
-        | Cpobj of TypeReference
-        | Div
-        | DivUn
-        | Dup
-        | Jmp of MethodReference
-        | Ldarg of ParameterDefinition
-        | Ldarga of ParameterDefinition
-        | LdcI4 of int
-        | LdcI8 of int64
-        | LdcR4 of single
-        | LdcR8 of double
-        
-        // ldind* instructions hold a byte option for the "unaligned." prefix
-        // and a bool for the "volatile." prefix
-        // See: EMCA-335 Partition III 2.5 & 2.6
-        | LdindI1 of byte option * bool
-        | LdindU1 of byte option * bool
-        | LdindI2 of byte option * bool
-        | LdindU2 of byte option * bool
-        | LdindI4 of byte option * bool
-        | LdindU4 of byte option * bool
-        | LdindI8 of byte option * bool
-        | LdindI of byte option * bool
-        | LdindR4 of byte option * bool
-        | LdindR8 of byte option * bool
-        | LdindRef of byte option * bool
-        | Ldloc of VariableDefinition
-        | Ldloca of VariableDefinition
-        | Ldnull
-    
-        // Ldobj instruction hold a byte option for the "unaligned." prefix
-        // and a bool for the "volatile." prefix
-        // See: EMCA-335 Partition III 2.5 & 2.6
-        | Ldobj of byte option * bool * TypeReference
-        | Ldstr of string
-        | Mul
-        | Neg
-        | Nop
-        | Not
-        | Newobj of MethodReference
-        | Or
-        | Pop
-        | Rem
-        | RemUn
-        | Ret
-        | Shl
-        | Shr
-        | ShrUn
-        | Starg of ParameterDefinition
-        
-        // Stind* instructions hold a byte option for the "unaligned." prefix
-        // and a bool for the "volatile." prefix
-        // See: EMCA-335 Partition III 2.5 & 2.6
-        | StindRef of byte option * bool
-        | StindI1 of byte option * bool
-        | StindI2 of byte option * bool
-        | StindI4 of byte option * bool
-        | StindI8 of byte option * bool
-        | StindR4 of byte option * bool
-        | StindR8 of byte option * bool
-        | Stloc of VariableDefinition
-        | Sub
-        | Switch of CodeBlock array
-        | Xor
-        | Castclass of TypeReference
-        | Isinst of TypeReference
-        | ConvRUn
-        | Unbox of TypeReference
-        | Throw
-    
-        // ldfld*/stfld instructions hold a byte option for the "unaligned." prefix
-        // and a bool for the "volatile." prefix
-        // See: EMCA-335 Partition III 2.5 & 2.6
-        | Ldfld of byte option * bool * FieldReference
-        | Ldflda of byte option * bool * FieldReference
-        | Stfld of byte option * bool * FieldReference
-        
-        // ldsfld*/stsfld instructions hold a bool indicator for the "volatile." prefix
-        | Ldsfld of bool * FieldReference
-        | Ldsflda of bool * FieldReference
-        | Stsfld of bool * FieldReference
-        
-        // stobj instruction holds a byte option for the "unaligned." prefix
-        // and a bool for the "volatile." prefix
-        // See: EMCA-335 Partition III 2.5 & 2.6
-        | Stobj of byte option * bool * TypeReference
-        | ConvOvfI1Un
-        | ConvOvfI2Un
-        | ConvOvfI4Un
-        | ConvOvfI8Un
-        | ConvOvfU1Un
-        | ConvOvfU2Un
-        | ConvOvfU4Un
-        | ConvOvfU8Un
-        | ConvOvfIUn
-        | ConvOvfUUn
-        | Box of TypeReference
-        | Newarr of TypeReference
-        | Ldlen
-        
-        // ldelema instruction holds a bool to indicate that it is preceded by a
-        // "readonly." prefix
-        // See: EMCA-335 Partition III 2.3
-        | Ldelema of bool * TypeReference
-        | LdelemI1
-        | LdelemU1
-        | LdelemI2
-        | LdelemU2
-        | LdelemI4
-        | LdelemU4
-        | LdelemI8
-        | LdelemI
-        | LdelemR4
-        | LdelemR8
-        | LdelemRef
-        | StelemI
-        | StelemI1
-        | StelemI2
-        | StelemI4
-        | StelemI8
-        | StelemR4
-        | StelemR8
-        | StelemRef
-        | Ldelem of TypeReference
-        | Stelem of TypeReference
-        | UnboxAny of TypeReference
-        | ConvOvfI1
-        | ConvOvfU1
-        | ConvOvfI2
-        | ConvOvfU2
-        | ConvOvfI4
-        | ConvOvfU4
-        | ConvOvfI8
-        | ConvOvfU8
-        | Refanyval of TypeReference
-        | Ckfinite
-        | Mkrefany of TypeReference
-        | Ldtoken of IMetadataTokenProvider
-        | ConvU2
-        | ConvU1
-        | ConvI
-        | ConvOvfI
-        | ConvOvfU
-        | AddOvf
-        | AddOvfUn
-        | MulOvf
-        | MulOvfUn
-        | SubOvf
-        | SubOvfUn
-        | Endfinally
-        | Leave of CodeBlock
-    
-        // stindi instructions hold a byte option for the "unaligned." prefix
-        // and a bool for the "volatile." prefix
-        // See: EMCA-335 Partition III 2.5 & 2.6
-        | StindI of byte option * bool
-        | ConvU
-        | Arglist
-        | Ceq
-        | Cgt
-        | CgtUn
-        | Clt
-        | CltUn
-        | Ldftn of MethodReference
-        | Ldvirtftn of MethodReference
-        | Localloc
-        | Endfilter
-        | Initobj of TypeReference
-        | Cpblk
-    
-        // initblk instructions hold a byte option for the "unaligned." prefix
-        // and a bool for the "volatile." prefix
-        // See: EMCA-335 Partition III 2.5 & 2.6
-        | Initblk of byte option * bool
-        | Rethrow
-        | Sizeof of TypeReference
-        | Refanytype
-        *)
-
-(*
-        match inst with
-        // Basic
-        | AI_add ->
-            // The add instruction adds value2 to value1 and pushes the result
-            // on the stack. Overflow is not detected for integral operations
-            // (but see add.ovf); floating-point overflow returns +inf or -inf.
-            match instStack with
-            | value2 :: value1 :: stackTail ->
-                let addResult =
-                    match getTypeKind <| typeOf value1 with
-                    | TypeKind.FloatTypeKind | TypeKind.DoubleTypeKind ->
-                        buildFAdd bldr value1 value2 "tmpFAdd"
-                    | TypeKind.IntegerTypeKind ->
-                        buildAdd bldr value1 value2 "tmpAdd"
-                    | ty ->
-                        failwith (sprintf "don't know how to add type: %A" ty)
-                goNext (addResult :: stackTail)
-            | _ ->
-                failwith "instruction stack too low"
-        | AI_add_ovf
-        | AI_add_ovf_un
-        | AI_and -> noImpl ()
-        | AI_div ->
+        | AddOvf -> noImpl ()
+        | AddOvfUn -> noImpl ()
+        | And -> noImpl ()
+        | Div ->
             match instStack with
             | value2 :: value1 :: stackTail ->
                 let divResult =
@@ -371,59 +132,79 @@ let rec genInstructions
                 goNext (divResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
-        | AI_div_un
-        | AI_ceq
-        | AI_cgt
-        | AI_cgt_un
-        | AI_clt
-        | AI_clt_un -> noImpl ()
-        | AI_conv basicType -> //of ILBasicType
-            match basicType with
-            | DT_R
-            | DT_I1
-            | DT_U1
-            | DT_I2
-            | DT_U2 -> noImpl ()
-            | DT_I4 ->
-                match instStack with
-                | stackHead :: stackTail ->
-                    let headType = typeOf stackHead
-                    match getTypeKind headType with
-                    | TypeKind.IntegerTypeKind ->
-                        if getIntTypeWidth headType = 32u then
-                            goNext instStack
-                        else
-                            failwith "not 32u"
-                    | _ ->
-                        failwith "not an int kind"
+        | DivUn -> noImpl ()
+        | Ceq -> noImpl ()
+        | Cgt -> noImpl ()
+        | CgtUn -> noImpl ()
+        | Clt -> noImpl ()
+        | CltUn -> noImpl ()
+        | ConvI1 -> noImpl ()
+        | ConvI2 ->
+            noImpl ()
+        | ConvI4 ->
+            match instStack with
+            | stackHead :: stackTail ->
+                let headType = typeOf stackHead
+                match getTypeKind headType with
+                | TypeKind.IntegerTypeKind ->
+                    if getIntTypeWidth headType = 32u then
+                        goNext instStack
+                    else
+                        failwith "not 32u"
                 | _ ->
-                    failwith "instruction stack too low"
-            | DT_U4
-            | DT_I8
-            | DT_U8
-            | DT_R4 -> noImpl ()
-            | DT_R8 ->
-                match instStack with
-                | stackHead :: stackTail ->
-                    let headType = typeOf stackHead
-                    match getTypeKind headType with
-                    | TypeKind.IntegerTypeKind ->
-                        if getIntTypeWidth headType = 32u then
-                            // FIXME don't really know if it's signed or unsigned here
-                            let convVal = buildSIToFP bldr stackHead (doubleType ()) "convVal"
-                            goNext (convVal :: stackTail)
-                        else
-                            failwith "not 32u"
-                    | _ ->
-                        failwith "not an int kind"
+                    failwith "not an int kind"
+            | _ ->
+                failwith "instruction stack too low"
+        | ConvI8 -> noImpl ()
+        | ConvR4 ->
+            noImpl ()
+        | ConvR8 ->
+            match instStack with
+            | stackHead :: stackTail ->
+                let headType = typeOf stackHead
+                match getTypeKind headType with
+                | TypeKind.IntegerTypeKind ->
+                    if getIntTypeWidth headType = 32u then
+                        // FIXME don't really know if it's signed or unsigned here
+                        let convVal = buildSIToFP bldr stackHead (doubleType ()) "convVal"
+                        goNext (convVal :: stackTail)
+                    else
+                        failwith "not 32u"
                 | _ ->
-                    failwith "instruction stack too low"
-            | DT_I
-            | DT_U
-            | DT_REF -> noImpl ()
-        | AI_conv_ovf _  //of ILBasicType
-        | AI_conv_ovf_un _ -> noImpl ()  //of ILBasicType
-        | AI_mul ->
+                    failwith "not an int kind"
+            | _ ->
+                failwith "instruction stack too low"
+        | ConvU4 -> noImpl ()
+        | ConvU8 -> noImpl ()
+        | ConvU2 -> noImpl ()
+        | ConvU1 -> noImpl ()
+        | ConvI -> noImpl ()
+        | ConvU -> noImpl ()
+
+        | ConvRUn -> noImpl ()
+
+        | ConvOvfI1Un -> noImpl ()
+        | ConvOvfI2Un -> noImpl ()
+        | ConvOvfI4Un -> noImpl ()
+        | ConvOvfI8Un -> noImpl ()
+        | ConvOvfU1Un -> noImpl ()
+        | ConvOvfU2Un -> noImpl ()
+        | ConvOvfU4Un -> noImpl ()
+        | ConvOvfU8Un -> noImpl ()
+        | ConvOvfIUn -> noImpl ()
+        | ConvOvfUUn -> noImpl ()
+
+        | ConvOvfI1 -> noImpl ()
+        | ConvOvfU1 -> noImpl ()
+        | ConvOvfI2 -> noImpl ()
+        | ConvOvfU2 -> noImpl ()
+        | ConvOvfI4 -> noImpl ()
+        | ConvOvfU4 -> noImpl ()
+        | ConvOvfI8 -> noImpl ()
+        | ConvOvfU8 -> noImpl ()
+        | ConvOvfI -> noImpl ()
+        | ConvOvfU -> noImpl ()
+        | Mul ->
             // The mul instruction multiplies value1 by value2 and pushes
             // the result on the stack. Integral operations silently 
             // truncate the upper bits on overflow (see mul.ovf).
@@ -441,14 +222,14 @@ let rec genInstructions
                 goNext (mulResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
-        | AI_mul_ovf
-        | AI_mul_ovf_un
-        | AI_rem
-        | AI_rem_un
-        | AI_shl
-        | AI_shr
-        | AI_shr_un -> noImpl ()
-        | AI_sub ->
+        | MulOvf -> noImpl ()
+        | MulOvfUn -> noImpl ()
+        | Rem -> noImpl ()
+        | RemUn -> noImpl ()
+        | Shl -> noImpl ()
+        | Shr -> noImpl ()
+        | ShrUn -> noImpl ()
+        | Sub ->
             // The sub instruction subtracts value2 from value1 and pushes the
             // result on the stack. Overflow is not detected for the integral
             // operations (see sub.ovf); for floating-point operands, sub
@@ -467,243 +248,206 @@ let rec genInstructions
                 goNext (subResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
-        | AI_sub_ovf
-        | AI_sub_ovf_un
-        | AI_xor
-        | AI_or
-        | AI_neg
-        | AI_not
-        | AI_ldnull
-        | AI_dup
-        | AI_pop
-        | AI_ckfinite
-        | AI_nop ->
-            noImpl ()
-        | AI_ldc (basicType, ilConst) ->
-            match ilConst with
-            | ILConst.I4 i ->
-                match basicType with
-                | DT_R
-                | DT_I1
-                | DT_U1
-                | DT_I2
-                | DT_U2 -> noImpl ()
-                | DT_I4 ->
-                    let constResult = constInt (int32Type ()) (uint64 i) false // TODO correct me!!
-                    goNext (constResult :: instStack)
-                | DT_U4
-                | DT_I8
-                | DT_U8
-                | DT_R4
-                | DT_R8
-                | DT_I
-                | DT_U
-                | DT_REF -> noImpl ()
-            | ILConst.I8 i ->
-                match basicType with
-                | DT_R
-                | DT_I1
-                | DT_U1
-                | DT_I2
-                | DT_U2
-                | DT_I4
-                | DT_U4 -> noImpl ()
-                | DT_I8 ->
-                    let constResult = constInt (int64Type ()) (uint64 i) false // TODO correct me!!
-                    goNext (constResult :: instStack)
-                | DT_U8
-                | DT_R4
-                | DT_R8
-                | DT_I
-                | DT_U
-                | DT_REF -> noImpl ()
-            | ILConst.R4 r -> noImpl ()
-            | ILConst.R8 r ->
-                match basicType with
-                | DT_R
-                | DT_I1
-                | DT_U1
-                | DT_I2
-                | DT_U2
-                | DT_I4
-                | DT_U4
-                | DT_I8
-                | DT_U8
-                | DT_R4 -> noImpl ()
-                | DT_R8 ->
-                    let constResult = constReal (doubleType ()) r
-                    goNext (constResult :: instStack)
-                | DT_I
-                | DT_U
-                | DT_REF -> noImpl ()
-        | I_ldarg i ->
-            let name = "tmp_" + getValueName args.[int i]
-            goNext (buildLoad bldr args.[int i] name :: instStack)
-        | I_ldarga _    //of uint16
-        | I_ldind _ ->  //of ILAlignment * ILVolatility * ILBasicType
-            noImpl ()
-        | I_ldloc loc ->
-            let loadResult = buildLoad bldr locals.[int loc] "tmp"
+        | SubOvf -> noImpl ()
+        | SubOvfUn -> noImpl ()
+        | Xor -> noImpl ()
+        | Or -> noImpl ()
+        | Neg -> noImpl ()
+        | Not -> noImpl ()
+        | Ldnull -> noImpl ()
+        | Dup -> noImpl ()
+        | Pop -> noImpl ()
+        | Ckfinite -> noImpl ()
+        | Nop -> noImpl ()
+        | LdcI4 i ->
+            let constResult = constInt (int32Type ()) (uint64 i) false // TODO correct me!!
+            goNext (constResult :: instStack)
+        | LdcI8 i ->
+            let constResult = constInt (int64Type ()) (uint64 i) false // TODO correct me!!
+            goNext (constResult :: instStack)
+        | LdcR4 r -> noImpl ()
+        | LdcR8 r ->
+            let constResult = constReal (doubleType ()) r
+            goNext (constResult :: instStack)
+        | Ldarg paramDef ->
+            let name = "tmp_" + getValueName args.[paramDef.Index]
+            goNext (buildLoad bldr args.[paramDef.Index] name :: instStack)
+        | Ldarga _ -> noImpl ()
+        | LdindI1 _ -> noImpl ()
+        | LdindU1 _ -> noImpl ()
+        | LdindI2 _ -> noImpl ()
+        | LdindU2 _ -> noImpl ()
+        | LdindI4 _ -> noImpl ()
+        | LdindU4 _ -> noImpl ()
+        | LdindI8 _ -> noImpl ()
+        | LdindI _ -> noImpl ()
+        | LdindR4 _ -> noImpl ()
+        | LdindR8 _ -> noImpl ()
+        | LdindRef _ -> noImpl ()
+        | Ldloc varDef ->
+            let loadResult = buildLoad bldr locals.[varDef.Index] "tmp"
             goNext (loadResult :: instStack)
-        | I_ldloca _ -> noImpl ()   //of uint16
-        | I_starg i ->  //of uint16
+        | Ldloca _ -> noImpl ()
+        | Starg paramDef ->
             match instStack with
             | stackHead :: stackTail ->
-                buildStore bldr stackHead args.[int i] |> ignore
+                buildStore bldr stackHead args.[paramDef.Index] |> ignore
                 goNext stackTail
             | _ ->
                 failwith "instruction stack too low"
-        | I_stind _ ->  //of  ILAlignment * ILVolatility * ILBasicType
-            noImpl ()
-        | I_stloc loc ->
+        | StindRef _ -> noImpl ()
+        | StindI1 _ -> noImpl ()
+        | StindI2 _ -> noImpl ()
+        | StindI4 _ -> noImpl ()
+        | StindI8 _ -> noImpl ()
+        | StindR4 _ -> noImpl ()
+        | StindR8 _ -> noImpl ()
+        | StindI _ -> noImpl ()
+        | Stloc varDef ->
             match instStack with
             | stackHead :: stackTail ->
-                buildStore bldr stackHead locals.[int loc] |> ignore
+                buildStore bldr stackHead locals.[varDef.Index] |> ignore
                 goNext stackTail
             | _ ->
                 failwith "instruction stack too low"
-        
+
         // Control transfer
-        | I_br i ->    //of  ILCodeLabel
-            buildBr bldr blockMap.[i] |> ignore
-        | I_jmp _ ->  //of ILMethodSpec
+        | Br bb ->
+            buildBr bldr blockMap.[bb.OffsetBytes] |> ignore
+        | Jmp _ ->
             noImpl ()
-        | I_brcmp (comparisonInstr, codeLabel, fallThroughCodeLabel) ->
+        | Beq (ifBB, elseBB) | Bge (ifBB, elseBB) | Bgt (ifBB, elseBB)
+        | Ble (ifBB, elseBB) | Blt (ifBB, elseBB) | BneUn (ifBB, elseBB)
+        | BgeUn (ifBB, elseBB) | BgtUn (ifBB, elseBB) | BleUn (ifBB, elseBB)
+        | BltUn (ifBB, elseBB) | Brfalse (ifBB, elseBB) | Brtrue (ifBB, elseBB) ->
             match instStack with
-            //| leftSide :: rightSide :: stackTail ->
             | value2 :: value1 :: stackTail ->
                 let isIntCmp = true
                 match getTypeKind <| typeOf value1 with
                 | TypeKind.IntegerTypeKind ->
                     let brWith op =
-                        //let brTest = buildICmp bldr op leftSide rightSide "brTest"
                         let brTest = buildICmp bldr op value1 value2 "brTest"
-                        buildCondBr bldr brTest blockMap.[codeLabel] blockMap.[fallThroughCodeLabel] |> ignore
+                        buildCondBr bldr brTest blockMap.[ifBB.OffsetBytes] blockMap.[elseBB.OffsetBytes] |> ignore
                     
-                    match comparisonInstr with
-                    | BI_beq     -> brWith IntPredicate.IntEQ
-                    | BI_bge     -> brWith IntPredicate.IntSGE
-                    | BI_bge_un  -> brWith IntPredicate.IntUGE
-                    | BI_bgt     -> brWith IntPredicate.IntSGT
-                    | BI_bgt_un  -> brWith IntPredicate.IntUGT
-                    | BI_ble     -> brWith IntPredicate.IntSLE
-                    | BI_ble_un  -> brWith IntPredicate.IntULE
-                    | BI_blt     -> brWith IntPredicate.IntSLT
-                    | BI_blt_un  -> brWith IntPredicate.IntULT
-                    | BI_bne_un  -> brWith IntPredicate.IntNE
-                    | BI_brfalse -> noImpl ()
-                    | BI_brtrue  -> noImpl ()
+                    match inst.Instruction with
+                    | Beq _     -> brWith IntPredicate.IntEQ
+                    | Bge _     -> brWith IntPredicate.IntSGE
+                    | BgeUn _   -> brWith IntPredicate.IntUGE
+                    | Bgt _     -> brWith IntPredicate.IntSGT
+                    | BgtUn _   -> brWith IntPredicate.IntUGT
+                    | Ble _     -> brWith IntPredicate.IntSLE
+                    | BleUn _   -> brWith IntPredicate.IntULE
+                    | Blt _     -> brWith IntPredicate.IntSLT
+                    | BltUn _   -> brWith IntPredicate.IntULT
+                    | BneUn _   -> brWith IntPredicate.IntNE
+                    | Brfalse _ -> noImpl ()
+                    | Brtrue _  -> noImpl ()
+                    | _         -> failwith "whoa! this error should be impossible!"
                 | ty ->
                     failwith (sprintf "don't know how to compare type: %A" ty)
             
             | _ ->
                 failwith "instruction stack too low"
 
-        | I_switch (codeLabels, fallThroughCodeLabel) ->    //of (ILCodeLabel list * ILCodeLabel) (* last label is fallthrough *)
+        | Switch (caseBlocks, defaultBlock) ->
             match instStack with
             | [] -> failwith "empty instruction stack"
             | value :: stackTail ->
                 let caseInts =
-                    [|for i in 0 .. codeLabels.Length - 1 ->
+                    [|for i in 0 .. caseBlocks.Length - 1 ->
                         constInt (int32Type ()) (uint64 i) false|]
-                let caseBlocks = [|for l in codeLabels -> blockMap.[l]|]
-                buildSwitchWithCases bldr value (Array.zip caseInts caseBlocks) blockMap.[fallThroughCodeLabel]
-        
-        | I_ret ->
+                let caseBlocks = [|for b in caseBlocks -> blockMap.[b.OffsetBytes]|]
+                buildSwitchWithCases bldr value (Array.zip caseInts caseBlocks) blockMap.[defaultBlock.OffsetBytes]
+
+        | Ret ->
             // TODO confirm void funs are [] and non-void are not
             match instStack with
             | [] -> buildRetVoid bldr |> ignore
             | stackHead :: stackTail -> buildRet bldr stackHead |> ignore
-         // Method call
-        | I_call (tailCall, methodSpec, varArgs) ->
+
+        // Method call
+        | Call (tailCall, methRef) ->
             // look up the corresponding LLVM function
-            let enclosingName = methodSpec.EnclosingType.BasicQualifiedName
-            let argTypes = methodSpec.FormalArgTypes
-            let retType = methodSpec.FormalReturnType
-            let name = methodSpec.Name
-            if enclosingName = "System.Object" && name = ".ctor" then
-                //TODO stop ignoring object calls
+            let methDef = methRef.Resolve ()
+            let enclosingName = methDef.DeclaringType.FullName
+            if enclosingName = "System.Object" && methDef.IsConstructor then
+                //TODO stop ignoring object constructor calls
                 goNext instStack.Tail
             else
-                let funRef = funMap.[enclosingName].[(retType, name, argTypes)]
+                let funRef = funMap.[methDef.FullName]
 
-                let argCount =
-                    match methodSpec.CallingConv.ThisConv with
-                    | ILThisConvention.Instance ->
-                        methodSpec.MethodRef.ArgCount + 1
-                    | ILThisConvention.InstanceExplicit ->
-                        failwith "instance explicit not implemented"
-                    | ILThisConvention.Static ->
-                        methodSpec.MethodRef.ArgCount
-                let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
+                let mb = methDef.Body
+                let argCount = mb.AllParameters.Length
+                let args, stackTail = splitAt argCount instStack
                 let args = List.rev args
                 let callResult = buildCall bldr funRef (Array.ofList args) "callResult" // FIXME void results should not add to stack!!
                 
-                match tailCall with
-                | Normalcall ->
+                if tailCall then
                     goNext (callResult :: stackTail)
-                | Tailcall ->
+                else
                     // TODO confirm with CIL docs that tail call includes implicit return
                     setTailCall callResult true
                     buildRet bldr callResult |> ignore
                     goNext stackTail // TODO can probably dump this
-            
-        | I_callvirt _ // (tailCall, methodSpec, varArgs) ->
-        | I_callconstraint _ //of ILTailcall * ILType * ILMethodSpec * ILVarArgs
-        | I_calli _    //of ILTailcall * ILCallingSignature * ILVarArgs
-        | I_ldftn _ -> noImpl ()   //of ILMethodSpec
-        | I_newobj (methodSpec, varArgs) -> //of ILMethodSpec  * ILVarArgs
+
+        | Callvirt _ -> noImpl ()
+        | Calli _ -> noImpl ()
+        | Ldftn _ -> noImpl ()
+        | Newobj methRef ->
             // TODO implement GC
             // FIXME naming is all screwed up! fix it
             //let enclosingName = methodSpec.EnclosingType.BasicQualifiedName
-            let enclosingName = methodSpec.EnclosingType.TypeRef.Name
-            let argTypes = methodSpec.FormalArgTypes
-            let retType = methodSpec.FormalReturnType
-            let name = methodSpec.Name
-            if name <> ".ctor" then
+            let methDef = methRef.Resolve ()
+            let enclosingName = methDef.DeclaringType.FullName
+            //let argTypes = methodSpec.FormalArgTypes
+            //let retType = methodSpec.FormalReturnType
+            //let name = methodSpec.Name
+            if not methDef.IsConstructor then
                 failwith "expected a .ctor here"
             else
-                let funRef = funMap.[enclosingName].[(retType, name, argTypes)]
-                let llvmTy = typeHandles.[enclosingName].LLVMType
+                let funRef = funMap.[methDef.FullName]
+                let llvmTy = typeHandles.[enclosingName].ResolvedType
                 let newObj = buildMalloc bldr llvmTy ("new" + enclosingName)
-                let argCount = methodSpec.MethodRef.ArgCount + 1 // +1 for self
-                let args, stackTail = splitAt methodSpec.MethodRef.ArgCount instStack
+                let mb = methDef.Body
+                let argCount = mb.AllParameters.Length
+                let args, stackTail = splitAt argCount instStack
                 let args = newObj :: List.rev args
                 buildCall bldr funRef (Array.ofList args) "" |> ignore
                 goNext (newObj :: stackTail)
+
         // Exceptions
-        | I_throw
-        | I_endfinally
-        | I_endfilter
-        | I_leave _     //of  ILCodeLabel
-        | I_rethrow
+        | Throw -> noImpl ()
+        | Endfinally -> noImpl ()
+        | Endfilter -> noImpl ()
+        | Leave _ -> noImpl ()
+        | Rethrow -> noImpl ()
 
         // Object instructions
-        | I_ldsfld _ -> noImpl () //of ILVolatility * ILFieldSpec
-        | I_ldfld (align, vol, field) -> //of ILAlignment * ILVolatility * ILFieldSpec
+        | Ldsfld _ -> noImpl ()
+        | Ldfld (unalignedPrefix, volatilePrefix, fieldRef) ->
             match instStack with
             | [] -> failwith "empty instruction stack"
             | selfPtr :: stackTail ->
                 // TODO alignment and volitility
-                let selfJoint = typeHandles.[field.EnclosingTypeRef.Name]
-                let cilFields = selfJoint.CILType.Fields.AsList
-                let fieldIndex = List.findIndex (fun (f : ILFieldDef) -> f.Name = field.Name) cilFields
+                let fieldName = fieldRef.FullName
+                let cilFields = (fieldRef.DeclaringType.Resolve ()).Fields
+                let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) cilFields
 
                 // OK now we need to load the field
                 let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) "fieldPtr"
                 let fieldValue = buildLoad bldr fieldPtr "fieldValue"
                 goNext (fieldValue :: stackTail)
 
-        | I_ldsflda _     //of ILFieldSpec
-        | I_ldflda _      //of ILFieldSpec
-        | I_stsfld _ -> noImpl () //of ILVolatility  *  ILFieldSpec
-        | I_stfld (align, vol, field) -> //of ILAlignment * ILVolatility * ILFieldSpec
+        | Ldsflda _ -> noImpl ()
+        | Ldflda _ -> noImpl ()
+        | Stsfld _ -> noImpl ()
+        | Stfld (unalignedPrefix, volatilePrefix, fieldRef) ->
             match instStack with
             | value :: selfPtr :: stackTail ->
                 // TODO alignment and volitility
-                let selfJoint = typeHandles.[field.EnclosingTypeRef.Name]
-                let cilFields = selfJoint.CILType.Fields.AsList
-                let fieldIndex = List.findIndex (fun (f : ILFieldDef) -> f.Name = field.Name) cilFields
+                let fieldName = fieldRef.FullName
+                let cilFields = (fieldRef.DeclaringType.Resolve ()).Fields
+                let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) cilFields
 
                 // OK now we need to store the field
                 let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) "fieldPtr"
@@ -711,21 +455,21 @@ let rec genInstructions
                 goNext stackTail
             | _ -> failwith "instruction stack too low"
 
-        | I_ldstr _       //of string
-        | I_isinst _      //of ILType
-        | I_castclass _   //of ILType
-        | I_ldtoken _     //of ILToken
-        | I_ldvirtftn _   //of ILMethodSpec
+        | Ldstr _ -> noImpl ()
+        | Isinst _ -> noImpl ()
+        | Castclass _ -> noImpl ()
+        | Ldtoken _ -> noImpl ()
+        | Ldvirtftn _ -> noImpl ()
 
         // Value type instructions
-        | I_cpobj _       //of ILType
-        | I_initobj _     //of ILType
-        | I_ldobj _       //of ILAlignment * ILVolatility * ILType
-        | I_stobj _       //of ILAlignment * ILVolatility * ILType
-        | I_box _         //of ILType
-        | I_unbox _       //of ILType
-        | I_unbox_any _   //of ILType
-        | I_sizeof _      //of ILType
+        | Cpobj _ -> noImpl ()
+        | Initobj _ -> noImpl ()
+        | Ldobj _ -> noImpl ()
+        | Stobj _ -> noImpl ()
+        | Box _ -> noImpl ()
+        | Unbox _ -> noImpl ()
+        | UnboxAny _ -> noImpl ()
+        | Sizeof _ -> noImpl ()
 
         // Generalized array instructions. In AbsIL these instructions include
         // both the single-dimensional variants (with ILArrayShape == ILArrayShape.SingleDimensional)
@@ -734,13 +478,57 @@ let rec genInstructions
         //   call string string[,]::Get(int32, int32)
         //   call string& string[,]::Address(int32, int32)
         //   call void string[,]::Set(int32, int32,string)
-        // The IL reader transforms calls of this form to the corresponding
-        // generalized instruction with the corresponding ILArrayShape
-        // argument. This is done to simplify the IL and make it more uniform.
-        // The IL writer then reverses this when emitting the binary.
-        | I_ldelem _      //of ILBasicType
-        | I_stelem _      //of ILBasicType
-        | I_ldelema _ -> noImpl () //of ILReadonly * ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
+        | Ldelem _ -> noImpl ()
+        | Stelem _ -> noImpl ()
+        | Ldelema _ -> noImpl ()
+        | LdelemI1 -> noImpl ()
+        | LdelemU1 -> noImpl ()
+        | LdelemI2 -> noImpl ()
+        | LdelemU2 -> noImpl ()
+        | LdelemI4 -> noImpl ()
+        | LdelemU4 -> noImpl ()
+        | LdelemI8 -> noImpl ()
+        | LdelemI -> noImpl ()
+        | LdelemR4 -> noImpl ()
+        | LdelemR8 -> noImpl ()
+        | LdelemRef -> noImpl ()
+        | StelemI -> noImpl ()
+        | StelemI1 -> noImpl ()
+        | StelemI2 -> noImpl ()
+        | StelemI4 -> noImpl ()
+        | StelemI8 -> noImpl ()
+        | StelemR4 -> noImpl ()
+        | StelemR8 -> noImpl ()
+        | StelemRef -> noImpl ()
+        | Newarr _ -> noImpl ()
+        | Ldlen ->
+            match instStack with
+            | arrObj :: stackTail ->
+                let lenPtr = buildStructGEP bldr arrObj 0u "lenPtr"
+                let len = buildLoad bldr lenPtr "len"
+                
+                goNext (len :: stackTail)
+            | _ -> failwith "instruction stack too low"
+
+        // "System.TypedReference" related instructions: almost
+        // no languages produce these, though they do occur in mscorlib.dll
+        // System.TypedReference represents a pair of a type and a byref-pointer
+        // to a value of that type. 
+        | Mkrefany _ -> noImpl ()
+        | Refanytype -> noImpl ()
+        | Refanyval _ -> noImpl ()
+        
+        // Debug-specific 
+        | Break -> noImpl ()
+
+        // Varargs - C++ only
+        | Arglist -> noImpl ()
+
+        // Local aggregates, i.e. stack allocated data (alloca) : C++ only
+        | Localloc -> noImpl ()
+        | Cpblk _ -> noImpl ()
+        | Initblk _ -> noImpl ()
+(*
         | I_ldelem_any (shape, ty) -> //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
             match shape with
             | ILArrayShape [(Some 0, None)] ->
@@ -756,45 +544,6 @@ let rec genInstructions
                     failwith "instruction stack too low"
             | _ ->
                 noImpl ()
-        | I_stelem_any _  -> noImpl () //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
-        | I_newarr (shape, ty) -> noImpl () //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
-        | I_ldlen ->
-            match instStack with
-            | arrObj :: stackTail ->
-                let lenPtr = buildStructGEP bldr arrObj 0u "lenPtr"
-                let len = buildLoad bldr lenPtr "len"
-                
-                goNext (len :: stackTail)
-            | _ -> failwith "instruction stack too low"
-
-        // "System.TypedReference" related instructions: almost
-        // no languages produce these, though they do occur in mscorlib.dll
-        // System.TypedReference represents a pair of a type and a byref-pointer
-        // to a value of that type. 
-        | I_mkrefany _    //of ILType
-        | I_refanytype
-        | I_refanyval _   //of ILType
-        
-        // Debug-specific 
-        // I_seqpoint is a fake instruction to represent a sequence point:
-        // the next instruction starts the execution of the
-        // statement covered by the given range - this is a
-        // dummy instruction and is not emitted
-        | I_break
-        | I_seqpoint _ //of ILSourceMarker
-
-        // Varargs - C++ only
-        | I_arglist
-
-        // Local aggregates, i.e. stack allocated data (alloca) : C++ only
-        | I_localloc
-        | I_cpblk _ //of ILAlignment * ILVolatility
-        | I_initblk _ //of ILAlignment  * ILVolatility
-
-        // EXTENSIONS, e.g. MS-ILX
-        | EI_ilzero _ //of ILType
-        | EI_ldlen_multi _      //of int32 * int32
-        | I_other _ -> noImpl ()   //of IlxExtensionInstr
 *)
 
 let genAlloca
@@ -830,7 +579,7 @@ let genMethodBody
             let blockName = "block_" + string b.OffsetBytes
             yield (b.OffsetBytes, appendBasicBlock methodVal blockName)]
     match blockDecs with
-    | [] -> failwith ("empty method body: " + md.Name)
+    | [] -> failwith ("empty method body: " + md.FullName)
     | (_, fstBlockDec) :: _ ->
         buildBr bldr fstBlockDec |> ignore
         //genCode moduleRef methodVal args locals typeHandles funMap (Map.ofList blockDecs) blocks
@@ -863,7 +612,7 @@ let genMethodDef
         (md : MethodDefinition) =
     
     if md.HasBody then
-        let fn = getNamedFunction moduleRef md.Name
+        let fn = getNamedFunction moduleRef md.FullName
         genMethodBody moduleRef fn typeHandles funMap td md
     else
         failwith "can only use genMethodDef for functions with a body"
@@ -886,7 +635,7 @@ let declareMethodDef
         let paramTys = [|for p in md.Body.AllParameters -> toLLVMType typeHandles p.ParameterType|]
         let retTy = toLLVMType typeHandles md.ReturnType
         let funcTy = functionType retTy paramTys
-        let fn = addFunction moduleRef md.Name funcTy
+        let fn = addFunction moduleRef md.FullName funcTy
         
         let nameFun (i : int) (p : ParameterDefinition) =
             let llvmParam = getParam fn (uint32 i)
@@ -903,14 +652,17 @@ let rec declareMethodDefs
         (moduleRef : ModuleRef)
         (typeHandles : Map<string, TypeHandleRef>)
         (td : TypeDefinition) =
-    let nestedDecs = List.concat [for t in td.NestedTypes -> declareMethodDefs moduleRef typeHandles t]
-    let methodDecs = [for m in td.Methods -> declareMethodDef moduleRef typeHandles td m]
-    (td.Name, Map.ofList methodDecs) :: nestedDecs
+    seq {
+        for m in td.Methods do
+            yield declareMethodDef moduleRef typeHandles td m
+        for t in td.NestedTypes do
+            yield! declareMethodDefs moduleRef typeHandles t
+    }
 
 let declareType (typeHandles : Map<string, TypeHandleRef>) (td : TypeDefinition) =
     let stFields = [|for f in td.Fields -> toLLVMType typeHandles f.FieldType|]
     let stTy = structType stFields false
-    refineType typeHandles.[td.Name].ResolvedType stTy
+    refineType typeHandles.[td.FullName].ResolvedType stTy
 
 let declareTypes (tds : TypeDefinition list) =
     // the reason that we build the type map before generating anything with
@@ -918,7 +670,7 @@ let declareTypes (tds : TypeDefinition list) =
     // in the IL code. Since the real declarations all occur after the forward
     // declarations they will be the ones left behind in the map
     let rec flattenAndName (td : TypeDefinition) =
-        (td.Name, td) :: List.collect flattenAndName (List.ofSeq td.NestedTypes)
+        (td.FullName, td) :: List.collect flattenAndName (List.ofSeq td.NestedTypes)
     let tyMap = Map.ofList (List.collect flattenAndName tds)
 
     // generate the llvm ty handles that will hold all struct references
@@ -933,7 +685,7 @@ let genTypeDefs (llvmModuleRef : ModuleRef) (cilTypeDefs : seq<TypeDefinition>) 
     let typeHandles = declareTypes cilTypeDefs
     for name, tyHandle in Map.toList typeHandles do
         addTypeName llvmModuleRef name tyHandle.ResolvedType |> ignore
-    let funMap = Map.ofList <| List.concat [for t in cilTypeDefs -> declareMethodDefs llvmModuleRef typeHandles t]
-    ()
-    //Seq.iter (genTypeDef llvmModuleRef typeHandles funMap) cilTypeDefs
-
+    let funMap =
+        seq {for t in cilTypeDefs do yield! declareMethodDefs llvmModuleRef typeHandles t}
+        |> Map.ofSeq
+    Seq.iter (genTypeDef llvmModuleRef typeHandles funMap) cilTypeDefs
