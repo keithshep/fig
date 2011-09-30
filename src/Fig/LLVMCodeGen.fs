@@ -422,9 +422,7 @@ let rec genInstructions
                 let funRef = funMap.[methDef.FullName]
                 let llvmTy = typeHandles.[enclosingName].ResolvedType
                 let newObj = buildMalloc bldr llvmTy ("new" + enclosingName)
-                let mb = methDef.Body
-                let argCount = mb.AllParameters.Length
-                let args, stackTail = splitAt argCount instStack
+                let args, stackTail = splitAt methRef.Parameters.Count instStack
                 let args = newObj :: List.rev args
                 buildCall bldr funRef (Array.ofList args) "" |> ignore
                 goNext (newObj :: stackTail)
@@ -580,6 +578,7 @@ let genMethodBody
         (funMap : FunMap)
         (md : MethodDefinition) =
 
+    printfn "GENERATING METHOD BODY FOR %s" md.FullName
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
     let args = Array.map (genParam bldr typeHandles) md.Body.AllParameters
@@ -598,7 +597,7 @@ let genMethodBody
         //genCode moduleRef methodVal args locals typeHandles funMap (Map.ofList blockDecs) blocks
         let blockMap = Map.ofList blockDecs
         for i in 0 .. blocks.Length - 1 do
-            printfn "working on block_%i" blocks.[i].OffsetBytes
+            printfn "working on block_%i InitStackTypes=%A" blocks.[i].OffsetBytes blocks.[i].InitStackTypes
             use bldr = new Builder(blockMap.[blocks.[i].OffsetBytes])
             genInstructions
                 bldr
@@ -613,11 +612,6 @@ let genMethodBody
                 blocks.[i]
                 []
                 blocks.[i].Instructions
-            
-            // generate a fall-through jump to the next block
-            // TODO: make sure this is OK even when current block ends with a terminating instruction
-            if i < blocks.Length - 1 then
-                buildBr bldr blockMap.[blocks.[i + 1].OffsetBytes] |> ignore
 
 let genMethodDef
         (moduleRef : ModuleRef)

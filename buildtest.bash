@@ -6,18 +6,18 @@ set -o nounset
 set -x
 
 ./build.bash
-#dmcs -target:library -out:build/cstest.dll test/cstest.cs
+dmcs -target:library -out:build/cstest.dll test/cstest.cs
 fsc --nologo --debug --out:build/ParseCIL.exe -r Mono.Cecil.dll -r Mono.Cecil.Rocks.dll -r build/fig.dll test/ParseCIL.fs
 fsc --nologo --debug --out:build/CompileCIL.exe -r Mono.Cecil.dll -r Mono.Cecil.Rocks.dll -r LLVMFSharp.dll -r build/fig.dll test/CompileCIL.fs
 
 # test out the our new CIL parsing module against some simple F# functions
 fsc --nologo --debug --target:library --out:build/SimpleFunctions.dll test/SimpleFunctions.fs
-build/ParseCIL.exe build/SimpleFunctions.dll
-#mono build/ParseCIL.exe build/SimpleFunctions.dll
+#build/ParseCIL.exe build/SimpleFunctions.dll
+mono build/ParseCIL.exe build/SimpleFunctions.dll
 
 # now use our LLVM compiler to create a .o file from our simple F# functions
-build/CompileCIL.exe build/SimpleFunctions.dll build/SimpleFunctions.bc
-#mono build/CompileCIL.exe build/SimpleFunctions.dll build/SimpleFunctions.bc
+#build/CompileCIL.exe build/SimpleFunctions.dll build/SimpleFunctions.bc
+mono build/CompileCIL.exe build/SimpleFunctions.dll build/SimpleFunctions.bc
 llc -march=x86-64 -filetype=obj build/SimpleFunctions.bc
 
 # link our F# code against TestSimpleFuns.c and run it

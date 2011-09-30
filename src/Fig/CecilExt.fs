@@ -460,9 +460,11 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             let popCount =
                 match inst with
                 | Call (_, methRef)
-                | Callvirt (_, _, methRef)
-                | Newobj methRef ->
+                | Callvirt (_, _, methRef) ->
                     methSigPopCount methRef
+                | Newobj methRef ->
+                    // TODO double check the - 1 here
+                    methSigPopCount methRef - 1
                 | Calli (_, callSite) ->
                     methSigPopCount callSite
                 | Ret ->
@@ -483,6 +485,8 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
     /// update the type stack
     member x.UpdateTypes (stackTypes : StackType list) =
 
+        printfn "UPDATING STACK (SIZE=%i) FOR %A" stackTypes.Length inst
+        
         let poppedTypes, stackTail = popTypes stackTypes
 
         let badStack () = failwithf "bad stack types for %A" inst
