@@ -105,7 +105,7 @@ let asIntermediateType (t : TypeReference) =
     let t = toSaferType t
     
     let iHaveNoClue () =
-        failwith "I have no clue what to do with %A" t
+        failwithf "I have no clue what to do with %A" t
     
     let fromManagedPtr (ptrType : TypeSpecification) =
         let pointeeType = toSaferType ptrType.ElementType
@@ -141,7 +141,9 @@ let asIntermediateType (t : TypeReference) =
     | ValueType typeReference ->
         iHaveNoClue ()
     | Class typeReference ->
-        iHaveNoClue ()
+        // TODO understand difference between object and class
+        // I think Object means the base object type
+        StackType.ObjectRef
     | Var genericParameter ->
         iHaveNoClue ()
     | Array arrayType ->
@@ -711,10 +713,14 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         | Ldftn _ -> StackType.NativeInt :: stackTail
 
         | Call (_, methdRef) | Callvirt (_, _, methdRef) ->
-            asIntermediateType methdRef.ReturnType :: stackTail
+            match methdRef.ReturnType.MetadataType with
+            | MetadataType.Void -> stackTail
+            | retType -> asIntermediateType methdRef.ReturnType :: stackTail
 
         | Calli (_, callSite) ->
-            asIntermediateType callSite.ReturnType :: stackTail
+            match callSite.ReturnType.MetadataType with
+            | MetadataType.Void -> stackTail
+            | retType -> asIntermediateType callSite.ReturnType :: stackTail
 
         | Newobj methodRef ->
             printfn "!!!!!!!! CONSTRUCTOR RETURN TYPE %A !!!!!!!!" (toSaferType methodRef.ReturnType)

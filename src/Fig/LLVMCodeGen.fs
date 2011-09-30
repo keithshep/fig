@@ -42,8 +42,11 @@ let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReferenc
     | String
     | Pointer _
     | ByReference _
-    | ValueType _
-    | Class _
+    | ValueType _ ->
+        noImpl ()
+    | Class typeRef ->
+        // TODO fix me
+        pointerType typeHandles.[typeRef.FullName].ResolvedType 0u
     | Var _ ->
         noImpl ()
     | Array arrTy ->
@@ -84,6 +87,7 @@ let rec genInstructions
         (locals : ValueRef array)
         (typeHandles : Map<string, TypeHandleRef>)
         (funMap : FunMap)
+        (md : MethodDefinition)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : BasicBlock)
         (instStack : ValueRef list)
@@ -93,8 +97,9 @@ let rec genInstructions
     | [] -> ()
     | inst :: instTail ->
         let goNext (instStack : ValueRef list) =
-            genInstructions bldr moduleRef methodVal args locals typeHandles funMap blockMap ilBB instStack instTail
-        let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst)
+            genInstructions bldr moduleRef methodVal args locals typeHandles funMap md blockMap ilBB instStack instTail
+        let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst.Instruction)
+        printfn "stack depth=%i; instruction=%A" instStack.Length inst.Instruction
 
         match inst.Instruction with
         // Basic
@@ -258,7 +263,8 @@ let rec genInstructions
         | Dup -> noImpl ()
         | Pop -> noImpl ()
         | Ckfinite -> noImpl ()
-        | Nop -> noImpl ()
+        | Nop ->
+            goNext instStack
         | LdcI4 i ->
             let constResult = constInt (int32Type ()) (uint64 i) false // TODO correct me!!
             goNext (constResult :: instStack)
@@ -270,8 +276,13 @@ let rec genInstructions
             let constResult = constReal (doubleType ()) r
             goNext (constResult :: instStack)
         | Ldarg paramDef ->
-            let name = "tmp_" + getValueName args.[paramDef.Index]
-            goNext (buildLoad bldr args.[paramDef.Index] name :: instStack)
+            // TODO after http://groups.google.com/group/mono-cecil/browse_thread/thread/ce63993cd8cb3c98
+            // is fixed we can just use paramDef.Sequence
+            let paramName = paramDef.Name
+            let allParamNames = [|for p in md.Body.AllParameters -> p.Name|]
+            let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
+            let name = "tmp_" + paramDef.Name
+            goNext (buildLoad bldr args.[paramIndex] name :: instStack)
         | Ldarga _ -> noImpl ()
         | LdindI1 _ -> noImpl ()
         | LdindU1 _ -> noImpl ()
@@ -291,7 +302,12 @@ let rec genInstructions
         | Starg paramDef ->
             match instStack with
             | stackHead :: stackTail ->
-                buildStore bldr stackHead args.[paramDef.Index] |> ignore
+                // TODO after http://groups.google.com/group/mono-cecil/browse_thread/thread/ce63993cd8cb3c98
+                // is fixed we can just use paramDef.Sequence
+                let paramName = paramDef.Name
+                let allParamNames = [|for p in md.Body.AllParameters -> p.Name|]
+                let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
+                buildStore bldr stackHead args.[paramIndex] |> ignore
                 goNext stackTail
             | _ ->
                 failwith "instruction stack too low"
@@ -382,13 +398,11 @@ let rec genInstructions
                 let args = List.rev args
                 let callResult = buildCall bldr funRef (Array.ofList args) "callResult" // FIXME void results should not add to stack!!
                 
-                if tailCall then
-                    goNext (callResult :: stackTail)
-                else
-                    // TODO confirm with CIL docs that tail call includes implicit return
-                    setTailCall callResult true
-                    buildRet bldr callResult |> ignore
-                    goNext stackTail // TODO can probably dump this
+                if tailCall then setTailCall callResult true
+
+                match methRef.ReturnType.MetadataType with
+                | MetadataType.Void -> goNext stackTail
+                | _ -> goNext (callResult :: stackTail)
 
         | Callvirt _ -> noImpl ()
         | Calli _ -> noImpl ()
@@ -564,7 +578,6 @@ let genMethodBody
         (methodVal : ValueRef)
         (typeHandles : Map<string, TypeHandleRef>)
         (funMap : FunMap)
-        (td : TypeDefinition)
         (md : MethodDefinition) =
 
     // create the entry block
@@ -585,6 +598,7 @@ let genMethodBody
         //genCode moduleRef methodVal args locals typeHandles funMap (Map.ofList blockDecs) blocks
         let blockMap = Map.ofList blockDecs
         for i in 0 .. blocks.Length - 1 do
+            printfn "working on block_%i" blocks.[i].OffsetBytes
             use bldr = new Builder(blockMap.[blocks.[i].OffsetBytes])
             genInstructions
                 bldr
@@ -594,6 +608,7 @@ let genMethodBody
                 locals
                 typeHandles
                 funMap
+                md
                 blockMap
                 blocks.[i]
                 []
@@ -608,12 +623,10 @@ let genMethodDef
         (moduleRef : ModuleRef)
         (typeHandles : Map<string, TypeHandleRef>)
         (funMap : FunMap)
-        (td : TypeDefinition)
         (md : MethodDefinition) =
     
     if md.HasBody then
-        let fn = getNamedFunction moduleRef md.FullName
-        genMethodBody moduleRef fn typeHandles funMap td md
+        genMethodBody moduleRef funMap.[md.FullName] typeHandles funMap md
     else
         failwith "can only use genMethodDef for functions with a body"
 
@@ -623,19 +636,18 @@ let rec genTypeDef
         (funMap : FunMap)
         (td : TypeDefinition) =
     Seq.iter (genTypeDef moduleRef typeHandles funMap) td.NestedTypes
-    Seq.iter (genMethodDef moduleRef typeHandles funMap td) td.Methods
+    Seq.iter (genMethodDef moduleRef typeHandles funMap) td.Methods
 
 let declareMethodDef
         (moduleRef : ModuleRef)
         (typeHandles : Map<string, TypeHandleRef>)
         (td : TypeDefinition)
         (md : MethodDefinition) =
-
     if md.HasBody then
         let paramTys = [|for p in md.Body.AllParameters -> toLLVMType typeHandles p.ParameterType|]
         let retTy = toLLVMType typeHandles md.ReturnType
         let funcTy = functionType retTy paramTys
-        let fn = addFunction moduleRef md.FullName funcTy
+        let fn = addFunction moduleRef md.Name funcTy // TODO are name collisions allowed here?
         
         let nameFun (i : int) (p : ParameterDefinition) =
             let llvmParam = getParam fn (uint32 i)
