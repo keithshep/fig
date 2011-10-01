@@ -53,7 +53,7 @@ let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReferenc
         if arrTy.Rank = 1 then
             let dim0 = arrTy.Dimensions.[0]
             match nullableAsOption dim0.LowerBound, nullableAsOption dim0.UpperBound with
-            | (Some 0, None) -> //(0, null) ->
+            | ((None | Some 0), None) -> //(0, null) ->
                 // LLVM docs say:
                 // "... 'variable sized array' addressing can be implemented in LLVM
                 // with a zero length array type". So, we implement this as a struct
@@ -62,8 +62,8 @@ let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReferenc
                 let basicArrTy = pointerType (arrayType elemTy 0u) 0u
                 // FIXME array len should correspond to "native unsigned int" not int32
                 pointerType (structType [|int32Type (); basicArrTy|] false) 0u
-            | _ ->
-                failwith "dont know how to deal with given array shape yet"
+            | lowerBound, upperBound ->
+                failwithf "dont know how to deal with given array shape yet %A->%A" lowerBound upperBound
         else
             failwithf "arrays of rank %i not yet implemented" arrTy.Rank
     | GenericInstance _
@@ -485,7 +485,17 @@ let rec genInstructions
         //   call string string[,]::Get(int32, int32)
         //   call string& string[,]::Address(int32, int32)
         //   call void string[,]::Set(int32, int32,string)
-        | Ldelem _ -> noImpl ()
+        | Ldelem typeRef ->
+            match instStack with
+            | index :: arrObj :: stackTail ->
+                let arrPtr = buildStructGEP bldr arrObj 1u "arrPtr"
+                let arr = buildLoad bldr arrPtr "array"
+                let elemPtr = buildGEP bldr arr [|index|] "elemPtr"
+                let elem = buildLoad bldr elemPtr "elem"
+                    
+                goNext (elem :: stackTail)
+            | _ ->
+                failwith "instruction stack too low"
         | Stelem _ -> noImpl ()
         | Ldelema _ -> noImpl ()
         | LdelemI1 -> noImpl ()
@@ -535,23 +545,6 @@ let rec genInstructions
         | Localloc -> noImpl ()
         | Cpblk _ -> noImpl ()
         | Initblk _ -> noImpl ()
-(*
-        | I_ldelem_any (shape, ty) -> //of ILArrayShape * ILType (* ILArrayShape = ILArrayShape.SingleDimensional for single dimensional arrays *)
-            match shape with
-            | ILArrayShape [(Some 0, None)] ->
-                match instStack with
-                | index :: arrObj :: stackTail ->
-                    let arrPtr = buildStructGEP bldr arrObj 1u "arrPtr"
-                    let arr = buildLoad bldr arrPtr "array"
-                    let elemPtr = buildGEP bldr arr [|index|] "elemPtr"
-                    let elem = buildLoad bldr elemPtr "elem"
-                    
-                    goNext (elem :: stackTail)
-                | _ ->
-                    failwith "instruction stack too low"
-            | _ ->
-                noImpl ()
-*)
 
 let genAlloca
         (bldr : BuilderRef)
