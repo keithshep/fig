@@ -25,6 +25,6 @@ gcc -o build/simplefuns build/SimpleFunctions.o test/TestSimpleFuns.c
 ./build/simplefuns
 
 # translate our LLVM bitcode to C and dissasemble it (just for fun)
-llc -march=c build/SimpleFunctions.bc
 llvm-dis build/SimpleFunctions.bc
+llc -march=c build/SimpleFunctions.bc
 
