@@ -593,6 +593,8 @@ let genMethodBody
         let blockMap = Map.ofList blockDecs
         for i in 0 .. blocks.Length - 1 do
             printfn "working on block_%i InitStackTypes=%A" blocks.[i].OffsetBytes blocks.[i].InitStackTypes
+            if not blocks.[i].InitStackTypes.IsEmpty then
+                failwith "don't yet know how to deal with non empty basic blocks!!"
             use bldr = new Builder(blockMap.[blocks.[i].OffsetBytes])
             genInstructions
                 bldr
