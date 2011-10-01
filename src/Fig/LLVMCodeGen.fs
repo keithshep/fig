@@ -396,8 +396,7 @@ let rec genInstructions
                 let argCount = mb.AllParameters.Length
                 let args, stackTail = splitAt argCount instStack
                 let args = List.rev args
-                let callResult = buildCall bldr funRef (Array.ofList args) "callResult" // FIXME void results should not add to stack!!
-                
+                let callResult = buildCall bldr funRef (Array.ofList args) "callResult"
                 if tailCall then setTailCall callResult true
 
                 match methRef.ReturnType.MetadataType with
@@ -410,12 +409,8 @@ let rec genInstructions
         | Newobj methRef ->
             // TODO implement GC
             // FIXME naming is all screwed up! fix it
-            //let enclosingName = methodSpec.EnclosingType.BasicQualifiedName
             let methDef = methRef.Resolve ()
             let enclosingName = methDef.DeclaringType.FullName
-            //let argTypes = methodSpec.FormalArgTypes
-            //let retType = methodSpec.FormalReturnType
-            //let name = methodSpec.Name
             if not methDef.IsConstructor then
                 failwith "expected a .ctor here"
             else
