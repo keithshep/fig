@@ -415,7 +415,7 @@ and SaferInstruction =
     | Sizeof of TypeReference
     | Refanytype
 
-and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB : StackBehaviour) =
+and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB : StackBehaviour, flowControl : FlowControl) =
 
     let popTypes (stackTypes : StackType list) =
         match popB with
@@ -479,6 +479,8 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
 
         | _ ->
             failwithf "unexpected pop behavior %A" popB
+
+    member x.FlowControl = flowControl
 
     member x.Instruction = inst
     
@@ -1268,11 +1270,30 @@ type MethodBody with
                 let lastCecilInst = insts.[!currInstIndex - 1]
                 let popB = lastCecilInst.OpCode.StackBehaviourPop
                 let pushB = lastCecilInst.OpCode.StackBehaviourPush
-                yield new AnnotatedInstruction(saferInst, popB, pushB)]
+                let flowControl = lastCecilInst.OpCode.FlowControl
+                yield new AnnotatedInstruction(saferInst, popB, pushB, flowControl)]
         
         // fill in the instructions property for all code blocks and return
         for blockIndex in 0 .. basicBlocks.Length - 1 do
-            basicBlocks.[blockIndex].Instructions <- readBlockInsts blockIndex
+            let insts = readBlockInsts blockIndex
+
+            // if the last instruction is non-terminal we have to stick on a
+            // fall-through branch instruction
+            let lastInst = insts.[insts.Length - 1]
+            let insts =
+                match lastInst.FlowControl with
+                | FlowControl.Branch | FlowControl.Cond_Branch | FlowControl.Return | FlowControl.Throw ->
+                    insts
+                | _ ->
+                    let fallthroughBranch =
+                        AnnotatedInstruction (
+                            Br basicBlocks.[blockIndex + 1],
+                            StackBehaviour.Pop0,
+                            StackBehaviour.Push0,
+                            FlowControl.Branch)
+                    insts @ [fallthroughBranch]
+
+            basicBlocks.[blockIndex].Instructions <- insts
 
         // fill in the initial stack types for all basic blocks
         let alreadyInferredIDs = ref (Set.empty : int Set)
