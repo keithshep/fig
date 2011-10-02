@@ -19,10 +19,11 @@ type FunMap = Map<string , ValueRef>
 type TypeHandleRef with
     member x.ResolvedType with get () = resolveTypeHandle x
 
-let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReference) =
-    let noImpl () = failwithf "no impl for %A type yet" ty.MetadataType
+let rec saferTypeToLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : SaferTypeRef) =
+
+    let noImpl () = failwithf "no impl for %A type yet" ty
     
-    match toSaferType ty with
+    match ty with
     | Void -> voidType ()
 
     // TODO compiler seems to be generating boolean as I4 but the CIL docs
@@ -59,7 +60,7 @@ let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReferenc
                 // with a zero length array type". So, we implement this as a struct
                 // which contains a length element and an array element
                 let elemTy = toLLVMType typeHandles arrTy.ElementType
-                let basicArrTy = pointerType (arrayType elemTy 0u) 0u
+                let basicArrTy = pointerType elemTy 0u
                 // FIXME array len should correspond to "native unsigned int" not int32
                 pointerType (structType [|int32Type (); basicArrTy|] false) 0u
             | lowerBound, upperBound ->
@@ -78,6 +79,9 @@ let rec toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReferenc
     | Sentinel _
     | Pinned _ ->
         noImpl ()
+
+and toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReference) =
+    saferTypeToLLVMType typeHandles (toSaferType ty)
 
 let rec genInstructions
         (bldr : BuilderRef)
@@ -99,7 +103,6 @@ let rec genInstructions
         let goNext (instStack : ValueRef list) =
             genInstructions bldr moduleRef methodVal args locals typeHandles funMap md blockMap ilBB instStack instTail
         let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst.Instruction)
-        printfn "stack depth=%i; instruction=%A" instStack.Length inst.Instruction
 
         match inst.Instruction with
         // Basic
@@ -148,6 +151,7 @@ let rec genInstructions
             noImpl ()
         | ConvI4 ->
             match instStack with
+            | [] -> failwith "instruction stack too low"
             | stackHead :: stackTail ->
                 let headType = typeOf stackHead
                 match getTypeKind headType with
@@ -158,13 +162,12 @@ let rec genInstructions
                         failwith "not 32u"
                 | _ ->
                     failwith "not an int kind"
-            | _ ->
-                failwith "instruction stack too low"
         | ConvI8 -> noImpl ()
         | ConvR4 ->
             noImpl ()
         | ConvR8 ->
             match instStack with
+            | [] -> failwith "instruction stack too low"
             | stackHead :: stackTail ->
                 let headType = typeOf stackHead
                 match getTypeKind headType with
@@ -177,8 +180,6 @@ let rec genInstructions
                         failwith "not 32u"
                 | _ ->
                     failwith "not an int kind"
-            | _ ->
-                failwith "instruction stack too low"
         | ConvU4 -> noImpl ()
         | ConvU8 -> noImpl ()
         | ConvU2 -> noImpl ()
@@ -260,7 +261,12 @@ let rec genInstructions
         | Neg -> noImpl ()
         | Not -> noImpl ()
         | Ldnull -> noImpl ()
-        | Dup -> noImpl ()
+        | Dup ->
+            match instStack with
+            | [] -> failwith "instruction stack too low"
+            | stackHead :: _ ->
+                // TODO this will probably only work in some limited cases
+                goNext (stackHead :: instStack)
         | Pop -> noImpl ()
         | Ckfinite -> noImpl ()
         | Nop ->
@@ -301,6 +307,7 @@ let rec genInstructions
         | Ldloca _ -> noImpl ()
         | Starg paramDef ->
             match instStack with
+            | [] -> failwith "instruction stack too low"
             | stackHead :: stackTail ->
                 // TODO after http://groups.google.com/group/mono-cecil/browse_thread/thread/ce63993cd8cb3c98
                 // is fixed we can just use paramDef.Sequence
@@ -309,8 +316,6 @@ let rec genInstructions
                 let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
                 buildStore bldr stackHead args.[paramIndex] |> ignore
                 goNext stackTail
-            | _ ->
-                failwith "instruction stack too low"
         | StindRef _ -> noImpl ()
         | StindI1 _ -> noImpl ()
         | StindI2 _ -> noImpl ()
@@ -321,11 +326,10 @@ let rec genInstructions
         | StindI _ -> noImpl ()
         | Stloc varDef ->
             match instStack with
+            | [] -> failwith "instruction stack too low"
             | stackHead :: stackTail ->
                 buildStore bldr stackHead locals.[varDef.Index] |> ignore
                 goNext stackTail
-            | _ ->
-                failwith "instruction stack too low"
 
         // Control transfer
         | Br bb ->
@@ -488,15 +492,27 @@ let rec genInstructions
         | Ldelem typeRef ->
             match instStack with
             | index :: arrObj :: stackTail ->
+                //let arrPtr = buildStructGEP bldr arrObj 1u "arrPtr"
                 let arrPtrAddr = buildStructGEP bldr arrObj 1u "arrPtrAddr"
                 let arrPtr = buildLoad bldr arrPtrAddr "arrPtr"
-                let elemAddr = buildGEP bldr arrPtr [|constInt (int32Type ()) 0uL false; index|] "elemAddr"
+                let elemAddr = buildGEP bldr arrPtr [|index|] "elemAddr"
                 let elem = buildLoad bldr elemAddr "elem"
 
                 goNext (elem :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
-        | Stelem _ -> noImpl ()
+        | Stelem _ ->
+            match instStack with
+            | value :: index :: arrObj :: stackTail ->
+                //let arrPtr = buildStructGEP bldr arrObj 1u "arrPtr"
+                let arrPtrAddr = buildStructGEP bldr arrObj 1u "arrPtrAddr"
+                let arrPtr = buildLoad bldr arrPtrAddr "arrPtr"
+                let elemAddr = buildGEP bldr arrPtr [|index|] "elemAddr"
+                buildStore bldr value elemAddr |> ignore
+
+                goNext stackTail
+            | _ ->
+                failwith "instruction stack too low"
         | Ldelema _ -> noImpl ()
         | LdelemI1 -> noImpl ()
         | LdelemU1 -> noImpl ()
@@ -517,15 +533,40 @@ let rec genInstructions
         | StelemR4 -> noImpl ()
         | StelemR8 -> noImpl ()
         | StelemRef -> noImpl ()
-        | Newarr _ -> noImpl ()
+        | Newarr elemTypeRef ->
+            match instStack with
+            | [] -> failwith "instruction stack too low"
+            | numElems :: stackTail ->
+                match toSaferType elemTypeRef with
+                | Double ->
+                    // allocate the array to the heap
+                    // TODO it seems pretty lame to have this code here. need to think
+                    // about how this should really be structured
+                    let elemTy = toLLVMType typeHandles elemTypeRef
+                    let newArr = buildArrayMalloc bldr elemTy numElems "newArr"
+
+                    let basicArrTy = pointerType elemTy 0u
+                    // FIXME array len should correspond to "native unsigned int" not int32
+                    let arrObjTy = structType [|int32Type (); basicArrTy|] false
+                    let newArrObj = buildMalloc bldr arrObjTy ("newArrObj")
+                    
+                    // fill in the array object
+                    let lenAddr = buildStructGEP bldr newArrObj 0u "lenAddr"
+                    buildStore bldr numElems lenAddr |> ignore
+                    let arrPtrAddr = buildStructGEP bldr newArrObj 1u "arrPtrAddr"
+                    buildStore bldr newArr arrPtrAddr |> ignore
+
+                    goNext (newArrObj :: stackTail)
+
+                | _ -> failwith "No impl yet for newing arrays of type %A" elemTypeRef
         | Ldlen ->
             match instStack with
+            | [] -> failwith "instruction stack too low"
             | arrObj :: stackTail ->
                 let lenAddr = buildStructGEP bldr arrObj 0u "lenAddr"
                 let len = buildLoad bldr lenAddr "len"
                 
                 goNext (len :: stackTail)
-            | _ -> failwith "instruction stack too low"
 
         // "System.TypedReference" related instructions: almost
         // no languages produce these, though they do occur in mscorlib.dll
@@ -566,7 +607,6 @@ let genMethodBody
         (funMap : FunMap)
         (md : MethodDefinition) =
 
-    printfn "GENERATING METHOD BODY FOR %s" md.FullName
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
     let args = Array.map (genParam bldr typeHandles) md.Body.AllParameters
@@ -582,10 +622,8 @@ let genMethodBody
     | [] -> failwith ("empty method body: " + md.FullName)
     | (_, fstBlockDec) :: _ ->
         buildBr bldr fstBlockDec |> ignore
-        //genCode moduleRef methodVal args locals typeHandles funMap (Map.ofList blockDecs) blocks
         let blockMap = Map.ofList blockDecs
         for i in 0 .. blocks.Length - 1 do
-            printfn "working on block_%i InitStackTypes=%A" blocks.[i].OffsetBytes blocks.[i].InitStackTypes
             if not blocks.[i].InitStackTypes.IsEmpty then
                 failwith "don't yet know how to deal with non empty basic blocks!!"
             use bldr = new Builder(blockMap.[blocks.[i].OffsetBytes])

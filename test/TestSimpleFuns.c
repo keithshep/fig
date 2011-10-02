@@ -8,6 +8,7 @@ extern int isEven(unsigned int);
 extern int isOdd(unsigned int);
 extern double power(double, int);
 extern double distSqOf789();
+extern double avgOfFour(double, double, double, double);
 
 int main(int argc, const char* argv[])
 {
@@ -23,6 +24,7 @@ int main(int argc, const char* argv[])
         printf("power(1.5, %i) = %f\n", i, power(1.5, i));
     }
     printf("distSqOf789() = %f\n", distSqOf789());
+    printf("avgOfFour(10.0, 25.0, 75.0, 90.0) = %f\n", avgOfFour(10.0, 25.0, 75.0, 90.0));
     
     return 0;
 }

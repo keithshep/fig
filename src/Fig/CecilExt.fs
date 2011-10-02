@@ -487,8 +487,6 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
     /// update the type stack
     member x.UpdateTypes (stackTypes : StackType list) =
 
-        printfn "UPDATING STACK (SIZE=%i) FOR %A" stackTypes.Length inst
-        
         let poppedTypes, stackTail = popTypes stackTypes
 
         let badStack () = failwithf "bad stack types for %A" inst
@@ -729,7 +727,6 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             | retType -> asIntermediateType callSite.ReturnType :: stackTail
 
         | Newobj methodRef ->
-            printfn "!!!!!!!! CONSTRUCTOR RETURN TYPE %A !!!!!!!!" (toSaferType methodRef.ReturnType)
             asIntermediateType methodRef.DeclaringType :: stackTail
 
         | Cpobj _ ->

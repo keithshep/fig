@@ -44,12 +44,5 @@ let avg (xs : float array) =
         sum <- sum + x
     sum / float xs.Length
 
-//let avgOfFour (a : float) (b : float) (c : float) (d : float) =
-//    avg [|a; b; c; d|]
-//
-//let arrTest () =
-//    let a = [|1 .. 5|]
-//    let mutable b = 0
-//    for i in a do
-//        b <- b + i
-//    ()
+let avgOfFour (a : float) (b : float) (c : float) (d : float) =
+    avg [|a; b; c; d|]
