@@ -488,11 +488,11 @@ let rec genInstructions
         | Ldelem typeRef ->
             match instStack with
             | index :: arrObj :: stackTail ->
-                let arrPtr = buildStructGEP bldr arrObj 1u "arrPtr"
-                let arr = buildLoad bldr arrPtr "array"
-                let elemPtr = buildGEP bldr arr [|index|] "elemPtr"
-                let elem = buildLoad bldr elemPtr "elem"
-                    
+                let arrPtrAddr = buildStructGEP bldr arrObj 1u "arrPtrAddr"
+                let arrPtr = buildLoad bldr arrPtrAddr "arrPtr"
+                let elemAddr = buildGEP bldr arrPtr [|constInt (int32Type ()) 0uL false; index|] "elemAddr"
+                let elem = buildLoad bldr elemAddr "elem"
+
                 goNext (elem :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
@@ -521,8 +521,8 @@ let rec genInstructions
         | Ldlen ->
             match instStack with
             | arrObj :: stackTail ->
-                let lenPtr = buildStructGEP bldr arrObj 0u "lenPtr"
-                let len = buildLoad bldr lenPtr "len"
+                let lenAddr = buildStructGEP bldr arrObj 0u "lenAddr"
+                let len = buildLoad bldr lenAddr "len"
                 
                 goNext (len :: stackTail)
             | _ -> failwith "instruction stack too low"

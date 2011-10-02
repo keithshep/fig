@@ -38,12 +38,12 @@ let distSqOf789 () = distSq {x = 7.0; y = 8.0; z = 9.0}
 
 let avgOfTwo (x : float) (y : float) = (x + y) / 2.0
 
-//let avg (xs : float array) =
-//    let mutable sum = 0.0
-//    for x in xs do
-//        sum <- sum + x
-//    sum / float xs.Length
-//
+let avg (xs : float array) =
+    let mutable sum = 0.0
+    for x in xs do
+        sum <- sum + x
+    sum / float xs.Length
+
 //let avgOfFour (a : float) (b : float) (c : float) (d : float) =
 //    avg [|a; b; c; d|]
 //
