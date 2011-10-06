@@ -17,7 +17,7 @@ let rec splitAt i xs =
             (x :: splitFst, splitSnd)
 
 /// for keeping track of what types will be on the stack
-/// See EMCA 335: Partition VI C.2, Partition III 1.5
+/// See EMCA 335: Partition VI C.2, Partition III 1.5, Partition III 1.1
 type StackType =
     | Int32
     | Int64
