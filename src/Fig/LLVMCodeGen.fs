@@ -96,6 +96,9 @@ let rec genInstructions
         (ilBB : BasicBlock)
         (instStack : ValueRef list)
         (insts : AnnotatedInstruction list) =
+    
+    if not ilBB.InitStackTypes.IsEmpty then
+        failwith "no impl yet for basic blocks with non-empty init stack states"
 
     match insts with
     | [] -> ()
@@ -411,7 +414,7 @@ let rec genInstructions
         | Calli _ -> noImpl ()
         | Ldftn _ -> noImpl ()
         | Newobj methRef ->
-            // TODO implement GC
+            // TODO implement GC along with object/class initialization code
             // FIXME naming is all screwed up! fix it
             let methDef = methRef.Resolve ()
             let enclosingName = methDef.DeclaringType.FullName

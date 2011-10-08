@@ -30,7 +30,7 @@ let power (x : float) (y : int) =
     retVal
 
 [<ReferenceEquality>]
-type Point = {x : float; y : float; z : float}
+type Point3D = {x : float; y : float; z : float}
 
 let distSq p = p.x * p.x + p.y * p.y + p.z * p.z
 
@@ -46,3 +46,32 @@ let avg (xs : float array) =
 
 let avgOfFour (a : float) (b : float) (c : float) (d : float) =
     avg [|a; b; c; d|]
+
+(*
+//let doubleStrLen (s : string) = s.Length * 2
+
+//open System.Numerics
+
+//let doSomething (bi : BigInteger) =
+//    if bi.IsPowerOfTwo then 0 else 1
+
+[<NoEquality; NoComparison>]
+type GeoPos =
+    struct
+        val mutable LatDeg : float
+        val mutable LonDeg : float
+        new(latDeg : float, lonDeg : float) = {LatDeg = latDeg; LonDeg = lonDeg}
+    end
+
+let latPlusLon (gp : GeoPos) =
+    gp.LatDeg + gp.LonDeg
+
+let bla () =
+    latPlusLon (GeoPos (90.0, 180.0))
+*)
+
+// For understanding value types:
+// newobj instruction: http://msdn.microsoft.com/en-us/library/system.reflection.emit.opcodes.newobj.aspx
+// Partition III 1.6 Table 9. Signature matching
+// Partition I 12.1.6.2 Operations on value type instances...
+// Partition I 8.9.7 Value Types
