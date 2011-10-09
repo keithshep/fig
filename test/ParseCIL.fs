@@ -17,7 +17,7 @@ let main args =
         let assem = AssemblyDefinition.ReadAssembly assemFile
         let mainModule = assem.MainModule
         for ty in assem.MainModule.Types do
-            printfn "Type: %s" ty.FullName
+            printfn "Type=%s; BaseType=%s" ty.FullName ty.BaseType.FullName
             for meth in ty.Methods do
                 iprintfn 1 "Method: %s" meth.FullName
                 let paramToStr (p : ParameterDefinition) =
@@ -33,6 +33,11 @@ let main args =
                 | null ->
                     printParams()
                     iprintfn 2 "Empty Method"
+                    if meth.HasPInvokeInfo then
+                        iprintfn 3 "PInvoke info:"
+                        let pInvoke = meth.PInvokeInfo
+                        iprintfn 4 "EntryPoint=%s" pInvoke.EntryPoint
+                        iprintfn 4 "Module.Name=%s" pInvoke.Module.Name
                 | _ ->
                     if meth.HasThis then
                         iprintfn 2 "ThisParameter: %s" (paramToStr body.ThisParameter)
