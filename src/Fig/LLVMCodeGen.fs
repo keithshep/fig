@@ -676,7 +676,10 @@ let declareMethodDef
         let paramTys = [|for p in md.AllParameters -> toLLVMType typeHandles p.ParameterType|]
         let retTy = toLLVMType typeHandles md.ReturnType
         let funcTy = functionType retTy paramTys
-        let fn = addFunction moduleRef md.Name funcTy
+        // TODO I'm sure there's a better way to find the main entry point. Also
+        // we need to think about arguments and return codes.
+        let fnName = if md.Name = "main@" then "main" else md.Name
+        let fn = addFunction moduleRef fnName funcTy
         
         Array.iteri (nameFunParam fn) md.AllParameters
         

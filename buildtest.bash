@@ -25,12 +25,15 @@ opt -O2 build/SimpleFunctions.bc > build/SimpleFunctions-opt.bc
 llvm-dis build/SimpleFunctions-opt.bc
 llc -march=x86-64 -filetype=obj build/SimpleFunctions.bc
 
-mono build/CompileCIL.exe build/SimpleMain.exe build/SimpleMain.bc
-llvm-dis build/SimpleMain.bc
-
 # link our F# code against TestSimpleFuns.c and run it
 gcc -o build/simplefuns build/SimpleFunctions.o test/TestSimpleFuns.c
 ./build/simplefuns
+
+mono build/CompileCIL.exe build/SimpleMain.exe build/SimpleMain.bc
+llvm-dis build/SimpleMain.bc
+llc -march=x86-64 -filetype=obj build/SimpleMain.bc
+gcc -o build/simplemain build/SimpleMain.o
+./build/simplemain
 
 # translate our LLVM bitcode to C
 #llc -march=c build/SimpleFunctions.bc
