@@ -1315,3 +1315,8 @@ type MethodBody with
 
         basicBlocks
 
+type MethodDefinition with
+    member x.AllParameters =
+        if x.HasBody
+        then x.Body.AllParameters
+        else Array.ofSeq x.Parameters

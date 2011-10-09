@@ -17,7 +17,7 @@ let nullableAsOption (n : System.Nullable<'a>) =
 type FunMap = Map<string , ValueRef>
 
 type TypeHandleRef with
-    member x.ResolvedType with get () = resolveTypeHandle x
+    member x.ResolvedType = resolveTypeHandle x
 
 let rec saferTypeToLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : SaferTypeRef) =
 
@@ -26,10 +26,9 @@ let rec saferTypeToLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : Saf
     match ty with
     | Void -> voidType ()
 
-    // TODO compiler seems to be generating boolean as I4 but the CIL docs
-    // say that a single byte should be used to represent a boolean
+    // TODO probably need a separate function for getting stack type vs normal type
     | Boolean -> int32Type ()
-    | Char -> noImpl ()
+    | Char -> int32Type ()
     | SByte
     | Byte -> int8Type ()
     | Int16
@@ -288,7 +287,7 @@ let rec genInstructions
             // TODO after http://groups.google.com/group/mono-cecil/browse_thread/thread/ce63993cd8cb3c98
             // is fixed we can just use paramDef.Sequence
             let paramName = paramDef.Name
-            let allParamNames = [|for p in md.Body.AllParameters -> p.Name|]
+            let allParamNames = [|for p in md.AllParameters -> p.Name|]
             let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
             let name = "tmp_" + paramDef.Name
             goNext (buildLoad bldr args.[paramIndex] name :: instStack)
@@ -315,7 +314,7 @@ let rec genInstructions
                 // TODO after http://groups.google.com/group/mono-cecil/browse_thread/thread/ce63993cd8cb3c98
                 // is fixed we can just use paramDef.Sequence
                 let paramName = paramDef.Name
-                let allParamNames = [|for p in md.Body.AllParameters -> p.Name|]
+                let allParamNames = [|for p in md.AllParameters -> p.Name|]
                 let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
                 buildStore bldr stackHead args.[paramIndex] |> ignore
                 goNext stackTail
@@ -399,8 +398,7 @@ let rec genInstructions
             else
                 let funRef = funMap.[methDef.FullName]
 
-                let mb = methDef.Body
-                let argCount = mb.AllParameters.Length
+                let argCount = methDef.AllParameters.Length
                 let args, stackTail = splitAt argCount instStack
                 let args = List.rev args
                 let callResult = buildCall bldr funRef (Array.ofList args) "callResult"
@@ -612,7 +610,7 @@ let genMethodBody
 
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
-    let args = Array.map (genParam bldr typeHandles) md.Body.AllParameters
+    let args = Array.map (genParam bldr typeHandles) md.AllParameters
     for i = 0 to args.Length - 1 do
         buildStore bldr (getParam methodVal (uint32 i)) args.[i] |> ignore
     let locals = Array.map (genLocal bldr typeHandles) (Array.ofSeq md.Body.Variables)
@@ -650,10 +648,7 @@ let genMethodDef
         (funMap : FunMap)
         (md : MethodDefinition) =
     
-    if md.HasBody then
-        genMethodBody moduleRef funMap.[md.FullName] typeHandles funMap md
-    else
-        failwith "can only use genMethodDef for functions with a body"
+    genMethodBody moduleRef funMap.[md.FullName] typeHandles funMap md
 
 let rec genTypeDef
         (moduleRef : ModuleRef)
@@ -661,26 +656,52 @@ let rec genTypeDef
         (funMap : FunMap)
         (td : TypeDefinition) =
     Seq.iter (genTypeDef moduleRef typeHandles funMap) td.NestedTypes
-    Seq.iter (genMethodDef moduleRef typeHandles funMap) td.Methods
+    for md in td.Methods do
+        if md.HasBody then
+            genMethodDef moduleRef typeHandles funMap md
 
 let declareMethodDef
         (moduleRef : ModuleRef)
         (typeHandles : Map<string, TypeHandleRef>)
         (td : TypeDefinition)
         (md : MethodDefinition) =
+
+    let nameFunParam (fn : ValueRef) (i : int) (p : ParameterDefinition) =
+        let llvmParam = getParam fn (uint32 i)
+        match p.Name with
+        | null -> setValueName llvmParam ("arg" + string i) |> ignore
+        | name -> setValueName llvmParam name |> ignore
+
     if md.HasBody then
-        let paramTys = [|for p in md.Body.AllParameters -> toLLVMType typeHandles p.ParameterType|]
+        let paramTys = [|for p in md.AllParameters -> toLLVMType typeHandles p.ParameterType|]
         let retTy = toLLVMType typeHandles md.ReturnType
         let funcTy = functionType retTy paramTys
-        let fn = addFunction moduleRef md.Name funcTy // TODO are name collisions allowed here?
+        let fn = addFunction moduleRef md.Name funcTy
         
-        let nameFun (i : int) (p : ParameterDefinition) =
-            let llvmParam = getParam fn (uint32 i)
-            match p.Name with
-            | null -> setValueName llvmParam ("arg" + string i) |> ignore
-            | name -> setValueName llvmParam name |> ignore
-        Array.iteri nameFun md.Body.AllParameters
+        Array.iteri (nameFunParam fn) md.AllParameters
         
+        (md.FullName, fn)
+    elif md.HasPInvokeInfo then
+        let pInv = md.PInvokeInfo
+
+        // TODO for now assuming that we don't need to use "dlopen"
+        if pInv.Module.Name <> "libc.dll" then
+            failwith "sorry! only works with libc for now. No dlopen etc."
+
+        if pInv.EntryPoint <> md.Name then
+            failwithf
+                "sorry! for now the entry point name (%s) and function name (%s) must be the same"
+                pInv.EntryPoint
+                md.Name
+
+        let paramTys = [|for p in md.Parameters -> toLLVMType typeHandles p.ParameterType|]
+        let retTy = toLLVMType typeHandles md.ReturnType
+        let funcTy = functionType retTy paramTys
+        let fn = addFunction moduleRef md.Name funcTy
+        setLinkage fn Linkage.ExternalLinkage
+
+        Seq.iteri (nameFunParam fn) md.Parameters
+
         (md.FullName, fn)
     else
         failwith "don't know how to declare method without a body"
