@@ -14,6 +14,11 @@ let nullableAsOption (n : System.Nullable<'a>) =
     else
         None
 
+let objRefAsOption o =
+    match o with
+    | null -> None
+    | _ -> Some o
+
 type FunMap = Map<string , ValueRef>
 
 type TypeHandleRef with
@@ -401,12 +406,12 @@ let rec genInstructions
                 let argCount = methDef.AllParameters.Length
                 let args, stackTail = splitAt argCount instStack
                 let args = List.rev args
-                let callResult = buildCall bldr funRef (Array.ofList args) "callResult"
+                let voidRet = methRef.ReturnType.MetadataType = MetadataType.Void
+                let resultName = if voidRet then "" else "callResult"
+                let callResult = buildCall bldr funRef (Array.ofList args) resultName
                 if tailCall then setTailCall callResult true
 
-                match methRef.ReturnType.MetadataType with
-                | MetadataType.Void -> goNext stackTail
-                | _ -> goNext (callResult :: stackTail)
+                goNext (if voidRet then stackTail else callResult :: stackTail)
 
         | Callvirt _ -> noImpl ()
         | Calli _ -> noImpl ()
@@ -666,19 +671,17 @@ let declareMethodDef
         (td : TypeDefinition)
         (md : MethodDefinition) =
 
+    let fnName = if md.Name = "main" then "_main" else md.Name
     let nameFunParam (fn : ValueRef) (i : int) (p : ParameterDefinition) =
         let llvmParam = getParam fn (uint32 i)
         match p.Name with
-        | null -> setValueName llvmParam ("arg" + string i) |> ignore
-        | name -> setValueName llvmParam name |> ignore
+        | null -> setValueName llvmParam ("arg" + string i)
+        | name -> setValueName llvmParam name
 
     if md.HasBody then
         let paramTys = [|for p in md.AllParameters -> toLLVMType typeHandles p.ParameterType|]
         let retTy = toLLVMType typeHandles md.ReturnType
         let funcTy = functionType retTy paramTys
-        // TODO I'm sure there's a better way to find the main entry point. Also
-        // we need to think about arguments and return codes.
-        let fnName = if md.Name = "main@" then "main" else md.Name
         let fn = addFunction moduleRef fnName funcTy
         
         Array.iteri (nameFunParam fn) md.AllParameters
@@ -700,7 +703,7 @@ let declareMethodDef
         let paramTys = [|for p in md.Parameters -> toLLVMType typeHandles p.ParameterType|]
         let retTy = toLLVMType typeHandles md.ReturnType
         let funcTy = functionType retTy paramTys
-        let fn = addFunction moduleRef md.Name funcTy
+        let fn = addFunction moduleRef fnName funcTy
         setLinkage fn Linkage.ExternalLinkage
 
         Seq.iteri (nameFunParam fn) md.Parameters
@@ -741,7 +744,50 @@ let declareTypes (tds : TypeDefinition list) =
         declareType typeHandles td
     typeHandles
 
-let genTypeDefs (llvmModuleRef : ModuleRef) (cilTypeDefs : seq<TypeDefinition>) =
+let genMainFunction
+        (funMap : FunMap)
+        (methDef : MethodDefinition)
+        (llvmModuleRef : ModuleRef)
+        (cilTypeDefs : TypeDefinition seq) =
+
+    let argcTy = int32Type ()
+    let argvTy = pointerType (pointerType (int8Type ()) 0u) 0u
+    let cMainFnTy = functionType (int32Type ()) [|argcTy; argvTy|]
+    let cMainFn = addFunction llvmModuleRef "main" cMainFnTy
+    setValueName (getParam cMainFn 0u) "argc"
+    setValueName (getParam cMainFn 0u) "argv"
+
+    use bldr = new Builder(appendBasicBlock cMainFn "entry")
+    let callResult =
+        let voidRet = methDef.ReturnType.MetadataType = MetadataType.Void
+        let resultName = if voidRet then "" else "result"
+        match methDef.AllParameters with
+        | [||] -> buildCall bldr funMap.[methDef.FullName] [||] resultName
+        | [|cmdLineArgs|] ->
+            let safeParamTy = toSaferType cmdLineArgs.ParameterType
+            let badType () =
+                failwithf "main function should take no arguments or String[] but instead found %A" cmdLineArgs
+            match safeParamTy with
+            | Array elemTy ->
+                match toSaferType elemTy with
+                | String ->
+                    // TODO build args string array
+                    //buildCall bldr funMap.[cilMainMeth.FullName] [||] "result"
+                    failwith "main taking string array not yet implemented"
+                | _ -> badType ()
+            | argTys -> badType ()
+        | ps -> failwithf "expected main method to have zero or one argument but found %i arguments" ps.Length
+
+    match toSaferType methDef.ReturnType with
+    | Void  -> buildRet bldr (constInt (int32Type ()) 0uL false) |> ignore
+    | Int32 -> buildRet bldr callResult |> ignore
+    | retTy -> failwith "don't know how to deal with main return type of %A" retTy
+
+let genTypeDefs
+        (methDefOpt : MethodDefinition option)
+        (llvmModuleRef : ModuleRef)
+        (cilTypeDefs : seq<TypeDefinition>) =
+
     let cilTypeDefs = List.ofSeq cilTypeDefs
     let typeHandles = declareTypes cilTypeDefs
     for name, tyHandle in Map.toList typeHandles do
@@ -750,3 +796,6 @@ let genTypeDefs (llvmModuleRef : ModuleRef) (cilTypeDefs : seq<TypeDefinition>) 
         seq {for t in cilTypeDefs do yield! declareMethodDefs llvmModuleRef typeHandles t}
         |> Map.ofSeq
     Seq.iter (genTypeDef llvmModuleRef typeHandles funMap) cilTypeDefs
+    match methDefOpt with
+    | None -> ()
+    | Some methDef -> genMainFunction funMap methDef llvmModuleRef cilTypeDefs

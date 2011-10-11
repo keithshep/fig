@@ -16,7 +16,7 @@ let main args =
     | [| inAssemFile; outBitcodeFile |] ->
         let assem = AssemblyDefinition.ReadAssembly inAssemFile
         let llvmModuleRef = moduleCreateWithName "module"
-        genTypeDefs llvmModuleRef assem.MainModule.Types
+        genTypeDefs (objRefAsOption assem.EntryPoint) llvmModuleRef assem.MainModule.Types
         
         // for debug only
         dumpModule llvmModuleRef
