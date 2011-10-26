@@ -44,11 +44,13 @@ let rec saferTypeToLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : Saf
     | UInt64 -> int64Type ()
     | Single -> noImpl ()
     | Double -> doubleType ()
-    | String
-    | Pointer _
-    | ByReference _
-    | ValueType _ ->
-        noImpl ()
+    | String -> noImpl ()
+    | Pointer ptrTy ->
+        pointerType typeHandles.[ptrTy.ElementType.FullName].ResolvedType 0u
+    | ByReference _ -> noImpl ()
+    | ValueType typeRef ->
+        // TODO have no idea if this is right
+        typeHandles.[typeRef.FullName].ResolvedType
     | Class typeRef ->
         // TODO fix me
         pointerType typeHandles.[typeRef.FullName].ResolvedType 0u
@@ -107,9 +109,11 @@ let rec genInstructions
     match insts with
     | [] -> ()
     | inst :: instTail ->
+        //printfn "Inst: %A" inst.Instruction
+        
         let goNext (instStack : ValueRef list) =
             genInstructions bldr moduleRef methodVal args locals typeHandles funMap md blockMap ilBB instStack instTail
-        let noImpl () = failwith (sprintf "instruction <<%A>> not implemented" inst.Instruction)
+        let noImpl () = failwithf "instruction <<%A>> not implemented" inst.Instruction
 
         match inst.Instruction with
         // Basic
@@ -126,7 +130,7 @@ let rec genInstructions
                     | TypeKind.IntegerTypeKind ->
                         buildAdd bldr value1 value2 "tmpAdd"
                     | ty ->
-                        failwith (sprintf "don't know how to add type: %A" ty)
+                        failwithf "don't know how to add type: %A" ty
                 goNext (addResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
@@ -143,7 +147,7 @@ let rec genInstructions
                     | TypeKind.IntegerTypeKind ->
                         buildSDiv bldr value1 value2 "tmpDiv"
                     | ty ->
-                        failwith (sprintf "don't know how to div type: %A" ty)
+                        failwithf "don't know how to div type: %A" ty
                 goNext (divResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
@@ -231,7 +235,7 @@ let rec genInstructions
                     | TypeKind.IntegerTypeKind ->
                         buildMul bldr value1 value2 "tmpMul"
                     | ty ->
-                        failwith (sprintf "don't know how to multiply type: %A" ty)
+                        failwithf "don't know how to multiply type: %A" ty
                 goNext (mulResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
@@ -257,7 +261,7 @@ let rec genInstructions
                     | TypeKind.IntegerTypeKind ->
                         buildSub bldr value1 value2 "tmpSub"
                     | ty ->
-                        failwith (sprintf "don't know how to sub type: %A" ty)
+                        failwithf "don't know how to sub type: %A" ty
                 goNext (subResult :: stackTail)
             | _ ->
                 failwith "instruction stack too low"
@@ -296,7 +300,11 @@ let rec genInstructions
             let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
             let name = "tmp_" + paramDef.Name
             goNext (buildLoad bldr args.[paramIndex] name :: instStack)
-        | Ldarga _ -> noImpl ()
+        | Ldarga paramDef ->
+            let paramName = paramDef.Name
+            let allParamNames = [|for p in md.AllParameters -> p.Name|]
+            let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
+            goNext (args.[paramIndex] :: instStack)
         | LdindI1 _ -> noImpl ()
         | LdindU1 _ -> noImpl ()
         | LdindI2 _ -> noImpl ()
@@ -371,7 +379,7 @@ let rec genInstructions
                     | Brtrue _  -> noImpl ()
                     | _         -> failwith "whoa! this error should be impossible!"
                 | ty ->
-                    failwith (sprintf "don't know how to compare type: %A" ty)
+                    failwithf "don't know how to compare type: %A" ty
             
             | _ ->
                 failwith "instruction stack too low"
@@ -612,6 +620,8 @@ let genMethodBody
         (typeHandles : Map<string, TypeHandleRef>)
         (funMap : FunMap)
         (md : MethodDefinition) =
+
+    //printfn "Method: %s" md.FullName
 
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")

@@ -139,7 +139,8 @@ let asIntermediateType (t : TypeReference) =
     | ByReference byReferenceType ->
         iHaveNoClue ()
     | ValueType typeReference ->
-        iHaveNoClue ()
+        // TODO I think this is probably completely bogus
+        StackType.ObjectRef
     | Class typeReference ->
         // TODO understand difference between object and class
         // I think Object means the base object type
@@ -882,7 +883,18 @@ type MethodBody with
     member x.AllParameters = [|
         let meth = x.Method
         if meth.HasThis then
-            yield x.ThisParameter
+            //yield x.ThisParameter
+            let thisParamTy =
+                match meth.DeclaringType.MetadataType with
+                | MetadataType.Boolean | MetadataType.Char | MetadataType.SByte | MetadataType.Byte
+                | MetadataType.Int16 | MetadataType.UInt16 | MetadataType.Int32 | MetadataType.UInt32
+                | MetadataType.Int64 | MetadataType.UInt64 | MetadataType.Single | MetadataType.Double
+                | MetadataType.Pointer | MetadataType.ValueType
+                | MetadataType.IntPtr | MetadataType.UIntPtr | MetadataType.FunctionPointer ->
+                    new PointerType(meth.DeclaringType) :> TypeReference
+                | _ ->
+                    meth.DeclaringType :> TypeReference
+            yield new ParameterDefinition ("0", ParameterAttributes.None, thisParamTy)
         for p in meth.Parameters do
             yield p|]
 
