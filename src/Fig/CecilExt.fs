@@ -136,34 +136,34 @@ let asIntermediateType (t : TypeReference) =
         StackType.NativeInt
     | Object | String ->
         StackType.ObjectRef
-    | ByReference byReferenceType ->
-        iHaveNoClue ()
-    | ValueType typeReference ->
+    | ByReference _ ->
+        StackType.ManagedPointer
+    | ValueType _ ->
         // TODO I think this is probably completely bogus
         StackType.ObjectRef
-    | Class typeReference ->
+    | Class _ ->
         // TODO understand difference between object and class
         // I think Object means the base object type
         StackType.ObjectRef
-    | Var genericParameter ->
+    | Var _ ->
         iHaveNoClue ()
-    | Array arrayType ->
+    | Array _ ->
         StackType.ObjectRef
-    | GenericInstance genericInstanceType ->
+    | GenericInstance _ ->
         iHaveNoClue ()
     | TypedByReference ->
         iHaveNoClue ()
-    | FunctionPointer functionPointerType ->
+    | FunctionPointer _ ->
         iHaveNoClue ()
-    | MVar genericParameter ->
+    | MVar _ ->
         iHaveNoClue ()
-    | RequiredModifier requiredModifierType ->
+    | RequiredModifier _ ->
         iHaveNoClue ()
-    | OptionalModifier optionalModifierType ->
+    | OptionalModifier _ ->
         iHaveNoClue ()
-    | Sentinel sentinelType ->
+    | Sentinel _ ->
         iHaveNoClue ()
-    | Pinned pinnedType ->
+    | Pinned _ ->
         iHaveNoClue ()
 
 /// a basic block is always entered by the first instruction and
@@ -666,7 +666,7 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         
         | Stfld _ ->
             match poppedTypes with
-            | [_; StackType.ObjectRef] -> stackTail
+            | [_; (ObjectRef | NativeInt | ManagedPointer)] -> stackTail
             | _ -> badStack ()
         
         | Stobj _ ->
@@ -720,12 +720,12 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         | Call (_, methdRef) | Callvirt (_, _, methdRef) ->
             match methdRef.ReturnType.MetadataType with
             | MetadataType.Void -> stackTail
-            | retType -> asIntermediateType methdRef.ReturnType :: stackTail
+            | _ -> asIntermediateType methdRef.ReturnType :: stackTail
 
         | Calli (_, callSite) ->
             match callSite.ReturnType.MetadataType with
             | MetadataType.Void -> stackTail
-            | retType -> asIntermediateType callSite.ReturnType :: stackTail
+            | _ -> asIntermediateType callSite.ReturnType :: stackTail
 
         | Newobj methodRef ->
             asIntermediateType methodRef.DeclaringType :: stackTail
@@ -804,7 +804,7 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             | [ObjectRef] -> asIntermediateType typeRef :: stackTail
             | _ -> badStack ()
 
-        | Mkrefany typeRef ->
+        | Mkrefany _ ->
             match poppedTypes with
             | [ManagedPointer | NativeInt] -> ObjectRef :: stackTail
             | _ -> badStack ()
@@ -820,7 +820,7 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             | [ObjectRef] -> ObjectRef :: stackTail
             | _ -> badStack ()
 
-        | Ldtoken iMetadataTokenProvider ->
+        | Ldtoken _ ->
             match poppedTypes with
             | [] -> ObjectRef :: stackTail
             | _ -> badStack ()
@@ -845,7 +845,7 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             | [StackType.Int32] -> stackTail
             | _ -> badStack ()
 
-        | Initobj typeRef ->
+        | Initobj _ ->
             match poppedTypes with
             | [ManagedPointer | NativeInt] -> stackTail
             | _ -> badStack ()
@@ -884,6 +884,9 @@ type MethodBody with
         let meth = x.Method
         if meth.HasThis then
             //yield x.ThisParameter
+
+            // ThisParameter returns a bad type for valuetypes
+            // see "Partition II 13.3 Methods of value types"
             let thisParamTy =
                 match meth.DeclaringType.MetadataType with
                 | MetadataType.Boolean | MetadataType.Char | MetadataType.SByte | MetadataType.Byte
@@ -982,7 +985,6 @@ type MethodBody with
         // creates a single code block of instructions
         let readBlockInsts (blockIndex : int) =
             let fstInstIndex = blockInstStartIndexes.[blockIndex]
-            let fstInst = insts.[fstInstIndex]
             let lstInstIndex = fstInstIndex + blockInstCounts.[blockIndex] - 1
             
             // a little sanity check first

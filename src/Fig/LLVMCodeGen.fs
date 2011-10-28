@@ -47,7 +47,8 @@ let rec saferTypeToLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : Saf
     | String -> noImpl ()
     | Pointer ptrTy ->
         pointerType typeHandles.[ptrTy.ElementType.FullName].ResolvedType 0u
-    | ByReference _ -> noImpl ()
+    | ByReference byRefType ->
+        pointerType typeHandles.[byRefType.ElementType.FullName].ResolvedType 0u
     | ValueType typeRef ->
         // TODO have no idea if this is right
         typeHandles.[typeRef.FullName].ResolvedType
@@ -163,7 +164,7 @@ let rec genInstructions
         | ConvI4 ->
             match instStack with
             | [] -> failwith "instruction stack too low"
-            | stackHead :: stackTail ->
+            | stackHead :: _ ->
                 let headType = typeOf stackHead
                 match getTypeKind headType with
                 | TypeKind.IntegerTypeKind ->
@@ -288,7 +289,7 @@ let rec genInstructions
         | LdcI8 i ->
             let constResult = constInt (int64Type ()) (uint64 i) false // TODO correct me!!
             goNext (constResult :: instStack)
-        | LdcR4 r -> noImpl ()
+        | LdcR4 _ -> noImpl ()
         | LdcR8 r ->
             let constResult = constReal (doubleType ()) r
             goNext (constResult :: instStack)
@@ -356,8 +357,7 @@ let rec genInstructions
         | BgeUn (ifBB, elseBB) | BgtUn (ifBB, elseBB) | BleUn (ifBB, elseBB)
         | BltUn (ifBB, elseBB) | Brfalse (ifBB, elseBB) | Brtrue (ifBB, elseBB) ->
             match instStack with
-            | value2 :: value1 :: stackTail ->
-                let isIntCmp = true
+            | value2 :: value1 :: _ ->
                 match getTypeKind <| typeOf value1 with
                 | TypeKind.IntegerTypeKind ->
                     let brWith op =
@@ -387,7 +387,7 @@ let rec genInstructions
         | Switch (caseBlocks, defaultBlock) ->
             match instStack with
             | [] -> failwith "empty instruction stack"
-            | value :: stackTail ->
+            | value :: _ ->
                 let caseInts =
                     [|for i in 0 .. caseBlocks.Length - 1 ->
                         constInt (int32Type ()) (uint64 i) false|]
@@ -398,7 +398,7 @@ let rec genInstructions
             // TODO confirm void funs are [] and non-void are not
             match instStack with
             | [] -> buildRetVoid bldr |> ignore
-            | stackHead :: stackTail -> buildRet bldr stackHead |> ignore
+            | stackHead :: _ -> buildRet bldr stackHead |> ignore
 
         // Method call
         | Call (tailCall, methRef) ->
@@ -449,7 +449,7 @@ let rec genInstructions
 
         // Object instructions
         | Ldsfld _ -> noImpl ()
-        | Ldfld (unalignedPrefix, volatilePrefix, fieldRef) ->
+        | Ldfld (_unalignedPrefix, _volatilePrefix, fieldRef) ->
             match instStack with
             | [] -> failwith "empty instruction stack"
             | selfPtr :: stackTail ->
@@ -466,7 +466,7 @@ let rec genInstructions
         | Ldsflda _ -> noImpl ()
         | Ldflda _ -> noImpl ()
         | Stsfld _ -> noImpl ()
-        | Stfld (unalignedPrefix, volatilePrefix, fieldRef) ->
+        | Stfld (_unalignedPrefix, _volatilePrefix, fieldRef) ->
             match instStack with
             | value :: selfPtr :: stackTail ->
                 // TODO alignment and volitility
@@ -503,10 +503,9 @@ let rec genInstructions
         //   call string string[,]::Get(int32, int32)
         //   call string& string[,]::Address(int32, int32)
         //   call void string[,]::Set(int32, int32,string)
-        | Ldelem typeRef ->
+        | Ldelem _ ->
             match instStack with
             | index :: arrObj :: stackTail ->
-                //let arrPtr = buildStructGEP bldr arrObj 1u "arrPtr"
                 let arrPtrAddr = buildStructGEP bldr arrObj 1u "arrPtrAddr"
                 let arrPtr = buildLoad bldr arrPtrAddr "arrPtr"
                 let elemAddr = buildGEP bldr arrPtr [|index|] "elemAddr"
@@ -678,7 +677,6 @@ let rec genTypeDef
 let declareMethodDef
         (moduleRef : ModuleRef)
         (typeHandles : Map<string, TypeHandleRef>)
-        (td : TypeDefinition)
         (md : MethodDefinition) =
 
     let fnName = if md.Name = "main" then "_main" else md.Name
@@ -728,7 +726,7 @@ let rec declareMethodDefs
         (td : TypeDefinition) =
     seq {
         for m in td.Methods do
-            yield declareMethodDef moduleRef typeHandles td m
+            yield declareMethodDef moduleRef typeHandles m
         for t in td.NestedTypes do
             yield! declareMethodDefs moduleRef typeHandles t
     }
@@ -749,7 +747,7 @@ let declareTypes (tds : TypeDefinition list) =
 
     // generate the llvm ty handles that will hold all struct references
     // then perform the declarations
-    let typeHandles = Map.map (fun _ td -> createTypeHandle (opaqueType ())) tyMap
+    let typeHandles = Map.map (fun _ _ -> createTypeHandle (opaqueType ())) tyMap
     for _, td in Map.toList tyMap do
         declareType typeHandles td
     typeHandles
@@ -757,8 +755,7 @@ let declareTypes (tds : TypeDefinition list) =
 let genMainFunction
         (funMap : FunMap)
         (methDef : MethodDefinition)
-        (llvmModuleRef : ModuleRef)
-        (cilTypeDefs : TypeDefinition seq) =
+        (llvmModuleRef : ModuleRef) =
 
     let argcTy = int32Type ()
     let argvTy = pointerType (pointerType (int8Type ()) 0u) 0u
@@ -785,7 +782,7 @@ let genMainFunction
                     //buildCall bldr funMap.[cilMainMeth.FullName] [||] "result"
                     failwith "main taking string array not yet implemented"
                 | _ -> badType ()
-            | argTys -> badType ()
+            | _ -> badType ()
         | ps -> failwithf "expected main method to have zero or one argument but found %i arguments" ps.Length
 
     match toSaferType methDef.ReturnType with
@@ -808,4 +805,4 @@ let genTypeDefs
     Seq.iter (genTypeDef llvmModuleRef typeHandles funMap) cilTypeDefs
     match methDefOpt with
     | None -> ()
-    | Some methDef -> genMainFunction funMap methDef llvmModuleRef cilTypeDefs
+    | Some methDef -> genMainFunction funMap methDef llvmModuleRef
