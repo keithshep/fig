@@ -490,7 +490,7 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
 
         let poppedTypes, stackTail = popTypes stackTypes
 
-        let badStack () = failwithf "bad stack types for %A" inst
+        let badStack () = failwithf "bad stack types for %A found %A at the top of stack" inst poppedTypes
 
         match inst with
         | Add | Div | Mul | Rem | Sub ->
@@ -787,12 +787,17 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             | [ObjectRef] -> ObjectRef :: stackTail
             | _ -> badStack ()
 
-        | Ldfld (_, _, fieldRef) | Ldsfld (_, fieldRef) ->
+        | Ldfld (_, _, fieldRef) ->
             match poppedTypes with
             | [ObjectRef | ManagedPointer | NativeInt] ->
                 asIntermediateType fieldRef.FieldType :: stackTail
             | _ ->
                 badStack ()
+
+        | Ldsfld (_, fieldRef) ->
+            match poppedTypes with
+            | [] -> asIntermediateType fieldRef.FieldType :: stackTail
+            | _ -> badStack ()
 
         | Unbox typeRef ->
             match poppedTypes with
