@@ -24,7 +24,13 @@ type FunMap = Map<string , ValueRef>
 type TypeHandleRef with
     member x.ResolvedType = resolveTypeHandle x
 
-let rec saferTypeToLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : SaferTypeRef) =
+type ClassTypeRep (staticVarsTypeRef : TypeHandleRef, instanceVarsTypeRef : TypeHandleRef) =
+    member x.StaticVarsTypeRef = staticVarsTypeRef
+    member x.InstanceVarsTypeRef = instanceVarsTypeRef
+    member x.StaticVarsType = staticVarsTypeRef.ResolvedType
+    member x.InstanceVarsType = instanceVarsTypeRef.ResolvedType
+
+let rec saferTypeToLLVMType (typeHandles : Map<string, ClassTypeRep>) (ty : SaferTypeRef) =
 
     let noImpl () = failwithf "no impl for %A type yet" ty
     
@@ -46,15 +52,15 @@ let rec saferTypeToLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : Saf
     | Double -> doubleType ()
     | String -> noImpl ()
     | Pointer ptrTy ->
-        pointerType typeHandles.[ptrTy.ElementType.FullName].ResolvedType 0u
+        pointerType typeHandles.[ptrTy.ElementType.FullName].InstanceVarsType 0u
     | ByReference byRefType ->
-        pointerType typeHandles.[byRefType.ElementType.FullName].ResolvedType 0u
+        pointerType typeHandles.[byRefType.ElementType.FullName].InstanceVarsType 0u
     | ValueType typeRef ->
         // TODO have no idea if this is right
-        typeHandles.[typeRef.FullName].ResolvedType
+        typeHandles.[typeRef.FullName].InstanceVarsType
     | Class typeRef ->
         // TODO fix me
-        pointerType typeHandles.[typeRef.FullName].ResolvedType 0u
+        pointerType typeHandles.[typeRef.FullName].InstanceVarsType 0u
     | Var _ ->
         noImpl ()
     | Array arrTy ->
@@ -87,7 +93,7 @@ let rec saferTypeToLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : Saf
     | Pinned _ ->
         noImpl ()
 
-and toLLVMType (typeHandles : Map<string, TypeHandleRef>) (ty : TypeReference) =
+and toLLVMType (typeHandles : Map<string, ClassTypeRep>) (ty : TypeReference) =
     saferTypeToLLVMType typeHandles (toSaferType ty)
 
 let rec genInstructions
@@ -96,7 +102,7 @@ let rec genInstructions
         (methodVal : ValueRef)
         (args : ValueRef array)
         (locals : ValueRef array)
-        (typeHandles : Map<string, TypeHandleRef>)
+        (typeHandles : Map<string, ClassTypeRep>)
         (funMap : FunMap)
         (md : MethodDefinition)
         (blockMap : Map<int, BasicBlockRef>)
@@ -433,7 +439,7 @@ let rec genInstructions
                 failwith "expected a .ctor here"
             else
                 let funRef = funMap.[methDef.FullName]
-                let llvmTy = typeHandles.[enclosingName].ResolvedType
+                let llvmTy = typeHandles.[enclosingName].InstanceVarsType
                 let newObj = buildMalloc bldr llvmTy ("new" + enclosingName)
                 let args, stackTail = splitAt methRef.Parameters.Count instStack
                 let args = newObj :: List.rev args
@@ -602,21 +608,21 @@ let rec genInstructions
 
 let genAlloca
         (bldr : BuilderRef)
-        (typeHandles : Map<string, TypeHandleRef>)
+        (typeHandles : Map<string, ClassTypeRep>)
         (t : TypeReference)
         (name : string) =
     buildAlloca bldr (toLLVMType typeHandles t) (name + "Alloca")
 
-let genLocal (bldr : BuilderRef) (typeHandles : Map<string, TypeHandleRef>) (l : VariableDefinition) =
+let genLocal (bldr : BuilderRef) (typeHandles : Map<string, ClassTypeRep>) (l : VariableDefinition) =
     genAlloca bldr typeHandles l.VariableType (match l.Name with null -> "local" | n -> n)
 
-let genParam (bldr : BuilderRef) (typeHandles : Map<string, TypeHandleRef>) (p : ParameterDefinition) =
+let genParam (bldr : BuilderRef) (typeHandles : Map<string, ClassTypeRep>) (p : ParameterDefinition) =
     genAlloca bldr typeHandles p.ParameterType (match p.Name with null -> "param" | n -> n)
 
 let genMethodBody
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (typeHandles : Map<string, TypeHandleRef>)
+        (typeHandles : Map<string, ClassTypeRep>)
         (funMap : FunMap)
         (md : MethodDefinition) =
 
@@ -658,7 +664,7 @@ let genMethodBody
 
 let genMethodDef
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, TypeHandleRef>)
+        (typeHandles : Map<string, ClassTypeRep>)
         (funMap : FunMap)
         (md : MethodDefinition) =
     
@@ -666,7 +672,7 @@ let genMethodDef
 
 let rec genTypeDef
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, TypeHandleRef>)
+        (typeHandles : Map<string, ClassTypeRep>)
         (funMap : FunMap)
         (td : TypeDefinition) =
     Seq.iter (genTypeDef moduleRef typeHandles funMap) td.NestedTypes
@@ -676,7 +682,7 @@ let rec genTypeDef
 
 let declareMethodDef
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, TypeHandleRef>)
+        (typeHandles : Map<string, ClassTypeRep>)
         (md : MethodDefinition) =
 
     let fnName = if md.Name = "main" then "_main" else md.Name
@@ -722,7 +728,7 @@ let declareMethodDef
 
 let rec declareMethodDefs
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, TypeHandleRef>)
+        (typeHandles : Map<string, ClassTypeRep>)
         (td : TypeDefinition) =
     seq {
         for m in td.Methods do
@@ -731,10 +737,20 @@ let rec declareMethodDefs
             yield! declareMethodDefs moduleRef typeHandles t
     }
 
-let declareType (typeHandles : Map<string, TypeHandleRef>) (td : TypeDefinition) =
-    let stFields = [|for f in td.Fields -> toLLVMType typeHandles f.FieldType|]
-    let stTy = structType stFields false
-    refineType typeHandles.[td.FullName].ResolvedType stTy
+let declareType (typeHandles : Map<string, ClassTypeRep>) (td : TypeDefinition) =
+    let instanceFields =
+        [|for f in td.Fields do
+            if not f.IsStatic then
+                yield toLLVMType typeHandles f.FieldType|]
+    let instanceTy = structType instanceFields false
+    refineType typeHandles.[td.FullName].InstanceVarsType instanceTy
+
+    let staticFields =
+        [|for f in td.Fields do
+            if f.IsStatic then
+                yield toLLVMType typeHandles f.FieldType|]
+    let staticTy = structType staticFields false
+    refineType typeHandles.[td.FullName].StaticVarsType staticTy
 
 let declareTypes (tds : TypeDefinition list) =
     // the reason that we build the type map before generating anything with
@@ -747,7 +763,9 @@ let declareTypes (tds : TypeDefinition list) =
 
     // generate the llvm ty handles that will hold all struct references
     // then perform the declarations
-    let typeHandles = Map.map (fun _ _ -> createTypeHandle (opaqueType ())) tyMap
+    let makeOpaque () = createTypeHandle (opaqueType ())
+    let makeClassTyRep _ _ = new ClassTypeRep(makeOpaque (), makeOpaque ())
+    let typeHandles = Map.map makeClassTyRep tyMap
     for _, td in Map.toList tyMap do
         declareType typeHandles td
     typeHandles
@@ -798,7 +816,8 @@ let genTypeDefs
     let cilTypeDefs = List.ofSeq cilTypeDefs
     let typeHandles = declareTypes cilTypeDefs
     for name, tyHandle in Map.toList typeHandles do
-        addTypeName llvmModuleRef name tyHandle.ResolvedType |> ignore
+        addTypeName llvmModuleRef (name + "Instance") tyHandle.InstanceVarsType |> ignore
+        addTypeName llvmModuleRef (name + "Static") tyHandle.StaticVarsType |> ignore
     let funMap =
         seq {for t in cilTypeDefs do yield! declareMethodDefs llvmModuleRef typeHandles t}
         |> Map.ofSeq
