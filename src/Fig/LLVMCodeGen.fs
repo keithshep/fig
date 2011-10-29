@@ -300,13 +300,8 @@ let rec genInstructions
             let constResult = constReal (doubleType ()) r
             goNext (constResult :: instStack)
         | Ldarg paramDef ->
-            // TODO after http://groups.google.com/group/mono-cecil/browse_thread/thread/ce63993cd8cb3c98
-            // is fixed we can just use paramDef.Sequence
-            let paramName = paramDef.Name
-            let allParamNames = [|for p in md.AllParameters -> p.Name|]
-            let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
             let name = "tmp_" + paramDef.Name
-            goNext (buildLoad bldr args.[paramIndex] name :: instStack)
+            goNext (buildLoad bldr args.[paramDef.Sequence] name :: instStack)
         | Ldarga paramDef ->
             let paramName = paramDef.Name
             let allParamNames = [|for p in md.AllParameters -> p.Name|]
@@ -331,12 +326,7 @@ let rec genInstructions
             match instStack with
             | [] -> failwith "instruction stack too low"
             | stackHead :: stackTail ->
-                // TODO after http://groups.google.com/group/mono-cecil/browse_thread/thread/ce63993cd8cb3c98
-                // is fixed we can just use paramDef.Sequence
-                let paramName = paramDef.Name
-                let allParamNames = [|for p in md.AllParameters -> p.Name|]
-                let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
-                buildStore bldr stackHead args.[paramIndex] |> ignore
+                buildStore bldr stackHead args.[paramDef.Sequence] |> ignore
                 goNext stackTail
         | StindRef _ -> noImpl ()
         | StindI1 _ -> noImpl ()

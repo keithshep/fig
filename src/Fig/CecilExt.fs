@@ -884,27 +884,13 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
 /// extend cecil's MethodBody class
 type MethodBody with
 
-    /// get's all parameters including any implicit this parameters
+    /// gets all parameters including any implicit this parameters
     member x.AllParameters = [|
         let meth = x.Method
         if meth.HasThis then
-            //yield x.ThisParameter
-
-            // ThisParameter returns a bad type for valuetypes
-            // see "Partition II 13.3 Methods of value types"
-            let thisParamTy =
-                match meth.DeclaringType.MetadataType with
-                | MetadataType.Boolean | MetadataType.Char | MetadataType.SByte | MetadataType.Byte
-                | MetadataType.Int16 | MetadataType.UInt16 | MetadataType.Int32 | MetadataType.UInt32
-                | MetadataType.Int64 | MetadataType.UInt64 | MetadataType.Single | MetadataType.Double
-                | MetadataType.Pointer | MetadataType.ValueType
-                | MetadataType.IntPtr | MetadataType.UIntPtr | MetadataType.FunctionPointer ->
-                    new PointerType(meth.DeclaringType) :> TypeReference
-                | _ ->
-                    meth.DeclaringType :> TypeReference
-            yield new ParameterDefinition ("0", ParameterAttributes.None, thisParamTy)
-        for p in meth.Parameters do
-            yield p|]
+            yield x.ThisParameter
+        yield! meth.Parameters
+    |]
 
     /// This function gives a "view" of the Instructions property which is
     /// simplified (fewer instruction types with explicit code blocks) and more
