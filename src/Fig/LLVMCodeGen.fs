@@ -24,11 +24,26 @@ type FunMap = Map<string , ValueRef>
 type TypeHandleRef with
     member x.ResolvedType = resolveTypeHandle x
 
-type ClassTypeRep (staticVarsTypeRef : TypeHandleRef, instanceVarsTypeRef : TypeHandleRef) =
-    member x.StaticVarsTypeRef = staticVarsTypeRef
-    member x.InstanceVarsTypeRef = instanceVarsTypeRef
-    member x.StaticVarsType = staticVarsTypeRef.ResolvedType
-    member x.InstanceVarsType = instanceVarsTypeRef.ResolvedType
+type ClassTypeRep (name : string, modRef : ModuleRef, staticRef : TypeHandleRef, instRef : TypeHandleRef) =
+    let mutable staticVarsOpt = None : ValueRef option
+
+    do
+        addTypeName modRef (name + "Instance") instRef.ResolvedType |> ignore
+        addTypeName modRef (name + "Static") staticRef.ResolvedType |> ignore
+    
+    member x.InstanceVarsTypeRef = instRef
+    member x.InstanceVarsType = instRef.ResolvedType
+
+    member x.StaticVarsTypeRef = staticRef
+    member x.StaticVarsType = staticRef.ResolvedType
+
+    member x.StaticVars =
+        match staticVarsOpt with
+        | Some staticVars -> staticVars
+        | None ->
+            let staticVars = addGlobal modRef x.StaticVarsType (name + "Global")
+            staticVarsOpt <- Some staticVars
+            staticVars
 
 let rec saferTypeToLLVMType (typeHandles : Map<string, ClassTypeRep>) (ty : SaferTypeRef) =
 
@@ -280,12 +295,14 @@ let rec genInstructions
         | Not -> noImpl ()
         | Ldnull -> noImpl ()
         | Dup ->
+            // TODO this will probably only work in some limited cases
             match instStack with
             | [] -> failwith "instruction stack too low"
-            | stackHead :: _ ->
-                // TODO this will probably only work in some limited cases
-                goNext (stackHead :: instStack)
-        | Pop -> noImpl ()
+            | stackHead :: _ -> goNext (stackHead :: instStack)
+        | Pop ->
+            match instStack with
+            | [] -> failwith "instruction stack too low"
+            | _ :: stackTail -> goNext stackTail
         | Ckfinite -> noImpl ()
         | Nop ->
             goNext instStack
@@ -444,34 +461,61 @@ let rec genInstructions
         | Rethrow -> noImpl ()
 
         // Object instructions
-        | Ldsfld _ -> noImpl ()
+        | Ldsfld (_volatilePrefix, fieldRef) ->
+            // TODO alignment and volitility
+            let fieldName = fieldRef.FullName
+            let declaringTy = fieldRef.DeclaringType.Resolve ()
+            let staticCilFields = (fieldRef.DeclaringType.Resolve ()).StaticFields
+            let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
+
+            // OK now we need to load the field
+            let declClassRep = typeHandles.[declaringTy.FullName]
+            let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
+            let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
+            goNext (fieldValue :: instStack)
+
         | Ldfld (_unalignedPrefix, _volatilePrefix, fieldRef) ->
             match instStack with
             | [] -> failwith "empty instruction stack"
             | selfPtr :: stackTail ->
                 // TODO alignment and volitility
                 let fieldName = fieldRef.FullName
-                let cilFields = (fieldRef.DeclaringType.Resolve ()).Fields
+                let cilFields = (fieldRef.DeclaringType.Resolve ()).InstanceFields
                 let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) cilFields
 
                 // OK now we need to load the field
-                let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) "fieldPtr"
-                let fieldValue = buildLoad bldr fieldPtr "fieldValue"
+                let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) (fieldRef.Name + "Ptr")
+                let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
                 goNext (fieldValue :: stackTail)
 
         | Ldsflda _ -> noImpl ()
         | Ldflda _ -> noImpl ()
-        | Stsfld _ -> noImpl ()
+        | Stsfld (_volatilePrefix, fieldRef) ->
+            match instStack with
+            | [] -> failwith "empty instruction stack"
+            | value :: stackTail ->
+                // TODO volatility
+                let fieldName = fieldRef.FullName
+                let declaringTy = fieldRef.DeclaringType.Resolve ()
+                let staticCilFields = declaringTy.StaticFields
+                let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
+
+                // now store the field
+                let declClassRep = typeHandles.[declaringTy.FullName]
+                let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
+                buildStore bldr value fieldPtr |> ignore
+                goNext stackTail
+
         | Stfld (_unalignedPrefix, _volatilePrefix, fieldRef) ->
             match instStack with
             | value :: selfPtr :: stackTail ->
                 // TODO alignment and volitility
                 let fieldName = fieldRef.FullName
-                let cilFields = (fieldRef.DeclaringType.Resolve ()).Fields
+                let cilFields = (fieldRef.DeclaringType.Resolve ()).InstanceFields
                 let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) cilFields
 
                 // OK now we need to store the field
-                let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) "fieldPtr"
+                let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) (fieldRef.Name + "Ptr")
                 buildStore bldr value fieldPtr |> ignore
                 goNext stackTail
             | _ -> failwith "instruction stack too low"
@@ -567,7 +611,7 @@ let rec genInstructions
 
                     goNext (newArrObj :: stackTail)
 
-                | _ -> failwith "No impl yet for newing arrays of type %A" elemTypeRef
+                | _ -> failwithf "No impl yet for newing arrays of type %A" elemTypeRef
         | Ldlen ->
             match instStack with
             | [] -> failwith "instruction stack too low"
@@ -729,20 +773,18 @@ let rec declareMethodDefs
 
 let declareType (typeHandles : Map<string, ClassTypeRep>) (td : TypeDefinition) =
     let instanceFields =
-        [|for f in td.Fields do
-            if not f.IsStatic then
-                yield toLLVMType typeHandles f.FieldType|]
+        [|for f in td.InstanceFields do
+            yield toLLVMType typeHandles f.FieldType|]
     let instanceTy = structType instanceFields false
     refineType typeHandles.[td.FullName].InstanceVarsType instanceTy
 
     let staticFields =
-        [|for f in td.Fields do
-            if f.IsStatic then
-                yield toLLVMType typeHandles f.FieldType|]
+        [|for f in td.StaticFields do
+            yield toLLVMType typeHandles f.FieldType|]
     let staticTy = structType staticFields false
     refineType typeHandles.[td.FullName].StaticVarsType staticTy
 
-let declareTypes (tds : TypeDefinition list) =
+let declareTypes (llvmModuleRef : ModuleRef) (tds : TypeDefinition list) =
     // the reason that we build the type map before generating anything with
     // LLVM is that it allows us to remove the "forward declarations" of types
     // in the IL code. Since the real declarations all occur after the forward
@@ -754,7 +796,7 @@ let declareTypes (tds : TypeDefinition list) =
     // generate the llvm ty handles that will hold all struct references
     // then perform the declarations
     let makeOpaque () = createTypeHandle (opaqueType ())
-    let makeClassTyRep _ _ = new ClassTypeRep(makeOpaque (), makeOpaque ())
+    let makeClassTyRep name _ = new ClassTypeRep(name, llvmModuleRef, makeOpaque (), makeOpaque ())
     let typeHandles = Map.map makeClassTyRep tyMap
     for _, td in Map.toList tyMap do
         declareType typeHandles td
@@ -804,10 +846,7 @@ let genTypeDefs
         (cilTypeDefs : seq<TypeDefinition>) =
 
     let cilTypeDefs = List.ofSeq cilTypeDefs
-    let typeHandles = declareTypes cilTypeDefs
-    for name, tyHandle in Map.toList typeHandles do
-        addTypeName llvmModuleRef (name + "Instance") tyHandle.InstanceVarsType |> ignore
-        addTypeName llvmModuleRef (name + "Static") tyHandle.StaticVarsType |> ignore
+    let typeHandles = declareTypes llvmModuleRef cilTypeDefs
     let funMap =
         seq {for t in cilTypeDefs do yield! declareMethodDefs llvmModuleRef typeHandles t}
         |> Map.ofSeq

@@ -1325,3 +1325,14 @@ type MethodDefinition with
         if x.HasBody
         then x.Body.AllParameters
         else Array.ofSeq x.Parameters
+
+type TypeDefinition with
+    member x.InstanceFields = [|
+        for f in x.Fields do
+            if not f.IsStatic then yield f
+    |]
+
+    member x.StaticFields = [|
+        for f in x.Fields do
+            if f.IsStatic then yield f
+    |]
