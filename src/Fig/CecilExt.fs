@@ -22,7 +22,8 @@ type StackType =
     | Int32
     | Int64
     | NativeInt
-    | Float
+    | Float32
+    | Float64
     | ObjectRef
     | ManagedPointer
 
@@ -114,8 +115,10 @@ let asIntermediateType (t : TypeReference) =
             StackType.Int32
         | Int64 | UInt64 ->
             StackType.Int64
-        | Single | Double ->
-            StackType.Float
+        | Single ->
+            StackType.Float32
+        | Double ->
+            StackType.Float64
         | IntPtr | UIntPtr ->
             StackType.NativeInt
         | _ ->
@@ -130,8 +133,10 @@ let asIntermediateType (t : TypeReference) =
         StackType.Int32
     | Int64 | UInt64 ->
         StackType.Int64
-    | Single | Double ->
-        StackType.Float
+    | Single ->
+        StackType.Float32
+    | Double ->
+        StackType.Float64
     | IntPtr | UIntPtr ->
         StackType.NativeInt
     | Object | String ->
@@ -501,8 +506,10 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             match poppedTypes with
             | [StackType.Int32; StackType.Int32] ->
                 StackType.Int32 :: stackTail
-            | [StackType.Float; StackType.Float] ->
-                StackType.Float :: stackTail
+            | [StackType.Float32; StackType.Float32] ->
+                StackType.Float32 :: stackTail
+            | [(StackType.Float64 | StackType.Float32); (StackType.Float64 | StackType.Float32)] ->
+                StackType.Float64 :: stackTail
             | [StackType.ManagedPointer; StackType.ManagedPointer] ->
                 StackType.NativeInt :: stackTail
             | [_; StackType.ManagedPointer] | [StackType.ManagedPointer; _] ->
@@ -571,8 +578,11 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             StackType.Int32 :: stackTail
         | ConvI8 | ConvU8 | ConvOvfI8Un | ConvOvfU8Un | ConvOvfI8 | ConvOvfU8 ->
             StackType.Int64 :: stackTail
-        | ConvR4 | ConvR8 | ConvRUn ->
-            StackType.Float :: stackTail
+        | ConvR4 ->
+            StackType.Float32 :: stackTail
+        | ConvR8 | ConvRUn ->
+            // TODO is it OK to use float64 for conv.r.un? I'm guessing so.
+            StackType.Float64 :: stackTail
         | ConvI | ConvU | ConvOvfIUn | ConvOvfUUn | ConvOvfI | ConvOvfU ->
             StackType.NativeInt :: stackTail
 
@@ -598,9 +608,13 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             match poppedTypes with
             | [NativeInt] | [ManagedPointer] -> StackType.NativeInt :: stackTail
             | _ -> badStack ()
-        | LdindR4 _ | LdindR8 _ ->
+        | LdindR4 _ ->
             match poppedTypes with
-            | [NativeInt] | [ManagedPointer] -> StackType.Float :: stackTail
+            | [NativeInt] | [ManagedPointer] -> StackType.Float32 :: stackTail
+            | _ -> badStack ()
+        | LdindR8 _ ->
+            match poppedTypes with
+            | [NativeInt] | [ManagedPointer] -> StackType.Float64 :: stackTail
             | _ -> badStack ()
         | LdindRef _ ->
             match poppedTypes with
@@ -620,9 +634,13 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             match poppedTypes with
             | [] -> StackType.Int64 :: stackTail
             | _ -> badStack ()
-        | LdcR4 _ | LdcR8 _ ->
+        | LdcR4 _ ->
             match poppedTypes with
-            | [] -> StackType.Float :: stackTail
+            | [] -> StackType.Float32 :: stackTail
+            | _ -> badStack ()
+        | LdcR8 _ ->
+            match poppedTypes with
+            | [] -> StackType.Float64 :: stackTail
             | _ -> badStack ()
 
         | LdelemI1 | LdelemU1 | LdelemI2 | LdelemU2 | LdelemI4 | LdelemU4 ->
@@ -631,8 +649,10 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             StackType.Int64 :: stackTail
         | LdelemI ->
             StackType.NativeInt :: stackTail
-        | LdelemR4 | LdelemR8 ->
-            StackType.Float :: stackTail
+        | LdelemR4 ->
+            StackType.Float32 :: stackTail
+        | LdelemR8 ->
+            StackType.Float64 :: stackTail
         | LdelemRef ->
             StackType.ObjectRef :: stackTail
 
