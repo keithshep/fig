@@ -122,7 +122,7 @@ let rec genInstructions
         (md : MethodDefinition)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : BasicBlock)
-        (instStack : ValueRef list)
+        (stackVals : ValueRef list)
         (insts : AnnotatedInstruction list) =
     
     if not ilBB.InitStackTypes.IsEmpty then
@@ -133,8 +133,8 @@ let rec genInstructions
     | inst :: instTail ->
         //printfn "Inst: %A" inst.Instruction
         
-        let goNext (instStack : ValueRef list) =
-            genInstructions bldr moduleRef methodVal args locals typeHandles funMap md blockMap ilBB instStack instTail
+        let goNext (stackVals : ValueRef list) =
+            genInstructions bldr moduleRef methodVal args locals typeHandles funMap md blockMap ilBB stackVals instTail
         let noImpl () = failwithf "instruction <<%A>> not implemented" inst.Instruction
 
         match inst.Instruction with
@@ -143,7 +143,7 @@ let rec genInstructions
             // The add instruction adds value2 to value1 and pushes the result
             // on the stack. Overflow is not detected for integral operations
             // (but see add.ovf); floating-point overflow returns +inf or -inf.
-            match instStack with
+            match stackVals with
             | value2 :: value1 :: stackTail ->
                 let addResult =
                     match getTypeKind <| typeOf value1 with
@@ -160,7 +160,7 @@ let rec genInstructions
         | AddOvfUn -> noImpl ()
         | And -> noImpl ()
         | Div ->
-            match instStack with
+            match stackVals with
             | value2 :: value1 :: stackTail ->
                 let divResult =
                     match getTypeKind <| typeOf value1 with
@@ -183,14 +183,14 @@ let rec genInstructions
         | ConvI2 ->
             noImpl ()
         | ConvI4 ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "instruction stack too low"
             | stackHead :: _ ->
                 let headType = typeOf stackHead
                 match getTypeKind headType with
                 | TypeKind.IntegerTypeKind ->
                     if getIntTypeWidth headType = 32u then
-                        goNext instStack
+                        goNext stackVals
                     else
                         failwith "not 32u"
                 | _ ->
@@ -199,7 +199,7 @@ let rec genInstructions
         | ConvR4 ->
             noImpl ()
         | ConvR8 ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "instruction stack too low"
             | stackHead :: stackTail ->
                 let headType = typeOf stackHead
@@ -248,7 +248,7 @@ let rec genInstructions
             // the result on the stack. Integral operations silently 
             // truncate the upper bits on overflow (see mul.ovf).
             // TODO: For floating-point types, 0 × infinity = NaN.
-            match instStack with
+            match stackVals with
             | value2 :: value1 :: stackTail ->
                 let mulResult =
                     match getTypeKind <| typeOf value1 with
@@ -274,7 +274,7 @@ let rec genInstructions
             // operations (see sub.ovf); for floating-point operands, sub
             // returns +inf on positive overflow inf on negative overflow, and
             // zero on floating-point underflow.
-            match instStack with
+            match stackVals with
             | value2 :: value1 :: stackTail ->
                 let subResult =
                     match getTypeKind <| typeOf value1 with
@@ -296,34 +296,34 @@ let rec genInstructions
         | Ldnull -> noImpl ()
         | Dup ->
             // TODO this will probably only work in some limited cases
-            match instStack with
+            match stackVals with
             | [] -> failwith "instruction stack too low"
-            | stackHead :: _ -> goNext (stackHead :: instStack)
+            | stackHead :: _ -> goNext (stackHead :: stackVals)
         | Pop ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "instruction stack too low"
             | _ :: stackTail -> goNext stackTail
         | Ckfinite -> noImpl ()
         | Nop ->
-            goNext instStack
+            goNext stackVals
         | LdcI4 i ->
             let constResult = constInt (int32Type ()) (uint64 i) false // TODO correct me!!
-            goNext (constResult :: instStack)
+            goNext (constResult :: stackVals)
         | LdcI8 i ->
             let constResult = constInt (int64Type ()) (uint64 i) false // TODO correct me!!
-            goNext (constResult :: instStack)
+            goNext (constResult :: stackVals)
         | LdcR4 _ -> noImpl ()
         | LdcR8 r ->
             let constResult = constReal (doubleType ()) r
-            goNext (constResult :: instStack)
+            goNext (constResult :: stackVals)
         | Ldarg paramDef ->
             let name = "tmp_" + paramDef.Name
-            goNext (buildLoad bldr args.[paramDef.Sequence] name :: instStack)
+            goNext (buildLoad bldr args.[paramDef.Sequence] name :: stackVals)
         | Ldarga paramDef ->
             let paramName = paramDef.Name
             let allParamNames = [|for p in md.AllParameters -> p.Name|]
             let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
-            goNext (args.[paramIndex] :: instStack)
+            goNext (args.[paramIndex] :: stackVals)
         | LdindI1 _ -> noImpl ()
         | LdindU1 _ -> noImpl ()
         | LdindI2 _ -> noImpl ()
@@ -337,10 +337,10 @@ let rec genInstructions
         | LdindRef _ -> noImpl ()
         | Ldloc varDef ->
             let loadResult = buildLoad bldr locals.[varDef.Index] "tmp"
-            goNext (loadResult :: instStack)
+            goNext (loadResult :: stackVals)
         | Ldloca _ -> noImpl ()
         | Starg paramDef ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "instruction stack too low"
             | stackHead :: stackTail ->
                 buildStore bldr stackHead args.[paramDef.Sequence] |> ignore
@@ -354,7 +354,7 @@ let rec genInstructions
         | StindR8 _ -> noImpl ()
         | StindI _ -> noImpl ()
         | Stloc varDef ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "instruction stack too low"
             | stackHead :: stackTail ->
                 buildStore bldr stackHead locals.[varDef.Index] |> ignore
@@ -369,7 +369,7 @@ let rec genInstructions
         | Ble (ifBB, elseBB) | Blt (ifBB, elseBB) | BneUn (ifBB, elseBB)
         | BgeUn (ifBB, elseBB) | BgtUn (ifBB, elseBB) | BleUn (ifBB, elseBB)
         | BltUn (ifBB, elseBB) | Brfalse (ifBB, elseBB) | Brtrue (ifBB, elseBB) ->
-            match instStack with
+            match stackVals with
             | value2 :: value1 :: _ ->
                 match getTypeKind <| typeOf value1 with
                 | TypeKind.IntegerTypeKind ->
@@ -398,7 +398,7 @@ let rec genInstructions
                 failwith "instruction stack too low"
 
         | Switch (caseBlocks, defaultBlock) ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "empty instruction stack"
             | value :: _ ->
                 let caseInts =
@@ -409,7 +409,7 @@ let rec genInstructions
 
         | Ret ->
             // TODO confirm void funs are [] and non-void are not
-            match instStack with
+            match stackVals with
             | [] -> buildRetVoid bldr |> ignore
             | stackHead :: _ -> buildRet bldr stackHead |> ignore
 
@@ -420,12 +420,12 @@ let rec genInstructions
             let enclosingName = methDef.DeclaringType.FullName
             if enclosingName = "System.Object" && methDef.IsConstructor then
                 //TODO stop ignoring object constructor calls
-                goNext instStack.Tail
+                goNext stackVals.Tail
             else
                 let funRef = funMap.[methDef.FullName]
 
                 let argCount = methDef.AllParameters.Length
-                let args, stackTail = splitAt argCount instStack
+                let args, stackTail = splitAt argCount stackVals
                 let args = List.rev args
                 let voidRet = methRef.ReturnType.MetadataType = MetadataType.Void
                 let resultName = if voidRet then "" else "callResult"
@@ -448,7 +448,7 @@ let rec genInstructions
                 let funRef = funMap.[methDef.FullName]
                 let llvmTy = typeHandles.[enclosingName].InstanceVarsType
                 let newObj = buildMalloc bldr llvmTy ("new" + enclosingName)
-                let args, stackTail = splitAt methRef.Parameters.Count instStack
+                let args, stackTail = splitAt methRef.Parameters.Count stackVals
                 let args = newObj :: List.rev args
                 buildCall bldr funRef (Array.ofList args) "" |> ignore
                 goNext (newObj :: stackTail)
@@ -472,10 +472,10 @@ let rec genInstructions
             let declClassRep = typeHandles.[declaringTy.FullName]
             let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
             let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
-            goNext (fieldValue :: instStack)
+            goNext (fieldValue :: stackVals)
 
         | Ldfld (_unalignedPrefix, _volatilePrefix, fieldRef) ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "empty instruction stack"
             | selfPtr :: stackTail ->
                 // TODO alignment and volitility
@@ -491,7 +491,7 @@ let rec genInstructions
         | Ldsflda _ -> noImpl ()
         | Ldflda _ -> noImpl ()
         | Stsfld (_volatilePrefix, fieldRef) ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "empty instruction stack"
             | value :: stackTail ->
                 // TODO volatility
@@ -507,7 +507,7 @@ let rec genInstructions
                 goNext stackTail
 
         | Stfld (_unalignedPrefix, _volatilePrefix, fieldRef) ->
-            match instStack with
+            match stackVals with
             | value :: selfPtr :: stackTail ->
                 // TODO alignment and volitility
                 let fieldName = fieldRef.FullName
@@ -544,7 +544,7 @@ let rec genInstructions
         //   call string& string[,]::Address(int32, int32)
         //   call void string[,]::Set(int32, int32,string)
         | Ldelem _ ->
-            match instStack with
+            match stackVals with
             | index :: arrObj :: stackTail ->
                 let arrPtrAddr = buildStructGEP bldr arrObj 1u "arrPtrAddr"
                 let arrPtr = buildLoad bldr arrPtrAddr "arrPtr"
@@ -555,7 +555,7 @@ let rec genInstructions
             | _ ->
                 failwith "instruction stack too low"
         | Stelem _ ->
-            match instStack with
+            match stackVals with
             | value :: index :: arrObj :: stackTail ->
                 //let arrPtr = buildStructGEP bldr arrObj 1u "arrPtr"
                 let arrPtrAddr = buildStructGEP bldr arrObj 1u "arrPtrAddr"
@@ -587,7 +587,7 @@ let rec genInstructions
         | StelemR8 -> noImpl ()
         | StelemRef -> noImpl ()
         | Newarr elemTypeRef ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "instruction stack too low"
             | numElems :: stackTail ->
                 match toSaferType elemTypeRef with
@@ -613,7 +613,7 @@ let rec genInstructions
 
                 | _ -> failwithf "No impl yet for newing arrays of type %A" elemTypeRef
         | Ldlen ->
-            match instStack with
+            match stackVals with
             | [] -> failwith "instruction stack too low"
             | arrObj :: stackTail ->
                 let lenAddr = buildStructGEP bldr arrObj 0u "lenAddr"
