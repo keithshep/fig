@@ -26,6 +26,11 @@ type StackType =
     | Float64_ST
     | ObjectRef_ST
     | ManagedPointer_ST
+    with
+        interface StackTyped with
+            member x.StackType = x
+and StackTyped =
+    abstract member StackType : StackType with get
 
 /// a safer type reference
 type SaferTypeRef =
@@ -398,7 +403,7 @@ and SaferInstruction =
 
 and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB : StackBehaviour, flowControl : FlowControl) =
 
-    let popTypes (stackTypes : StackType list) =
+    member x.PopTypes (stackTypes : StackTyped list) =
         match popB with
         | StackBehaviour.Pop0 ->
             ([], stackTypes)
@@ -466,9 +471,9 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
     member x.Instruction = inst
     
     /// update the type stack
-    member x.UpdateTypes (stackTypes : StackType list) =
+    member x.TypesToPush (poppedTypes : StackTyped list) =
 
-        let poppedTypes, stackTail = popTypes stackTypes
+        let poppedTypes = [for t in poppedTypes -> t.StackType]
 
         let badStack () = failwithf "bad stack types for %A found %A at the top of stack" inst poppedTypes
 
@@ -480,22 +485,22 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             // TODO: assuming valid bytecode here
             match poppedTypes with
             | [Int32_ST; Int32_ST] ->
-                Int32_ST :: stackTail
+                Some [Int32_ST]
             | [Float32_ST; Float32_ST] ->
-                Float32_ST :: stackTail
+                Some [Float32_ST]
             | [(Float64_ST | Float32_ST); (Float64_ST | Float32_ST)] ->
-                Float64_ST :: stackTail
+                Some [Float64_ST]
             | [ManagedPointer_ST; ManagedPointer_ST] ->
-                NativeInt_ST :: stackTail
+                Some [NativeInt_ST]
             | [_; ManagedPointer_ST] | [ManagedPointer_ST; _] ->
-                ManagedPointer_ST :: stackTail
+                Some [ManagedPointer_ST]
             | [_; NativeInt_ST] | [NativeInt_ST; _] ->
-                NativeInt_ST :: stackTail
+                Some [NativeInt_ST]
             | _ ->
                 badStack ()
 
         | Neg | Not ->
-            poppedTypes
+            Some poppedTypes
 
         // Binary Comparison or Branch Operations
         // Used for beq, beq.s, bge, bge.s, bge.un, bge.un.s, bgt, bgt.s,
@@ -503,16 +508,16 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         // blt.un.s, bne.un, bne.un.s, ceq, cgt, cgt.un, clt, clt.un
         | Beq _ | Bge _ | Bgt _ | Ble _ | Blt _
         | BneUn _ | BgeUn _ | BgtUn _ | BleUn _ | BltUn _ ->
-            stackTail
+            Some []
         | Ceq | Cgt | CgtUn | Clt | CltUn ->
-            Int32_ST :: stackTail
+            Some [Int32_ST]
 
         // The shl and shr instructions return the same type as their first operand
         // and their second operand shall be of type int32 or native int
         | Shl | Shr | ShrUn ->
             match poppedTypes with
             | [Int32_ST; fstOpType] | [NativeInt_ST; fstOpType] ->
-                fstOpType :: stackTail
+                Some [fstOpType]
             | _ ->
                 badStack ()
 
@@ -521,11 +526,11 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         | And | DivUn | Or | RemUn | Xor ->
             match poppedTypes with
             | [Int32_ST; Int32_ST] ->
-                Int32_ST :: stackTail
+                Some [Int32_ST]
             | [Int64_ST; Int64_ST] ->
-                Int64_ST :: stackTail
+                Some [Int64_ST]
             | [NativeInt_ST; _] | [_; NativeInt_ST] ->
-                NativeInt_ST :: stackTail
+                Some [NativeInt_ST]
             | _ ->
                 badStack ()
 
@@ -534,15 +539,15 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         | AddOvf | AddOvfUn | MulOvf | MulOvfUn | SubOvf | SubOvfUn ->
             match poppedTypes with
             | [Int32_ST; Int32_ST] ->
-                Int32_ST :: stackTail
+                Some [Int32_ST]
             | [Int64_ST; Int64_ST] ->
-                Int64_ST :: stackTail
+                Some [Int64_ST]
             | [ManagedPointer_ST; ManagedPointer_ST] ->
-                NativeInt_ST :: stackTail
+                Some [NativeInt_ST]
             | [_; ManagedPointer_ST] | [ManagedPointer_ST; _] ->
-                ManagedPointer_ST :: stackTail
+                Some [ManagedPointer_ST]
             | [NativeInt_ST; _] | [_; NativeInt_ST] ->
-                NativeInt_ST :: stackTail
+                Some [NativeInt_ST]
             | _ ->
                 badStack ()
 
@@ -550,321 +555,323 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
         | ConvI1 | ConvI2 | ConvI4 | ConvU4 | ConvU2 | ConvU1
         | ConvOvfI1 | ConvOvfU1 | ConvOvfI2 | ConvOvfU2 | ConvOvfI4 | ConvOvfU4
         | ConvOvfI1Un | ConvOvfI2Un | ConvOvfI4Un | ConvOvfU1Un | ConvOvfU2Un | ConvOvfU4Un ->
-            Int32_ST :: stackTail
+            Some [Int32_ST]
         | ConvI8 | ConvU8 | ConvOvfI8Un | ConvOvfU8Un | ConvOvfI8 | ConvOvfU8 ->
-            Int64_ST :: stackTail
+            Some [Int64_ST]
         | ConvR4 ->
-            Float32_ST :: stackTail
+            Some [Float32_ST]
         | ConvR8 | ConvRUn ->
             // TODO is it OK to use float64 for conv.r.un? I'm guessing so.
-            Float64_ST :: stackTail
+            Some [Float64_ST]
         | ConvI | ConvU | ConvOvfIUn | ConvOvfUUn | ConvOvfI | ConvOvfU ->
-            NativeInt_ST :: stackTail
+            Some [NativeInt_ST]
 
         | Brfalse _ | Brtrue _ ->
             match poppedTypes with
-            | [_] -> stackTail
+            | [_] -> Some []
             | _ -> badStack ()
 
         | Br _ ->
             match poppedTypes with
-            | [] -> stackTail
+            | [] -> Some []
             | _ -> badStack ()
 
         | LdindI1 _ | LdindU1 _ | LdindI2 _ | LdindU2 _ | LdindI4 _ | LdindU4 _ ->
             match poppedTypes with
-            | [NativeInt_ST] | [ManagedPointer_ST] -> Int32_ST :: stackTail
+            | [NativeInt_ST] | [ManagedPointer_ST] -> Some [Int32_ST]
             | _ -> badStack ()
         | LdindI8 _ ->
             match poppedTypes with
-            | [NativeInt_ST] | [ManagedPointer_ST] -> Int64_ST :: stackTail
+            | [NativeInt_ST] | [ManagedPointer_ST] -> Some [Int64_ST]
             | _ -> badStack ()
         | LdindI _ ->
             match poppedTypes with
-            | [NativeInt_ST] | [ManagedPointer_ST] -> NativeInt_ST :: stackTail
+            | [NativeInt_ST] | [ManagedPointer_ST] -> Some [NativeInt_ST]
             | _ -> badStack ()
         | LdindR4 _ ->
             match poppedTypes with
-            | [NativeInt_ST] | [ManagedPointer_ST] -> Float32_ST :: stackTail
+            | [NativeInt_ST] | [ManagedPointer_ST] -> Some [Float32_ST]
             | _ -> badStack ()
         | LdindR8 _ ->
             match poppedTypes with
-            | [NativeInt_ST] | [ManagedPointer_ST] -> Float64_ST :: stackTail
+            | [NativeInt_ST] | [ManagedPointer_ST] -> Some [Float64_ST]
             | _ -> badStack ()
         | LdindRef _ ->
             match poppedTypes with
-            | [NativeInt_ST] | [ManagedPointer_ST] -> ObjectRef_ST :: stackTail
+            | [NativeInt_ST] | [ManagedPointer_ST] -> Some [ObjectRef_ST]
             | _ -> badStack ()
 
         | Break | Nop ->
             match poppedTypes with
-            | [] -> stackTail
+            | [] -> Some []
             | _ -> badStack ()
 
         | LdcI4 _ ->
             match poppedTypes with
-            | [] -> Int32_ST :: stackTail
+            | [] -> Some [Int32_ST]
             | _ -> badStack ()
         | LdcI8 _ ->
             match poppedTypes with
-            | [] -> Int64_ST :: stackTail
+            | [] -> Some [Int64_ST]
             | _ -> badStack ()
         | LdcR4 _ ->
             match poppedTypes with
-            | [] -> Float32_ST :: stackTail
+            | [] -> Some [Float32_ST]
             | _ -> badStack ()
         | LdcR8 _ ->
             match poppedTypes with
-            | [] -> Float64_ST :: stackTail
+            | [] -> Some [Float64_ST]
             | _ -> badStack ()
 
         | LdelemI1 | LdelemU1 | LdelemI2 | LdelemU2 | LdelemI4 | LdelemU4 ->
-            Int32_ST :: stackTail
+            Some [Int32_ST]
         | LdelemI8 ->
-            Int64_ST :: stackTail
+            Some [Int64_ST]
         | LdelemI ->
-            NativeInt_ST :: stackTail
+            Some [NativeInt_ST]
         | LdelemR4 ->
-            Float32_ST :: stackTail
+            Some [Float32_ST]
         | LdelemR8 ->
-            Float64_ST :: stackTail
+            Some [Float64_ST]
         | LdelemRef ->
-            ObjectRef_ST :: stackTail
+            Some [ObjectRef_ST]
 
         | StelemI | StelemI1 | StelemI2 | StelemI4
         | StelemI8 | StelemR4 | StelemR8 | StelemRef | Stelem _ ->
             match poppedTypes with
             | [_; Int32_ST; ObjectRef_ST]
             | [_; NativeInt_ST; ObjectRef_ST] ->
-                stackTail
+                Some []
             | _ ->
                 badStack ()
 
         | StindRef _ | StindI1 _ | StindI2 _ | StindI4 _
         | StindI8 _ | StindR4 _ | StindR8 _ | StindI _ ->
-            stackTail
+            Some []
 
         | Dup ->
             match poppedTypes with
-            | [item] -> item :: item :: stackTail
+            | [item] -> Some [item; item]
             | _ -> badStack ()
 
         | Ldnull | Ldstr _ ->
             match poppedTypes with
-            | [] -> ObjectRef_ST :: stackTail
+            | [] -> Some [ObjectRef_ST]
             | _ -> badStack ()
         
         | Starg _ | Stloc _ | Stsfld _ ->
             match poppedTypes with
-            | [_] -> stackTail
+            | [_] -> Some []
             | _ -> badStack ()
         
         | Stfld _ ->
             match poppedTypes with
-            | [_; (ObjectRef_ST | NativeInt_ST | ManagedPointer_ST)] -> stackTail
+            | [_; (ObjectRef_ST | NativeInt_ST | ManagedPointer_ST)] -> Some []
             | _ -> badStack ()
         
         | Stobj _ ->
             match poppedTypes with
-            | [_; _] -> stackTail
+            | [_; _] -> Some []
             | _ -> badStack ()
 
         | Ldlen ->
             match poppedTypes with
-            | [ObjectRef_ST] -> NativeInt_ST :: stackTail
+            | [ObjectRef_ST] -> Some [NativeInt_ST]
             | _ -> badStack ()
 
         | Pop ->
             match poppedTypes with
-            | [_] -> stackTail
+            | [_] -> Some []
             | _ -> badStack ()
 
         | Newarr _ ->
             match poppedTypes with
-            | [Int32_ST] | [NativeInt_ST] -> ObjectRef_ST :: stackTail
+            | [Int32_ST] | [NativeInt_ST] -> Some [ObjectRef_ST]
             | _ -> badStack ()
 
         | Box _ ->
             match poppedTypes with
-            | [_] -> ObjectRef_ST :: stackTail
+            | [_] -> Some [ObjectRef_ST]
             | _ -> badStack ()
 
         | Throw ->
             match poppedTypes with
-            | [ObjectRef_ST] -> []
+            | [ObjectRef_ST] -> None
             | _ -> badStack ()
         
         | Jmp _ ->
             match poppedTypes with
-            | [] -> []
+            | [] -> None
             | _ -> badStack ()
 
         | Ret ->
             match poppedTypes with
-            | [] | [_] -> []
+            | [] | [_] -> None
             | _ -> badStack ()
 
-        | Leave _ -> []
+        | Leave _ -> None
 
-        | Ckfinite -> stackTypes
+        | Ckfinite -> Some poppedTypes
 
-        | Endfinally -> []
+        | Endfinally -> None
         
-        | Ldftn _ -> NativeInt_ST :: stackTail
+        | Ldftn _ -> Some [NativeInt_ST]
 
         | Call (_, methdRef) | Callvirt (_, _, methdRef) ->
             match methdRef.ReturnType.MetadataType with
-            | MetadataType.Void -> stackTail
-            | _ -> asIntermediateType methdRef.ReturnType :: stackTail
+            | MetadataType.Void -> Some []
+            | _ -> Some [asIntermediateType methdRef.ReturnType]
 
         | Calli (_, callSite) ->
             match callSite.ReturnType.MetadataType with
-            | MetadataType.Void -> stackTail
-            | _ -> asIntermediateType callSite.ReturnType :: stackTail
+            | MetadataType.Void -> Some []
+            | _ -> Some [asIntermediateType callSite.ReturnType]
 
         | Newobj methodRef ->
-            asIntermediateType methodRef.DeclaringType :: stackTail
+            Some [asIntermediateType methodRef.DeclaringType]
 
         | Cpobj _ ->
             match poppedTypes with
             | [(NativeInt_ST | ManagedPointer_ST); (NativeInt_ST | ManagedPointer_ST)] ->
-                []
+                None
             | _ ->
                 badStack ()
 
         | Ldarga _ | Ldloca _ ->
-            ManagedPointer_ST :: stackTail
+            Some [ManagedPointer_ST]
         
         | Ldflda _ ->
             match poppedTypes with
             | [(ObjectRef_ST | ManagedPointer_ST)] ->
-                ManagedPointer_ST :: stackTail
+                Some [ManagedPointer_ST]
             | [NativeInt_ST] ->
-                NativeInt_ST :: stackTail
+                Some [NativeInt_ST]
             | _ ->
                 badStack ()
 
         | Ldelema _ ->
             match poppedTypes with
             | [(Int32_ST | NativeInt_ST); ObjectRef_ST] ->
-                ManagedPointer_ST :: stackTail
+                Some [ManagedPointer_ST]
             | _ ->
                 badStack ()
 
         | Ldelem typeRef ->
             match poppedTypes with
             | [(Int32_ST | NativeInt_ST); ObjectRef_ST] ->
-                asIntermediateType typeRef :: stackTail
+                Some [asIntermediateType typeRef]
             | _ ->
                 badStack ()
 
         | Ldarg paramDef ->
             match poppedTypes with
-            | [] -> asIntermediateType paramDef.ParameterType :: stackTail
+            | [] -> Some [asIntermediateType paramDef.ParameterType]
             | _ -> badStack ()
 
         | Ldloc varDef ->
             match poppedTypes with
-            | [] -> asIntermediateType varDef.VariableType :: stackTail
+            | [] -> Some [asIntermediateType varDef.VariableType]
             | _ -> badStack ()
 
         
         | Ldobj (_, _, typeRef) ->
             match poppedTypes with
-            | [NativeInt_ST | ManagedPointer_ST] -> asIntermediateType typeRef :: stackTail
+            | [NativeInt_ST | ManagedPointer_ST] -> Some [asIntermediateType typeRef]
             | _ -> badStack ()
 
         | Switch _ ->
-            stackTail
+            Some []
 
         | Isinst _ | Castclass _ ->
             match poppedTypes with
-            | [ObjectRef_ST] -> ObjectRef_ST :: stackTail
+            | [ObjectRef_ST] -> Some [ObjectRef_ST]
             | _ -> badStack ()
 
         | Ldfld (_, _, fieldRef) ->
             match poppedTypes with
             | [ObjectRef_ST | ManagedPointer_ST | NativeInt_ST] ->
-                asIntermediateType fieldRef.FieldType :: stackTail
+                Some [asIntermediateType fieldRef.FieldType]
             | _ ->
                 badStack ()
 
         | Ldsfld (_, fieldRef) ->
             match poppedTypes with
-            | [] -> asIntermediateType fieldRef.FieldType :: stackTail
+            | [] -> Some [asIntermediateType fieldRef.FieldType]
             | _ -> badStack ()
 
         | Unbox typeRef ->
             match poppedTypes with
-            | [ObjectRef_ST] -> asIntermediateType typeRef :: stackTail
+            | [ObjectRef_ST] -> Some [asIntermediateType typeRef]
             | _ -> badStack ()
 
         | UnboxAny typeRef ->
             match poppedTypes with
-            | [ObjectRef_ST] -> asIntermediateType typeRef :: stackTail
+            | [ObjectRef_ST] -> Some [asIntermediateType typeRef]
             | _ -> badStack ()
 
         | Mkrefany _ ->
             match poppedTypes with
-            | [ManagedPointer_ST | NativeInt_ST] -> ObjectRef_ST :: stackTail
+            | [ManagedPointer_ST | NativeInt_ST] -> Some [ObjectRef_ST]
             | _ -> badStack ()
 
         | Refanyval typeRef ->
             // Correct CIL ensures that typedRef is a valid typed reference (created by a previous call to mkrefany).
             match poppedTypes with
-            | [ObjectRef_ST] -> asIntermediateType typeRef :: stackTail
+            | [ObjectRef_ST] -> Some [asIntermediateType typeRef]
             | _ -> badStack ()
 
         | Refanytype ->
             match poppedTypes with
-            | [ObjectRef_ST] -> ObjectRef_ST :: stackTail
+            | [ObjectRef_ST] -> Some [ObjectRef_ST]
             | _ -> badStack ()
 
         | Ldtoken _ ->
             match poppedTypes with
-            | [] -> ObjectRef_ST :: stackTail
+            | [] -> Some [ObjectRef_ST]
             | _ -> badStack ()
 
         | Arglist ->
             match poppedTypes with
-            | [] -> ObjectRef_ST :: stackTail
+            | [] -> Some [ObjectRef_ST]
             | _ -> badStack ()
 
         | Ldvirtftn _ ->
             match poppedTypes with
-            | [ObjectRef_ST] -> NativeInt_ST :: stackTail
+            | [ObjectRef_ST] -> Some [NativeInt_ST]
             | _ -> badStack ()
             
         | Localloc ->
-            match poppedTypes, stackTail with
-            | [NativeInt_ST | Int32_ST], [] -> [NativeInt_ST]
+            // TODO verify: correct CIL requires that the evaluation stack be
+            // empty, apart from the size item
+            match poppedTypes with
+            | [NativeInt_ST | Int32_ST] -> Some [NativeInt_ST]
             | _ -> badStack ()
 
         | Endfilter ->
             match poppedTypes with
-            | [Int32_ST] -> stackTail
+            | [Int32_ST] -> Some []
             | _ -> badStack ()
 
         | Initobj _ ->
             match poppedTypes with
-            | [ManagedPointer_ST | NativeInt_ST] -> stackTail
+            | [ManagedPointer_ST | NativeInt_ST] -> Some []
             | _ -> badStack ()
 
         | Cpblk | Initblk _ ->
             match poppedTypes with
             | [Int32_ST; (ManagedPointer_ST | NativeInt_ST); (ManagedPointer_ST | NativeInt_ST)] ->
-                stackTail
+                Some []
             | _ ->
                 badStack ()
 
         | Rethrow ->
             match poppedTypes with
-            | [] -> stackTail
+            | [] -> Some []
             | _ -> badStack ()
 
         | Sizeof _ ->
             match poppedTypes with
-            | [] -> Int32_ST :: stackTail
+            | [] -> Some [Int32_ST]
             | _ -> badStack ()
 
         | Ldsflda (_, fieldRef) ->
@@ -872,9 +879,16 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
             | [] ->
                 let fieldDef = fieldRef.Resolve ()
                 let pushType = if fieldDef.RVA = 0 then ManagedPointer_ST else NativeInt_ST
-                pushType :: stackTail
+                Some [pushType]
             | _ ->
                 badStack ()
+
+    member x.UpdateTypes (stackTypes : StackType list) =
+        let poppedTypes, stackTail = x.PopTypes [for st in stackTypes -> upcast st]
+        let typesToPush = x.TypesToPush poppedTypes
+        match typesToPush with
+        | None -> []
+        | Some tys -> tys @ [for st in stackTail -> st.StackType]
 
 /// extend cecil's MethodBody class
 type MethodBody with
