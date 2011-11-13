@@ -111,6 +111,144 @@ let rec saferTypeToLLVMType (typeHandles : Map<string, ClassTypeRep>) (ty : Safe
 and toLLVMType (typeHandles : Map<string, ClassTypeRep>) (ty : TypeReference) =
     saferTypeToLLVMType typeHandles (toSaferType ty)
 
+type PrimSizeBytes = One = 1 | Two = 2 | Four = 4 | Eight = 8
+
+// TODO this should be configurable
+let nativeIntSize = PrimSizeBytes.Eight
+
+let sizeOfStackType = function
+    | Int32_ST | Float32_ST ->
+        PrimSizeBytes.Four
+    | Int64_ST | Float64_ST ->
+        PrimSizeBytes.Eight
+    | NativeInt_ST | ObjectRef_ST | ManagedPointer_ST ->
+        // TODO not sure about objectref... and what about value types?
+        nativeIntSize
+
+let llvmIntTypeSized = function
+    | PrimSizeBytes.One -> int8Type ()
+    | PrimSizeBytes.Two -> int16Type ()
+    | PrimSizeBytes.Four -> int32Type ()
+    | PrimSizeBytes.Eight -> int64Type ()
+    | s -> failwithf "invalid primitive size given: %i" (int s)
+
+/// See: ECMA-335 Partition III 1.1, Partition I 12.1
+///
+/// From Partition III 1.1.1:
+///
+/// Loading integers on the stack causes
+/// * zero-extending for types unsigned int8, unsigned int16, bool and char
+/// * sign-extending for types int8 and int16
+/// * zero-extends for unsigned indirect and element loads (ldind.u*, ldelem.u*, etc.)
+/// * and sign-extends for signed indirect and element loads (ldind.i*, ldelem.i*, etc.
+///
+/// Storing to integers, booleans, and characters
+/// (stloc, stfld, stind.i1, stelem.i2, etc.) truncates. Use the conv.ovf.* instructions
+/// to detect when this truncation results in a value that doesn‘t correctly represent
+/// the original value.
+///
+/// [Note: Short (i.e., 1- and 2-byte) integers are loaded as 4-byte numbers on all
+/// architectures and these 4- byte numbers are always tracked as distinct from 8-byte
+/// numbers. This helps portability of code by ensuring that the default arithmetic
+/// behavior (i.e., when no conv or conv.ovf instruction is executed) will have identical
+/// results on all implementations. end note]
+///
+/// Convert instructions that yield short integer values actually leave an int32 (32-bit)
+/// value on the stack, but it is guaranteed that only the low bits have meaning
+/// (i.e., the more significant bits are all zero for the unsigned conversions or a sign
+/// extension for the signed conversions). To correctly simulate the full set of short
+/// integer operations a conversion to a short integer is required before the div, rem,
+/// shr, comparison and conditional branch instructions.
+///
+/// In addition to the explicit conversion instructions there are four cases where the CLI
+/// handles short integers in a special way:
+/// 1. Assignment to a local (stloc) or argument (starg) whose type is declared to be a
+///    short integer type automatically truncates to the size specified for the local or argument.
+/// 2. Loading from a local (ldloc) or argument (ldarg) whose type is declared to be a short
+///    signed integer type automatically sign extends.
+/// 3. Calling a procedure with an argument that is a short integer type is equivalent to
+///    assignment to the argument value, so it truncates.
+/// 4. Returning a value from a method whose return type is a short integer is modeled as
+///    storing into a short integer within the called procedure (i.e., the CLI automatically
+///    truncates) and then loading from a short integer within the calling procedure (i.e.,
+///    the CLI automatically zero- or sign-extends).
+///
+/// In the last two cases it is up to the native calling convention to determine whether values
+/// are actually truncated or extended, as well as whether this is done in the called procedure
+/// or the calling procedure. The CIL instruction sequence is unaffected and it is as though
+/// the CIL sequence included an appropriate conv instruction.
+type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
+    member x.Value = value
+
+    member x.AsStackType (asTy:StackType) =
+        let cantConv () = failwithf "cannot convert %A to %A" ty asTy
+        match asTy with
+        | Int32_ST -> x.AsInt (false, PrimSizeBytes.Four)
+        | Int64_ST -> x.AsInt (false, PrimSizeBytes.Eight)
+        | NativeInt_ST -> x.AsNativeInt false
+        | Float32_ST -> x.AsFloat32 ()
+        | Float64_ST -> x.AsFloat64 ()
+        | ObjectRef_ST ->
+            match ty with
+            | ObjectRef_ST -> value
+            | _ -> cantConv ()
+        | ManagedPointer_ST ->
+            match ty with
+            | ManagedPointer_ST -> value
+            | _ -> cantConv ()
+
+    member x.AsInt (asSigned:bool, asSize:PrimSizeBytes) =
+        let size = sizeOfStackType ty
+        match ty with
+        | Int64_ST ->
+            if asSize = size then
+                value
+            else
+                failwith "implicit cast of Int64 values is not allowed"
+        | Int32_ST ->
+            if asSize = size then
+                value
+            elif asSize < size then
+                // we need to truncate
+                buildTrunc bldr value (llvmIntTypeSized asSize) "truncInt"
+            else
+                // TODO check which is correct
+                // it's bigger which is not allowed
+                failwith "implicit integer extension is not allowed"
+        | _ ->
+            failwithf "cannot convert %A to integer" ty
+
+    member x.AsNativeInt (asSigned:bool) =
+        match ty with
+        | NativeInt_ST -> value
+        | Int32_ST ->
+            let size = sizeOfStackType ty
+            if nativeIntSize = size then
+                value
+            elif nativeIntSize > size then
+                // it's bigger so we need to either zero-extend or sign-extend
+                let extFun = if asSigned then buildSExt else buildZExt
+                extFun bldr value (llvmIntTypeSized nativeIntSize) "extendedInt"
+            else
+                failwith "internal error native int should never be less than Int32"
+        | _ ->
+            failwithf "implicit cast from %A to native int is not allowed" ty
+
+    member x.AsFloat32 () =
+        match ty with
+        | Float32_ST -> value
+        | Float64_ST -> buildFPTrunc bldr value (floatType()) "truncFloat"
+        | _ -> failwithf "implicit cast from %A to float32 is not allowed" ty
+
+    member x.AsFloat64 () =
+        match ty with
+        | Float32_ST -> buildFPExt bldr value (doubleType()) "extendedFloat"
+        | Float64_ST -> value
+        | _ -> failwithf "implicit cast from %A to float32 is not allowed" ty
+
+    interface StackTyped with
+        member x.StackType = ty
+
 let rec genInstructions
         (bldr : BuilderRef)
         (moduleRef : ModuleRef)
