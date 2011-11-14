@@ -31,6 +31,13 @@ type StackType =
             member x.StackType = x
 and StackTyped =
     abstract member StackType : StackType with get
+let (|Int_ST|Float_ST|Managed_ST|) = function
+    | Int32_ST | Int64_ST | NativeInt_ST ->
+        Int_ST
+    | Float32_ST | Float64_ST ->
+        Float_ST
+    | ObjectRef_ST | ManagedPointer_ST ->
+        Managed_ST
 
 /// a safer type reference
 type SaferTypeRef =
@@ -403,7 +410,7 @@ and SaferInstruction =
 
 and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB : StackBehaviour, flowControl : FlowControl) =
 
-    member x.PopTypes (stackTypes : StackTyped list) =
+    member x.PopTypes (stackTypes : list<#StackTyped>) =
         match popB with
         | StackBehaviour.Pop0 ->
             ([], stackTypes)
@@ -469,9 +476,14 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
     member x.FlowControl = flowControl
 
     member x.Instruction = inst
+
+    member x.TypeToPush (poppedTypes : list<#StackTyped>) =
+        match x.TypesToPush poppedTypes with
+        | Some [tyToPush] -> tyToPush
+        | tysToPush -> failwithf "expected exactly one type to push but got %A" tysToPush
     
     /// update the type stack
-    member x.TypesToPush (poppedTypes : StackTyped list) =
+    member x.TypesToPush (poppedTypes : list<#StackTyped>) =
 
         let poppedTypes = [for t in poppedTypes -> t.StackType]
 
@@ -884,11 +896,11 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
                 badStack ()
 
     member x.UpdateTypes (stackTypes : StackType list) =
-        let poppedTypes, stackTail = x.PopTypes [for st in stackTypes -> upcast st]
+        let poppedTypes, stackTail = x.PopTypes stackTypes
         let typesToPush = x.TypesToPush poppedTypes
         match typesToPush with
         | None -> []
-        | Some tys -> tys @ [for st in stackTail -> st.StackType]
+        | Some tys -> tys @ stackTail
 
 /// extend cecil's MethodBody class
 type MethodBody with
