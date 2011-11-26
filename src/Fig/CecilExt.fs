@@ -38,6 +38,7 @@ let (|Int_ST|Float_ST|Managed_ST|) = function
         Float_ST
     | ObjectRef_ST | ManagedPointer_ST ->
         Managed_ST
+let (|STyped|) (st : #StackTyped) = STyped st.StackType
 
 /// a safer type reference
 type SaferTypeRef =
@@ -477,11 +478,6 @@ and AnnotatedInstruction (inst : SaferInstruction, popB : StackBehaviour, pushB 
 
     member x.Instruction = inst
 
-    member x.TypeToPush (poppedTypes : list<#StackTyped>) =
-        match x.TypesToPush poppedTypes with
-        | Some [tyToPush] -> tyToPush
-        | tysToPush -> failwithf "expected exactly one type to push but got %A" tysToPush
-    
     /// update the type stack
     member x.TypesToPush (poppedTypes : list<#StackTyped>) =
 

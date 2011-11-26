@@ -53,8 +53,8 @@ let rec saferTypeToLLVMType (typeHandles : Map<string, ClassTypeRep>) (ty : Safe
     | Void -> voidType ()
 
     // TODO probably need a separate function for getting stack type vs normal type
-    | Boolean -> int32Type ()
-    | Char -> int32Type ()
+    | Boolean -> int8Type ()
+    | Char -> int16Type ()
     | SByte
     | Byte -> int8Type ()
     | Int16
@@ -178,7 +178,105 @@ let llvmIntTypeSized = function
 /// or the calling procedure. The CIL instruction sequence is unaffected and it is as though
 /// the CIL sequence included an appropriate conv instruction.
 type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
+    
+    static member StackItemFromAny (bldr:BuilderRef, value:ValueRef, tyRef:TypeReference) =
+        let ty = toSaferType tyRef
+
+        let noImpl () = failwithf "cannot convert %A into a stack item" ty
+
+        match ty with
+        | Void -> noImpl ()
+        | Boolean | Char | Byte | UInt16 ->
+            let value = buildZExt bldr value (int32Type()) "extendedInt"
+            new StackItem(bldr, value, StackType.Int32_ST);
+        | SByte | Int16 ->
+            let value = buildSExt bldr value (int32Type()) "extendedInt"
+            new StackItem(bldr, value, StackType.Int32_ST);
+        | Int32 | UInt32 -> new StackItem(bldr, value, StackType.Int32_ST);
+        | Int64 | UInt64 -> new StackItem(bldr, value, StackType.Int64_ST);
+        | Single -> noImpl ()
+        | Double -> new StackItem(bldr, value, StackType.Float32_ST)
+        | String -> noImpl ()
+        | Pointer _ptrTy -> new StackItem(bldr, value, StackType.ManagedPointer_ST)
+        | ByReference _byRefType ->
+            // TODO not sure this is always right
+            new StackItem(bldr, value, StackType.ManagedPointer_ST)
+        | ValueType _typeRef ->
+            noImpl ()
+            // TODO have no idea if this is right
+            //typeHandles.[typeRef.FullName].InstanceVarsType
+        | Class _typeRef -> new StackItem(bldr, value, StackType.ObjectRef_ST)
+        | Var _ ->
+            noImpl ()
+        | Array _arrTy -> new StackItem(bldr, value, StackType.ObjectRef_ST)
+        | GenericInstance _
+        | TypedByReference
+        | IntPtr
+        | UIntPtr
+        | FunctionPointer _
+        | Object
+        | MVar _
+        | RequiredModifier _
+        | OptionalModifier _
+        | Sentinel _
+        | Pinned _ ->
+            noImpl ()
+
+    static member StackItemFromInt (bldr:BuilderRef, value:ValueRef, signed:bool, size:PrimSizeBytes) =
+        match size with
+        | PrimSizeBytes.Eight -> new StackItem(bldr, value, Int64_ST)
+        | PrimSizeBytes.Four -> new StackItem(bldr, value, Int32_ST)
+        | PrimSizeBytes.Two | PrimSizeBytes.One ->
+            let extFun = if signed then buildSExt else buildZExt
+            let value = extFun bldr value (int32Type()) "extendedInt"
+            new StackItem(bldr, value, Int32_ST)
+        | _ -> failwith "does not compute"
+    
     member x.Value = value
+
+    member x.AsTypeReference (tyRef:TypeReference) =
+        let ty = toSaferType tyRef
+
+        let noImpl () = failwithf "cannot convert as type reference %A" ty
+
+        match ty with
+        | Void -> noImpl ()
+        | Boolean | Byte -> x.AsInt(false, PrimSizeBytes.One)
+        | Char -> x.AsInt(false, PrimSizeBytes.Two)
+        | UInt16 -> x.AsInt(false, PrimSizeBytes.Two)
+        | SByte -> x.AsInt(true, PrimSizeBytes.One)
+        | Int16 -> x.AsInt(true, PrimSizeBytes.Two)
+        | Int32 -> x.AsInt(true, PrimSizeBytes.Four)
+        | UInt32 -> x.AsInt(false, PrimSizeBytes.Four)
+        | Int64 -> x.AsInt(true, PrimSizeBytes.Eight)
+        | UInt64 -> x.AsInt(false, PrimSizeBytes.Eight)
+        | Single -> x.AsFloat(true, false)
+        | Double -> x.AsFloat(true, true)
+        | String -> noImpl ()
+        | Pointer _ptrTy -> value
+        | ByReference _byRefType ->
+            noImpl ()
+            //pointerType typeHandles.[byRefType.ElementType.FullName].InstanceVarsType 0u
+        | ValueType _typeRef ->
+            noImpl ()
+            // TODO have no idea if this is right
+            //typeHandles.[typeRef.FullName].InstanceVarsType
+        | Class _typeRef -> value
+        | Var _ ->
+            noImpl ()
+        | Array _arrTy -> value
+        | GenericInstance _
+        | TypedByReference
+        | IntPtr
+        | UIntPtr
+        | FunctionPointer _
+        | Object
+        | MVar _
+        | RequiredModifier _
+        | OptionalModifier _
+        | Sentinel _
+        | Pinned _ ->
+            noImpl ()
 
     member x.AsStackType (asTy:StackType) =
         let cantConv () = failwithf "cannot convert %A to %A" ty asTy
@@ -186,8 +284,8 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
         | Int32_ST -> x.AsInt (false, PrimSizeBytes.Four)
         | Int64_ST -> x.AsInt (false, PrimSizeBytes.Eight)
         | NativeInt_ST -> x.AsNativeInt false
-        | Float32_ST -> x.AsFloat32 ()
-        | Float64_ST -> x.AsFloat64 ()
+        | Float32_ST -> x.AsFloat(true, false)
+        | Float64_ST -> x.AsFloat(true, true)
         | ObjectRef_ST ->
             match ty with
             | ObjectRef_ST -> value
@@ -200,50 +298,36 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
     member x.AsInt (asSigned:bool, asSize:PrimSizeBytes) =
         let size = sizeOfStackType ty
         match ty with
-        | Int64_ST ->
-            if asSize = size then
-                value
-            else
-                failwith "implicit cast of Int64 values is not allowed"
-        | Int32_ST ->
+        | Int_ST ->
             if asSize = size then
                 value
             elif asSize < size then
-                // we need to truncate
                 buildTrunc bldr value (llvmIntTypeSized asSize) "truncInt"
             else
-                // TODO check which is correct
-                // it's bigger which is not allowed
-                failwith "implicit integer extension is not allowed"
-        | _ ->
-            failwithf "cannot convert %A to integer" ty
-
-    member x.AsNativeInt (asSigned:bool) =
-        match ty with
-        | NativeInt_ST -> value
-        | Int32_ST ->
-            let size = sizeOfStackType ty
-            if nativeIntSize = size then
-                value
-            elif nativeIntSize > size then
-                // it's bigger so we need to either zero-extend or sign-extend
                 let extFun = if asSigned then buildSExt else buildZExt
-                extFun bldr value (llvmIntTypeSized nativeIntSize) "extendedInt"
-            else
-                failwith "internal error native int should never be less than Int32"
+                extFun bldr value (llvmIntTypeSized asSize) "extendedInt"
+        | Float_ST ->
+            buildFPToSI bldr value (llvmIntTypeSized asSize) "truncatedFP"
         | _ ->
-            failwithf "implicit cast from %A to native int is not allowed" ty
+            failwithf "TODO implement int conversion for %A" ty
 
-    member x.AsFloat32 () =
-        match ty with
-        | Float32_ST -> value
-        | Float64_ST -> buildFPTrunc bldr value (floatType()) "truncFloat"
-        | _ -> failwithf "implicit cast from %A to float32 is not allowed" ty
+    member x.AsNativeInt (asSigned:bool) = x.AsInt (asSigned, nativeIntSize)
 
-    member x.AsFloat64 () =
+    member x.AsFloat (asSigned:bool, asLong:bool) =
+        let asTy = if asLong then doubleType() else floatType()
         match ty with
-        | Float32_ST -> buildFPExt bldr value (doubleType()) "extendedFloat"
-        | Float64_ST -> value
+        | Float32_ST ->
+            if asLong
+            then buildFPExt bldr value asTy "extendedFloat"
+            else value
+        | Float64_ST ->
+            if asLong
+            then value
+            else buildFPTrunc bldr value asTy "truncFloat"
+        | Int_ST ->
+            if asSigned
+            then buildSIToFP bldr value asTy "convVal"
+            else buildUIToFP bldr value asTy "convVal"
         | _ -> failwithf "implicit cast from %A to float32 is not allowed" ty
 
     interface StackTyped with
@@ -260,7 +344,7 @@ let rec genInstructions
         (md : MethodDefinition)
         (blockMap : Map<int, BasicBlockRef>)
         (ilBB : BasicBlock)
-        (stackVals : ValueRef list)
+        (stackVals : StackItem list)
         (insts : AnnotatedInstruction list) =
     
     if not ilBB.InitStackTypes.IsEmpty then
@@ -270,10 +354,23 @@ let rec genInstructions
     | [] -> ()
     | inst :: instTail ->
         //printfn "Inst: %A" inst.Instruction
-        
-        let goNext (stackVals : ValueRef list) =
+
+        let poppedStack, stackTail = inst.PopTypes stackVals
+        let pushTypes = inst.TypesToPush poppedStack
+        let pushType () =
+            match pushTypes with
+            | Some [tyToPush] -> tyToPush
+            | tysToPush -> failwithf "expected exactly one type to push but got %A" tysToPush
+
+        let goNext (stackVals : StackItem list) =
             genInstructions bldr moduleRef methodVal args locals typeHandles funMap md blockMap ilBB stackVals instTail
+        let goNextStackItem (si : StackItem) =
+            goNext (si :: stackTail)
+        let goNextValRef (value : ValueRef) =
+            goNextStackItem (new StackItem(bldr, value, pushType()))
         let noImpl () = failwithf "instruction <<%A>> not implemented" inst.Instruction
+        let unexpPush () = failwithf "unexpected push types <<%A>> for instruction <<%A>>" pushType inst.Instruction
+        let unexpPop () = failwithf "unexpected pop types <<%A>> for instruction <<%A>>" poppedStack inst.Instruction
 
         match inst.Instruction with
         // Basic
@@ -281,76 +378,59 @@ let rec genInstructions
             // The add instruction adds value2 to value1 and pushes the result
             // on the stack. Overflow is not detected for integral operations
             // (but see add.ovf); floating-point overflow returns +inf or -inf.
-            match stackVals with
-            | value2 :: value1 :: stackTail ->
+            match poppedStack with
+            | [value2; value1] ->
+                let v1 = value1.AsStackType(pushType())
+                let v2 = value2.AsStackType(pushType())
                 let addResult =
-                    match getTypeKind <| typeOf value1 with
-                    | TypeKind.FloatTypeKind | TypeKind.DoubleTypeKind ->
-                        buildFAdd bldr value1 value2 "tmpFAdd"
-                    | TypeKind.IntegerTypeKind ->
-                        buildAdd bldr value1 value2 "tmpAdd"
-                    | ty ->
-                        failwithf "don't know how to add type: %A" ty
-                goNext (addResult :: stackTail)
-            | _ ->
-                failwith "instruction stack too low"
+                    match pushType() with
+                    | Float_ST -> buildFAdd bldr v1 v2 "tmpFAdd"
+                    | Int_ST -> buildAdd bldr v1 v2 "tmpAdd"
+                    | _ -> unexpPush()
+                goNextValRef addResult
+            | _ -> unexpPop()
+
         | AddOvf -> noImpl ()
         | AddOvfUn -> noImpl ()
         | And -> noImpl ()
         | Div ->
-            match stackVals with
-            | value2 :: value1 :: stackTail ->
+            match poppedStack with
+            | [value2; value1] ->
+                let v1 = value1.AsStackType (pushType())
+                let v2 = value2.AsStackType (pushType())
                 let divResult =
-                    match getTypeKind <| typeOf value1 with
-                    | TypeKind.FloatTypeKind | TypeKind.DoubleTypeKind ->
-                        buildFDiv bldr value1 value2 "tmpFDiv"
-                    | TypeKind.IntegerTypeKind ->
-                        buildSDiv bldr value1 value2 "tmpDiv"
-                    | ty ->
-                        failwithf "don't know how to div type: %A" ty
-                goNext (divResult :: stackTail)
-            | _ ->
-                failwith "instruction stack too low"
+                    match pushType() with
+                    | Float_ST -> buildFDiv bldr v1 v2 "tmpFDiv"
+                    | Int_ST -> buildSDiv bldr v1 v2 "tmpDiv"
+                    | _ -> unexpPush()
+                goNextValRef divResult
+            | _ -> unexpPop()
+
         | DivUn -> noImpl ()
         | Ceq -> noImpl ()
         | Cgt -> noImpl ()
         | CgtUn -> noImpl ()
         | Clt -> noImpl ()
         | CltUn -> noImpl ()
+
+        // For conversion ops see ECMA-335 Partition III 1.5 table 8
         | ConvI1 -> noImpl ()
         | ConvI2 ->
             noImpl ()
         | ConvI4 ->
-            match stackVals with
-            | [] -> failwith "instruction stack too low"
-            | stackHead :: _ ->
-                let headType = typeOf stackHead
-                match getTypeKind headType with
-                | TypeKind.IntegerTypeKind ->
-                    if getIntTypeWidth headType = 32u then
-                        goNext stackVals
-                    else
-                        failwith "not 32u"
-                | _ ->
-                    failwith "not an int kind"
+            match poppedStack with
+            | [STyped Int_ST as value] ->
+                goNextValRef (value.AsInt(true, PrimSizeBytes.Four))
+            | _ ->
+                failwithf "convi4 no imple for <<%A>>" [for x in poppedStack -> (x :> StackTyped).StackType]
         | ConvI8 -> noImpl ()
         | ConvR4 ->
             noImpl ()
         | ConvR8 ->
-            match stackVals with
-            | [] -> failwith "instruction stack too low"
-            | stackHead :: stackTail ->
-                let headType = typeOf stackHead
-                match getTypeKind headType with
-                | TypeKind.IntegerTypeKind ->
-                    if getIntTypeWidth headType = 32u then
-                        // FIXME don't really know if it's signed or unsigned here
-                        let convVal = buildSIToFP bldr stackHead (doubleType ()) "convVal"
-                        goNext (convVal :: stackTail)
-                    else
-                        failwith "not 32u"
-                | _ ->
-                    failwith "not an int kind"
+            match poppedStack with
+            | [STyped Int_ST as value] -> goNextValRef (value.AsFloat(true, true))
+            | _ -> noImpl()
+
         | ConvU4 -> noImpl ()
         | ConvU8 -> noImpl ()
         | ConvU2 -> noImpl ()
@@ -386,19 +466,18 @@ let rec genInstructions
             // the result on the stack. Integral operations silently 
             // truncate the upper bits on overflow (see mul.ovf).
             // TODO: For floating-point types, 0 × infinity = NaN.
-            match stackVals with
-            | value2 :: value1 :: stackTail ->
+            match poppedStack with
+            | [value2; value1] ->
+                let v1 = value1.AsStackType(pushType())
+                let v2 = value2.AsStackType(pushType())
                 let mulResult =
-                    match getTypeKind <| typeOf value1 with
-                    | TypeKind.FloatTypeKind | TypeKind.DoubleTypeKind ->
-                        buildFMul bldr value1 value2 "tmpFMul"
-                    | TypeKind.IntegerTypeKind ->
-                        buildMul bldr value1 value2 "tmpMul"
-                    | ty ->
-                        failwithf "don't know how to multiply type: %A" ty
-                goNext (mulResult :: stackTail)
-            | _ ->
-                failwith "instruction stack too low"
+                    match pushType() with
+                    | Float_ST -> buildFMul bldr v1 v2 "tmpFMul"
+                    | Int_ST -> buildMul bldr v1 v2 "tmpMul"
+                    | _ -> unexpPush()
+                goNextValRef mulResult
+            | _ -> unexpPop()
+
         | MulOvf -> noImpl ()
         | MulOvfUn -> noImpl ()
         | Rem -> noImpl ()
@@ -412,19 +491,18 @@ let rec genInstructions
             // operations (see sub.ovf); for floating-point operands, sub
             // returns +inf on positive overflow inf on negative overflow, and
             // zero on floating-point underflow.
-            match stackVals with
-            | value2 :: value1 :: stackTail ->
+            match poppedStack with
+            | [value2; value1] ->
+                let v1 = value1.AsStackType(pushType())
+                let v2 = value2.AsStackType(pushType())
                 let subResult =
-                    match getTypeKind <| typeOf value1 with
-                    | TypeKind.FloatTypeKind | TypeKind.DoubleTypeKind ->
-                        buildFSub bldr value1 value2 "tmpFSub"
-                    | TypeKind.IntegerTypeKind ->
-                        buildSub bldr value1 value2 "tmpSub"
-                    | ty ->
-                        failwithf "don't know how to sub type: %A" ty
-                goNext (subResult :: stackTail)
-            | _ ->
-                failwith "instruction stack too low"
+                    match pushType() with
+                    | Float_ST -> buildFSub bldr v1 v2 "tmpFSub"
+                    | Int_ST -> buildSub bldr v1 v2 "tmpSub"
+                    | _ -> unexpPush()
+                goNextValRef subResult
+            | _ -> unexpPop()
+
         | SubOvf -> noImpl ()
         | SubOvfUn -> noImpl ()
         | Xor -> noImpl ()
@@ -434,34 +512,37 @@ let rec genInstructions
         | Ldnull -> noImpl ()
         | Dup ->
             // TODO this will probably only work in some limited cases
-            match stackVals with
-            | [] -> failwith "instruction stack too low"
-            | stackHead :: _ -> goNext (stackHead :: stackVals)
+            match poppedStack with
+            | [value] -> goNext (value :: value :: stackTail)
+            | _ -> unexpPop()
+
         | Pop ->
-            match stackVals with
-            | [] -> failwith "instruction stack too low"
-            | _ :: stackTail -> goNext stackTail
+            match poppedStack with
+            | [_] -> goNext stackTail
+            | _ -> unexpPop()
+
         | Ckfinite -> noImpl ()
         | Nop ->
-            goNext stackVals
+            match poppedStack with
+            | [] -> goNext stackVals
+            | _ -> unexpPop()
         | LdcI4 i ->
             let constResult = constInt (int32Type ()) (uint64 i) false // TODO correct me!!
-            goNext (constResult :: stackVals)
+            goNextValRef constResult
         | LdcI8 i ->
             let constResult = constInt (int64Type ()) (uint64 i) false // TODO correct me!!
-            goNext (constResult :: stackVals)
+            goNextValRef constResult
         | LdcR4 _ -> noImpl ()
         | LdcR8 r ->
             let constResult = constReal (doubleType ()) r
-            goNext (constResult :: stackVals)
+            goNextValRef constResult
         | Ldarg paramDef ->
             let name = "tmp_" + paramDef.Name
-            goNext (buildLoad bldr args.[paramDef.Sequence] name :: stackVals)
+            let value = buildLoad bldr args.[paramDef.Sequence] name
+            goNextStackItem (StackItem.StackItemFromAny(bldr, value, paramDef.ParameterType))
+
         | Ldarga paramDef ->
-            let paramName = paramDef.Name
-            let allParamNames = [|for p in md.AllParameters -> p.Name|]
-            let paramIndex = Array.findIndex (fun name -> name = paramName) allParamNames
-            goNext (args.[paramIndex] :: stackVals)
+            goNextValRef args.[paramDef.Sequence]
         | LdindI1 _ -> noImpl ()
         | LdindU1 _ -> noImpl ()
         | LdindI2 _ -> noImpl ()
@@ -475,14 +556,15 @@ let rec genInstructions
         | LdindRef _ -> noImpl ()
         | Ldloc varDef ->
             let loadResult = buildLoad bldr locals.[varDef.Index] "tmp"
-            goNext (loadResult :: stackVals)
+            goNextStackItem (StackItem.StackItemFromAny(bldr, loadResult, varDef.VariableType))
         | Ldloca _ -> noImpl ()
         | Starg paramDef ->
-            match stackVals with
-            | [] -> failwith "instruction stack too low"
-            | stackHead :: stackTail ->
-                buildStore bldr stackHead args.[paramDef.Sequence] |> ignore
+            match poppedStack with
+            | [stackHead] ->
+                let valRef = stackHead.AsTypeReference paramDef.ParameterType
+                buildStore bldr valRef args.[paramDef.Sequence] |> ignore
                 goNext stackTail
+            | _ -> unexpPop()
         | StindRef _ -> noImpl ()
         | StindI1 _ -> noImpl ()
         | StindI2 _ -> noImpl ()
@@ -492,64 +574,96 @@ let rec genInstructions
         | StindR8 _ -> noImpl ()
         | StindI _ -> noImpl ()
         | Stloc varDef ->
-            match stackVals with
-            | [] -> failwith "instruction stack too low"
-            | stackHead :: stackTail ->
-                buildStore bldr stackHead locals.[varDef.Index] |> ignore
+            match poppedStack with
+            | [stackHead] ->
+                let valRef = stackHead.AsTypeReference varDef.VariableType
+                buildStore bldr valRef locals.[varDef.Index] |> ignore
                 goNext stackTail
+            | _ -> unexpPop()
 
         // Control transfer
         | Br bb ->
             buildBr bldr blockMap.[bb.OffsetBytes] |> ignore
         | Jmp _ ->
             noImpl ()
+        | Brfalse (_ifBB, _elseBB) | Brtrue (_ifBB, _elseBB) ->
+            noImpl ()
         | Beq (ifBB, elseBB) | Bge (ifBB, elseBB) | Bgt (ifBB, elseBB)
         | Ble (ifBB, elseBB) | Blt (ifBB, elseBB) | BneUn (ifBB, elseBB)
         | BgeUn (ifBB, elseBB) | BgtUn (ifBB, elseBB) | BleUn (ifBB, elseBB)
-        | BltUn (ifBB, elseBB) | Brfalse (ifBB, elseBB) | Brtrue (ifBB, elseBB) ->
-            match stackVals with
-            | value2 :: value1 :: _ ->
-                match getTypeKind <| typeOf value1 with
-                | TypeKind.IntegerTypeKind ->
-                    let brWith op =
-                        let brTest = buildICmp bldr op value1 value2 "brTest"
-                        buildCondBr bldr brTest blockMap.[ifBB.OffsetBytes] blockMap.[elseBB.OffsetBytes] |> ignore
-                    
-                    match inst.Instruction with
-                    | Beq _     -> brWith IntPredicate.IntEQ
-                    | Bge _     -> brWith IntPredicate.IntSGE
-                    | BgeUn _   -> brWith IntPredicate.IntUGE
-                    | Bgt _     -> brWith IntPredicate.IntSGT
-                    | BgtUn _   -> brWith IntPredicate.IntUGT
-                    | Ble _     -> brWith IntPredicate.IntSLE
-                    | BleUn _   -> brWith IntPredicate.IntULE
-                    | Blt _     -> brWith IntPredicate.IntSLT
-                    | BltUn _   -> brWith IntPredicate.IntULT
-                    | BneUn _   -> brWith IntPredicate.IntNE
-                    | Brfalse _ -> noImpl ()
-                    | Brtrue _  -> noImpl ()
-                    | _         -> failwith "whoa! this error should be impossible!"
-                | ty ->
-                    failwithf "don't know how to compare type: %A" ty
+        | BltUn (ifBB, elseBB) ->
             
+            if not instTail.IsEmpty then
+                failwith "the instruction stack should be empty after a branch"
+            
+            let isSigned () =
+                match inst.Instruction with
+                | BneUn _ | BgeUn _ | BgtUn _ | BleUn _ | BltUn _ ->
+                    false
+                | _ ->
+                    true
+
+            let brInt i1 i2 =
+                let brWith op =
+                    let brTest = buildICmp bldr op i1 i2 "brTest"
+                    buildCondBr bldr brTest blockMap.[ifBB.OffsetBytes] blockMap.[elseBB.OffsetBytes] |> ignore
+                match inst.Instruction with
+                | Beq _     -> brWith IntPredicate.IntEQ
+                | Bge _     -> brWith IntPredicate.IntSGE
+                | BgeUn _   -> brWith IntPredicate.IntUGE
+                | Bgt _     -> brWith IntPredicate.IntSGT
+                | BgtUn _   -> brWith IntPredicate.IntUGT
+                | Ble _     -> brWith IntPredicate.IntSLE
+                | BleUn _   -> brWith IntPredicate.IntULE
+                | Blt _     -> brWith IntPredicate.IntSLT
+                | BltUn _   -> brWith IntPredicate.IntULT
+                | BneUn _   -> brWith IntPredicate.IntNE
+                | _         -> failwith "whoa! this error should be impossible!"
+
+            match poppedStack with
+            | [STyped NativeInt_ST as value2; (STyped NativeInt_ST | STyped Int32_ST) as value1]
+            | [(STyped NativeInt_ST | STyped Int32_ST) as value2; STyped NativeInt_ST as value1] ->
+                let i1 = value1.AsNativeInt(isSigned())
+                let i2 = value2.AsNativeInt(isSigned())
+                brInt i1 i2
+            | [STyped Int32_ST as value2; STyped Int32_ST as value1]
+            | [STyped Int64_ST as value2; STyped Int64_ST as value1] ->
+                brInt value1.Value value2.Value
             | _ ->
-                failwith "instruction stack too low"
+                failwithf "branching not yet implemented for types: %A" [for x in poppedStack -> (x :> StackTyped).StackType]
 
         | Switch (caseBlocks, defaultBlock) ->
-            match stackVals with
-            | [] -> failwith "empty instruction stack"
-            | value :: _ ->
+            if not instTail.IsEmpty then
+                failwith "the instruction stack should be empty after a branch"
+            
+            match poppedStack with
+            | [value] ->
                 let caseInts =
                     [|for i in 0 .. caseBlocks.Length - 1 ->
                         constInt (int32Type ()) (uint64 i) false|]
                 let caseBlocks = [|for b in caseBlocks -> blockMap.[b.OffsetBytes]|]
-                buildSwitchWithCases bldr value (Array.zip caseInts caseBlocks) blockMap.[defaultBlock.OffsetBytes]
+                let target = value.AsInt(false, PrimSizeBytes.Four)
+                buildSwitchWithCases bldr target (Array.zip caseInts caseBlocks) blockMap.[defaultBlock.OffsetBytes]
+            | _ ->
+                unexpPop()
 
         | Ret ->
-            // TODO confirm void funs are [] and non-void are not
-            match stackVals with
-            | [] -> buildRetVoid bldr |> ignore
-            | stackHead :: _ -> buildRet bldr stackHead |> ignore
+            // The evaluation stack for the current method shall be empty except for the value to be returned.
+            if not stackTail.IsEmpty then
+                failwith "the value stack should be empty after a return"
+            if not instTail.IsEmpty then
+                failwith "the instruction stack should be empty after a return"
+
+            match poppedStack with
+            | [] ->
+                if toSaferType md.ReturnType <> Void then
+                    failwith "expected a void return type"
+                buildRetVoid bldr |> ignore
+            | [stackHead] ->
+                let retItem = stackHead.AsTypeReference(md.ReturnType)
+                buildRet bldr retItem |> ignore
+            | _ ->
+                unexpPop()
 
         // Method call
         | Call (tailCall, methRef) ->
@@ -558,19 +672,21 @@ let rec genInstructions
             let enclosingName = methDef.DeclaringType.FullName
             if enclosingName = "System.Object" && methDef.IsConstructor then
                 //TODO stop ignoring object constructor calls
-                goNext stackVals.Tail
+                goNext stackTail
             else
                 let funRef = funMap.[methDef.FullName]
 
-                let argCount = methDef.AllParameters.Length
-                let args, stackTail = splitAt argCount stackVals
-                let args = List.rev args
+                let stackItemToArg (i:int) (item:StackItem) =
+                    item.AsTypeReference (methDef.AllParameters.[i].ParameterType)
+                let args = List.mapi stackItemToArg (List.rev poppedStack)
                 let voidRet = methRef.ReturnType.MetadataType = MetadataType.Void
                 let resultName = if voidRet then "" else "callResult"
                 let callResult = buildCall bldr funRef (Array.ofList args) resultName
                 if tailCall then setTailCall callResult true
-
-                goNext (if voidRet then stackTail else callResult :: stackTail)
+                if voidRet then
+                    goNext stackTail
+                else
+                    goNextStackItem (StackItem.StackItemFromAny(bldr, callResult, methRef.ReturnType))
 
         | Callvirt _ -> noImpl ()
         | Calli _ -> noImpl ()
@@ -586,10 +702,11 @@ let rec genInstructions
                 let funRef = funMap.[methDef.FullName]
                 let llvmTy = typeHandles.[enclosingName].InstanceVarsType
                 let newObj = buildMalloc bldr llvmTy ("new" + enclosingName)
-                let args, stackTail = splitAt methRef.Parameters.Count stackVals
-                let args = newObj :: List.rev args
+                let stackItemToArg (i:int) (item:StackItem) =
+                    item.AsTypeReference (methDef.AllParameters.[i].ParameterType)
+                let args = newObj :: List.mapi stackItemToArg (List.rev poppedStack)
                 buildCall bldr funRef (Array.ofList args) "" |> ignore
-                goNext (newObj :: stackTail)
+                goNextStackItem (StackItem.StackItemFromAny(bldr, newObj, methDef.DeclaringType))
 
         // Exceptions
         | Throw -> noImpl ()
@@ -600,38 +717,44 @@ let rec genInstructions
 
         // Object instructions
         | Ldsfld (_volatilePrefix, fieldRef) ->
-            // TODO alignment and volitility
-            let fieldName = fieldRef.FullName
-            let declaringTy = fieldRef.DeclaringType.Resolve ()
-            let staticCilFields = (fieldRef.DeclaringType.Resolve ()).StaticFields
-            let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
+            match poppedStack with
+            | [] ->
+                // TODO alignment and volitility
+                let fieldName = fieldRef.FullName
+                let declaringTy = fieldRef.DeclaringType.Resolve ()
+                let staticCilFields = (fieldRef.DeclaringType.Resolve ()).StaticFields
+                let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
 
-            // OK now we need to load the field
-            let declClassRep = typeHandles.[declaringTy.FullName]
-            let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
-            let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
-            goNext (fieldValue :: stackVals)
+                // OK now we need to load the field
+                let declClassRep = typeHandles.[declaringTy.FullName]
+                let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
+                let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
+                let fieldStackItem = StackItem.StackItemFromAny(bldr, fieldValue, fieldRef.FieldType)
+                goNextStackItem fieldStackItem
+            | _ ->
+                unexpPop()
 
         | Ldfld (_unalignedPrefix, _volatilePrefix, fieldRef) ->
-            match stackVals with
-            | [] -> failwith "empty instruction stack"
-            | selfPtr :: stackTail ->
+            match poppedStack with
+            | [selfPtr] ->
                 // TODO alignment and volitility
                 let fieldName = fieldRef.FullName
                 let cilFields = (fieldRef.DeclaringType.Resolve ()).InstanceFields
                 let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) cilFields
 
                 // OK now we need to load the field
-                let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) (fieldRef.Name + "Ptr")
+                let fieldPtr = buildStructGEP bldr selfPtr.Value (uint32 fieldIndex) (fieldRef.Name + "Ptr")
                 let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
-                goNext (fieldValue :: stackTail)
+                let fieldStackItem = StackItem.StackItemFromAny(bldr, fieldValue, fieldRef.FieldType)
+                goNextStackItem fieldStackItem
+            | _ ->
+                unexpPop()
 
         | Ldsflda _ -> noImpl ()
         | Ldflda _ -> noImpl ()
         | Stsfld (_volatilePrefix, fieldRef) ->
-            match stackVals with
-            | [] -> failwith "empty instruction stack"
-            | value :: stackTail ->
+            match poppedStack with
+            | [value] ->
                 // TODO volatility
                 let fieldName = fieldRef.FullName
                 let declaringTy = fieldRef.DeclaringType.Resolve ()
@@ -641,22 +764,25 @@ let rec genInstructions
                 // now store the field
                 let declClassRep = typeHandles.[declaringTy.FullName]
                 let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
-                buildStore bldr value fieldPtr |> ignore
+                buildStore bldr (value.AsTypeReference fieldRef.FieldType) fieldPtr |> ignore
                 goNext stackTail
+            | _ ->
+                unexpPop()
 
         | Stfld (_unalignedPrefix, _volatilePrefix, fieldRef) ->
-            match stackVals with
-            | value :: selfPtr :: stackTail ->
+            match poppedStack with
+            | [value; selfPtr] ->
                 // TODO alignment and volitility
                 let fieldName = fieldRef.FullName
                 let cilFields = (fieldRef.DeclaringType.Resolve ()).InstanceFields
                 let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) cilFields
 
                 // OK now we need to store the field
-                let fieldPtr = buildStructGEP bldr selfPtr (uint32 fieldIndex) (fieldRef.Name + "Ptr")
-                buildStore bldr value fieldPtr |> ignore
+                let fieldPtr = buildStructGEP bldr selfPtr.Value (uint32 fieldIndex) (fieldRef.Name + "Ptr")
+                buildStore bldr (value.AsTypeReference fieldRef.FieldType) fieldPtr |> ignore
                 goNext stackTail
-            | _ -> failwith "instruction stack too low"
+            | _ ->
+                unexpPop()
 
         | Ldstr _ -> noImpl ()
         | Isinst _ -> noImpl ()
@@ -681,29 +807,30 @@ let rec genInstructions
         //   call string string[,]::Get(int32, int32)
         //   call string& string[,]::Address(int32, int32)
         //   call void string[,]::Set(int32, int32,string)
-        | Ldelem _ ->
-            match stackVals with
-            | index :: arrObj :: stackTail ->
-                let arrPtrAddr = buildStructGEP bldr arrObj 1u "arrPtrAddr"
+        | Ldelem elemTyRef ->
+            match poppedStack with
+            | [index; arrObj] ->
+                let arrPtrAddr = buildStructGEP bldr arrObj.Value 1u "arrPtrAddr"
                 let arrPtr = buildLoad bldr arrPtrAddr "arrPtr"
-                let elemAddr = buildGEP bldr arrPtr [|index|] "elemAddr"
+                // TODO: make sure that index.Value is good here... will work for all native ints or int32's
+                let elemAddr = buildGEP bldr arrPtr [|index.Value|] "elemAddr"
                 let elem = buildLoad bldr elemAddr "elem"
 
-                goNext (elem :: stackTail)
+                goNextStackItem (StackItem.StackItemFromAny(bldr, elem, elemTyRef))
             | _ ->
-                failwith "instruction stack too low"
-        | Stelem _ ->
-            match stackVals with
-            | value :: index :: arrObj :: stackTail ->
-                //let arrPtr = buildStructGEP bldr arrObj 1u "arrPtr"
-                let arrPtrAddr = buildStructGEP bldr arrObj 1u "arrPtrAddr"
+                unexpPop()
+        | Stelem elemTyRef ->
+            match poppedStack with
+            | [value; index; arrObj] ->
+                let arrPtrAddr = buildStructGEP bldr arrObj.Value 1u "arrPtrAddr"
                 let arrPtr = buildLoad bldr arrPtrAddr "arrPtr"
-                let elemAddr = buildGEP bldr arrPtr [|index|] "elemAddr"
-                buildStore bldr value elemAddr |> ignore
+                // TODO: make sure that index.Value is good here... will work for all native ints or int32's
+                let elemAddr = buildGEP bldr arrPtr [|index.Value|] "elemAddr"
+                buildStore bldr (value.AsTypeReference elemTyRef) elemAddr |> ignore
 
                 goNext stackTail
             | _ ->
-                failwith "instruction stack too low"
+                unexpPop()
         | Ldelema _ -> noImpl ()
         | LdelemI1 -> noImpl ()
         | LdelemU1 -> noImpl ()
@@ -725,16 +852,16 @@ let rec genInstructions
         | StelemR8 -> noImpl ()
         | StelemRef -> noImpl ()
         | Newarr elemTypeRef ->
-            match stackVals with
-            | [] -> failwith "instruction stack too low"
-            | numElems :: stackTail ->
+            match poppedStack with
+            | [numElems] ->
                 match toSaferType elemTypeRef with
                 | Double ->
                     // allocate the array to the heap
                     // TODO it seems pretty lame to have this code here. need to think
                     // about how this should really be structured
                     let elemTy = toLLVMType typeHandles elemTypeRef
-                    let newArr = buildArrayMalloc bldr elemTy numElems "newArr"
+                    // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
+                    let newArr = buildArrayMalloc bldr elemTy numElems.Value "newArr"
 
                     let basicArrTy = pointerType elemTy 0u
                     // FIXME array len should correspond to "native unsigned int" not int32
@@ -743,21 +870,23 @@ let rec genInstructions
                     
                     // fill in the array object
                     let lenAddr = buildStructGEP bldr newArrObj 0u "lenAddr"
-                    buildStore bldr numElems lenAddr |> ignore
+                    // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
+                    buildStore bldr numElems.Value lenAddr |> ignore
                     let arrPtrAddr = buildStructGEP bldr newArrObj 1u "arrPtrAddr"
                     buildStore bldr newArr arrPtrAddr |> ignore
 
-                    goNext (newArrObj :: stackTail)
+                    goNextValRef newArrObj
 
                 | _ -> failwithf "No impl yet for newing arrays of type %A" elemTypeRef
+            | _ ->
+                unexpPop()
         | Ldlen ->
-            match stackVals with
-            | [] -> failwith "instruction stack too low"
-            | arrObj :: stackTail ->
-                let lenAddr = buildStructGEP bldr arrObj 0u "lenAddr"
-                let len = buildLoad bldr lenAddr "len"
-                
-                goNext (len :: stackTail)
+            match poppedStack with
+            | [arrObj] ->
+                let lenAddr = buildStructGEP bldr arrObj.Value 0u "lenAddr"
+                goNextValRef (buildLoad bldr lenAddr "len")
+            | _ ->
+                unexpPop()
 
         // "System.TypedReference" related instructions: almost
         // no languages produce these, though they do occur in mscorlib.dll
