@@ -55,14 +55,10 @@ let rec saferTypeToLLVMType (typeHandles : Map<string, ClassTypeRep>) (ty : Safe
     // TODO probably need a separate function for getting stack type vs normal type
     | Boolean -> int8Type ()
     | Char -> int16Type ()
-    | SByte
-    | Byte -> int8Type ()
-    | Int16
-    | UInt16 -> noImpl ()
-    | Int32
-    | UInt32 -> int32Type ()
-    | Int64
-    | UInt64 -> int64Type ()
+    | SByte | Byte -> int8Type ()
+    | Int16 | UInt16 -> noImpl ()
+    | Int32 | UInt32 -> int32Type ()
+    | Int64 | UInt64 -> int64Type ()
     | Single -> noImpl ()
     | Double -> doubleType ()
     | String -> noImpl ()
@@ -854,30 +850,28 @@ let rec genInstructions
         | Newarr elemTypeRef ->
             match poppedStack with
             | [numElems] ->
-                match toSaferType elemTypeRef with
-                | Double ->
-                    // allocate the array to the heap
-                    // TODO it seems pretty lame to have this code here. need to think
-                    // about how this should really be structured
-                    let elemTy = toLLVMType typeHandles elemTypeRef
-                    // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
-                    let newArr = buildArrayMalloc bldr elemTy numElems.Value "newArr"
+                // allocate the array to the heap
+                // TODO it seems pretty lame to have this code here. need to think
+                // about how this should really be structured
+                let elemTy = toLLVMType typeHandles elemTypeRef
+                // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
+                let newArr = buildArrayMalloc bldr elemTy numElems.Value "newArr"
 
-                    let basicArrTy = pointerType elemTy 0u
-                    // FIXME array len should correspond to "native unsigned int" not int32
-                    let arrObjTy = structType [|int32Type (); basicArrTy|] false
-                    let newArrObj = buildMalloc bldr arrObjTy ("newArrObj")
-                    
-                    // fill in the array object
-                    let lenAddr = buildStructGEP bldr newArrObj 0u "lenAddr"
-                    // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
-                    buildStore bldr numElems.Value lenAddr |> ignore
-                    let arrPtrAddr = buildStructGEP bldr newArrObj 1u "arrPtrAddr"
-                    buildStore bldr newArr arrPtrAddr |> ignore
+                // TODO I think we have to initialize the arrays
 
-                    goNextValRef newArrObj
+                let basicArrTy = pointerType elemTy 0u
+                // FIXME array len should correspond to "native unsigned int" not int32
+                let arrObjTy = structType [|int32Type (); basicArrTy|] false
+                let newArrObj = buildMalloc bldr arrObjTy "newArrObj"
 
-                | _ -> failwithf "No impl yet for newing arrays of type %A" elemTypeRef
+                // fill in the array object
+                let lenAddr = buildStructGEP bldr newArrObj 0u "lenAddr"
+                // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
+                buildStore bldr numElems.Value lenAddr |> ignore
+                let arrPtrAddr = buildStructGEP bldr newArrObj 1u "arrPtrAddr"
+                buildStore bldr newArr arrPtrAddr |> ignore
+
+                goNextValRef newArrObj
             | _ ->
                 unexpPop()
         | Ldlen ->
