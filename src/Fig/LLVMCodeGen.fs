@@ -352,10 +352,13 @@ let rec genInstructions
         //printfn "Inst: %A" inst.Instruction
 
         let poppedStack, stackTail = inst.PopTypes stackVals
-        let pushTypes = inst.TypesToPush poppedStack
+        let pushTypes =
+            match inst.TypesToPush poppedStack with
+            | Some pushTypes -> pushTypes
+            | None -> []
         let pushType () =
             match pushTypes with
-            | Some [tyToPush] -> tyToPush
+            | [tyToPush] -> tyToPush
             | tysToPush -> failwithf "expected exactly one type to push but got %A" tysToPush
 
         let goNext (stackVals : StackItem list) =
@@ -675,11 +678,10 @@ let rec genInstructions
                 let stackItemToArg (i:int) (item:StackItem) =
                     item.AsTypeReference (methDef.AllParameters.[i].ParameterType)
                 let args = List.mapi stackItemToArg (List.rev poppedStack)
-                let voidRet = methRef.ReturnType.MetadataType = MetadataType.Void
-                let resultName = if voidRet then "" else "callResult"
+                let resultName = if pushTypes.IsEmpty then "" else "callResult"
                 let callResult = buildCall bldr funRef (Array.ofList args) resultName
                 if tailCall then setTailCall callResult true
-                if voidRet then
+                if pushTypes.IsEmpty then
                     goNext stackTail
                 else
                     goNextStackItem (StackItem.StackItemFromAny(bldr, callResult, methRef.ReturnType))
