@@ -10,6 +10,10 @@ open LLVM.ExecutionEngine
 open LLVM.Generated.Target
 open LLVM.Generated.BitWriter
 
+let objRefAsOption = function
+    | null -> None
+    | x -> Some x
+
 [<EntryPoint>]
 let main args =
     match args with

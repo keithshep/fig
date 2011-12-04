@@ -8,118 +8,7 @@ open Mono.Cecil.Cil
 open LLVM.Generated.Core
 open LLVM.Core
 
-let nullableAsOption (n : System.Nullable<'a>) =
-    if n.HasValue then
-        Some n.Value
-    else
-        None
-
-let objRefAsOption o =
-    match o with
-    | null -> None
-    | _ -> Some o
-
-type FunMap = Map<string , ValueRef>
-
-type TypeUtil () =
-    static member SaferTypeToLLVMType (typeHandles : Map<string, ClassTypeRep>) (ty : SaferTypeRef) =
-
-        let noImpl () = failwithf "no impl for %A type yet" ty
-    
-        match ty with
-        | Void -> voidType ()
-
-        // TODO probably need a separate function for getting stack type vs normal type
-        | Boolean -> int8Type ()
-        | Char -> int16Type ()
-        | SByte | Byte -> int8Type ()
-        | Int16 | UInt16 -> noImpl ()
-        | Int32 | UInt32 -> int32Type ()
-        | Int64 | UInt64 -> int64Type ()
-        | Single -> noImpl ()
-        | Double -> doubleType ()
-        | String -> noImpl ()
-        | Pointer ptrTy ->
-            pointerType typeHandles.[ptrTy.ElementType.FullName].InstanceVarsType 0u
-        | ByReference byRefType ->
-            pointerType typeHandles.[byRefType.ElementType.FullName].InstanceVarsType 0u
-        | ValueType typeRef ->
-            // TODO have no idea if this is right
-            typeHandles.[typeRef.FullName].InstanceVarsType
-        | Class typeRef ->
-            // TODO fix me
-            pointerType typeHandles.[typeRef.FullName].InstanceVarsType 0u
-        | Var _ ->
-            noImpl ()
-        | Array arrTy ->
-            if arrTy.Rank = 1 then
-                let dim0 = arrTy.Dimensions.[0]
-                match nullableAsOption dim0.LowerBound, nullableAsOption dim0.UpperBound with
-                | ((None | Some 0), None) -> //(0, null) ->
-                    // LLVM docs say:
-                    // "... 'variable sized array' addressing can be implemented in LLVM
-                    // with a zero length array type". So, we implement this as a struct
-                    // which contains a length element and an array element
-                    let elemTy = TypeUtil.ToLLVMType typeHandles arrTy.ElementType
-                    let basicArrTy = pointerType elemTy 0u
-                    // FIXME array len should correspond to "native unsigned int" not int32
-                    pointerType (structType [|int32Type (); basicArrTy|] false) 0u
-                | lowerBound, upperBound ->
-                    failwithf "dont know how to deal with given array shape yet %A->%A" lowerBound upperBound
-            else
-                failwithf "arrays of rank %i not yet implemented" arrTy.Rank
-        | GenericInstance _
-        | TypedByReference
-        | IntPtr
-        | UIntPtr
-        | FunctionPointer _
-        | Object
-        | MVar _
-        | RequiredModifier _
-        | OptionalModifier _
-        | Sentinel _
-        | Pinned _ ->
-            noImpl ()
-
-    static member ToLLVMType (typeHandles : Map<string, ClassTypeRep>) (ty : TypeReference) =
-        TypeUtil.SaferTypeToLLVMType typeHandles (toSaferType ty)
-
-and ClassTypeRep (modRef : ModuleRef, td : TypeDefinition, typeHandles : Map<string, ClassTypeRep> ref) =
-    let mutable staticRefOpt = None : TypeRef option
-    let mutable instanceRefOpt = None : TypeRef option
-    let mutable staticVarsOpt = None : ValueRef option
-
-    member x.InstanceVarsType =
-        match instanceRefOpt with
-        | Some instanceRef -> instanceRef
-        | None ->
-            let instanceRef = structCreateNamed (getModuleContext modRef) (td.FullName + "Instance")
-            instanceRefOpt <- Some instanceRef
-            let instanceFields =
-                [|for f in td.InstanceFields do
-                    yield TypeUtil.ToLLVMType !typeHandles f.FieldType|]
-            structSetBody instanceRef instanceFields false
-            instanceRef
-
-    member x.StaticVarsType =
-        match staticRefOpt with
-        | Some staticRef -> staticRef
-        | None ->
-            let staticRef = structCreateNamed (getModuleContext modRef) (td.FullName + "Static")
-            staticRefOpt <- Some staticRef
-            let staticFields =
-                [|for f in td.StaticFields do
-                    yield TypeUtil.ToLLVMType !typeHandles f.FieldType|]
-            structSetBody staticRef staticFields false
-            staticRef
-
-    member x.StaticVars =
-        match staticVarsOpt with
-        | Some staticVars -> staticVars
-        | None ->
-            let staticVars = addGlobal modRef x.StaticVarsType (td.FullName + "Global")
-            staticVarsOpt <- Some staticVars
-            staticVars
+type FunMap = Map<string, ValueRef>
 
 type PrimSizeBytes = One = 1 | Two = 2 | Four = 4 | Eight = 8
 
@@ -141,6 +30,112 @@ let llvmIntTypeSized = function
     | PrimSizeBytes.Four -> int32Type ()
     | PrimSizeBytes.Eight -> int64Type ()
     | s -> failwithf "invalid primitive size given: %i" (int s)
+
+type TypeUtil () =
+    static member SaferTypeToLLVMType (classMap : Map<string, ClassTypeRep>) (ty : SaferTypeRef) =
+
+        let noImpl () = failwithf "no impl for %A type yet" ty
+    
+        let nullableAsOption (n : System.Nullable<'a>) =
+            if n.HasValue then
+                Some n.Value
+            else
+                None
+
+        match ty with
+        | Void -> voidType ()
+
+        // TODO probably need a separate function for getting stack type vs normal type
+        | Boolean -> int8Type ()
+        | Char -> int16Type ()
+        | SByte | Byte -> int8Type ()
+        | Int16 | UInt16 -> noImpl ()
+        | Int32 | UInt32 -> int32Type ()
+        | Int64 | UInt64 -> int64Type ()
+        | Single -> noImpl ()
+        | Double -> doubleType ()
+        | String -> noImpl ()
+        | Pointer ptrTy ->
+            pointerType classMap.[ptrTy.ElementType.FullName].InstanceVarsType 0u
+        | ByReference byRefType ->
+            pointerType classMap.[byRefType.ElementType.FullName].InstanceVarsType 0u
+        | ValueType typeRef ->
+            // TODO have no idea if this is right
+            classMap.[typeRef.FullName].InstanceVarsType
+        | Class typeRef ->
+            // TODO fix me
+            pointerType classMap.[typeRef.FullName].InstanceVarsType 0u
+        | Var _ ->
+            noImpl ()
+        | Array arrTy ->
+            if arrTy.Rank = 1 then
+                let dim0 = arrTy.Dimensions.[0]
+                match nullableAsOption dim0.LowerBound, nullableAsOption dim0.UpperBound with
+                | ((None | Some 0), None) -> //(0, null) ->
+                    // LLVM docs say:
+                    // "... 'variable sized array' addressing can be implemented in LLVM
+                    // with a zero length array type". So, we implement this as a struct
+                    // which contains a length element and an array element
+                    let elemTy = TypeUtil.ToLLVMType classMap arrTy.ElementType
+                    let basicArrTy = pointerType elemTy 0u
+                    // FIXME array len should correspond to "native unsigned int" not int32
+                    pointerType (structType [|int32Type (); basicArrTy|] false) 0u
+                | lowerBound, upperBound ->
+                    failwithf "dont know how to deal with given array shape yet %A->%A" lowerBound upperBound
+            else
+                failwithf "arrays of rank %i not yet implemented" arrTy.Rank
+        | GenericInstance _
+        | TypedByReference
+        | IntPtr
+        | UIntPtr
+        | FunctionPointer _
+        | Object
+        | MVar _
+        | RequiredModifier _
+        | OptionalModifier _
+        | Sentinel _
+        | Pinned _ ->
+            noImpl ()
+
+    static member ToLLVMType (classMap : Map<string, ClassTypeRep>) (ty : TypeReference) =
+        TypeUtil.SaferTypeToLLVMType classMap (toSaferType ty)
+
+and ClassTypeRep (modRef : ModuleRef, td : TypeDefinition, classMap : Map<string, ClassTypeRep> ref) =
+    let mutable staticRefOpt = None : TypeRef option
+    let mutable instanceRefOpt = None : TypeRef option
+    let mutable staticVarsOpt = None : ValueRef option
+
+    member x.InstanceVarsType =
+        match instanceRefOpt with
+        | Some instanceRef -> instanceRef
+        | None ->
+            let instanceRef = structCreateNamed (getModuleContext modRef) (td.FullName + "Instance")
+            instanceRefOpt <- Some instanceRef
+            let instanceFields =
+                [|for f in td.InstanceFields do
+                    yield TypeUtil.ToLLVMType !classMap f.FieldType|]
+            structSetBody instanceRef instanceFields false
+            instanceRef
+
+    member x.StaticVarsType =
+        match staticRefOpt with
+        | Some staticRef -> staticRef
+        | None ->
+            let staticRef = structCreateNamed (getModuleContext modRef) (td.FullName + "Static")
+            staticRefOpt <- Some staticRef
+            let staticFields =
+                [|for f in td.StaticFields do
+                    yield TypeUtil.ToLLVMType !classMap f.FieldType|]
+            structSetBody staticRef staticFields false
+            staticRef
+
+    member x.StaticVars =
+        match staticVarsOpt with
+        | Some staticVars -> staticVars
+        | None ->
+            let staticVars = addGlobal modRef x.StaticVarsType (td.FullName + "Global")
+            staticVarsOpt <- Some staticVars
+            staticVars
 
 /// See: ECMA-335 Partition III 1.1, Partition I 12.1
 ///
@@ -214,7 +209,7 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
         | ValueType _typeRef ->
             noImpl ()
             // TODO have no idea if this is right
-            //typeHandles.[typeRef.FullName].InstanceVarsType
+            //classMap.[typeRef.FullName].InstanceVarsType
         | Class _typeRef -> new StackItem(bldr, value, StackType.ObjectRef_ST)
         | Var _ ->
             noImpl ()
@@ -266,11 +261,11 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
         | Pointer _ptrTy -> value
         | ByReference _byRefType ->
             noImpl ()
-            //pointerType typeHandles.[byRefType.ElementType.FullName].InstanceVarsType 0u
+            //pointerType classMap.[byRefType.ElementType.FullName].InstanceVarsType 0u
         | ValueType _typeRef ->
             noImpl ()
             // TODO have no idea if this is right
-            //typeHandles.[typeRef.FullName].InstanceVarsType
+            //classMap.[typeRef.FullName].InstanceVarsType
         | Class _typeRef -> value
         | Var _ ->
             noImpl ()
@@ -349,7 +344,7 @@ let rec genInstructions
         (methodVal : ValueRef)
         (args : ValueRef array)
         (locals : ValueRef array)
-        (typeHandles : Map<string, ClassTypeRep>)
+        (classMap : Map<string, ClassTypeRep>)
         (funMap : FunMap)
         (md : MethodDefinition)
         (blockMap : Map<int, BasicBlockRef>)
@@ -376,7 +371,7 @@ let rec genInstructions
             | tysToPush -> failwithf "expected exactly one type to push but got %A" tysToPush
 
         let goNext (stackVals : StackItem list) =
-            genInstructions bldr moduleRef methodVal args locals typeHandles funMap md blockMap ilBB stackVals instTail
+            genInstructions bldr moduleRef methodVal args locals classMap funMap md blockMap ilBB stackVals instTail
         let goNextStackItem (si : StackItem) =
             goNext (si :: stackTail)
         let goNextValRef (value : ValueRef) =
@@ -712,7 +707,7 @@ let rec genInstructions
                 failwith "expected a .ctor here"
             else
                 let funRef = funMap.[methDef.FullName]
-                let llvmTy = typeHandles.[enclosingName].InstanceVarsType
+                let llvmTy = classMap.[enclosingName].InstanceVarsType
                 let newObj = buildMalloc bldr llvmTy ("new" + enclosingName)
                 let stackItemToArg (i:int) (item:StackItem) =
                     item.AsTypeReference (methDef.AllParameters.[i].ParameterType)
@@ -738,7 +733,7 @@ let rec genInstructions
                 let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
 
                 // OK now we need to load the field
-                let declClassRep = typeHandles.[declaringTy.FullName]
+                let declClassRep = classMap.[declaringTy.FullName]
                 let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
                 let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
                 let fieldStackItem = StackItem.StackItemFromAny(bldr, fieldValue, fieldRef.FieldType)
@@ -774,7 +769,7 @@ let rec genInstructions
                 let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
 
                 // now store the field
-                let declClassRep = typeHandles.[declaringTy.FullName]
+                let declClassRep = classMap.[declaringTy.FullName]
                 let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
                 buildStore bldr (value.AsTypeReference fieldRef.FieldType) fieldPtr |> ignore
                 goNext stackTail
@@ -869,7 +864,7 @@ let rec genInstructions
                 // allocate the array to the heap
                 // TODO it seems pretty lame to have this code here. need to think
                 // about how this should really be structured
-                let elemTy = TypeUtil.ToLLVMType typeHandles elemTypeRef
+                let elemTy = TypeUtil.ToLLVMType classMap elemTypeRef
                 // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
                 let newArr = buildArrayMalloc bldr elemTy numElems.Value "newArr"
 
@@ -919,21 +914,21 @@ let rec genInstructions
 
 let genAlloca
         (bldr : BuilderRef)
-        (typeHandles : Map<string, ClassTypeRep>)
+        (classMap : Map<string, ClassTypeRep>)
         (t : TypeReference)
         (name : string) =
-    buildAlloca bldr (TypeUtil.ToLLVMType typeHandles t) (name + "Alloca")
+    buildAlloca bldr (TypeUtil.ToLLVMType classMap t) (name + "Alloca")
 
-let genLocal (bldr : BuilderRef) (typeHandles : Map<string, ClassTypeRep>) (l : VariableDefinition) =
-    genAlloca bldr typeHandles l.VariableType (match l.Name with null -> "local" | n -> n)
+let genLocal (bldr : BuilderRef) (classMap : Map<string, ClassTypeRep>) (l : VariableDefinition) =
+    genAlloca bldr classMap l.VariableType (match l.Name with null -> "local" | n -> n)
 
-let genParam (bldr : BuilderRef) (typeHandles : Map<string, ClassTypeRep>) (p : ParameterDefinition) =
-    genAlloca bldr typeHandles p.ParameterType (match p.Name with null -> "param" | n -> n)
+let genParam (bldr : BuilderRef) (classMap : Map<string, ClassTypeRep>) (p : ParameterDefinition) =
+    genAlloca bldr classMap p.ParameterType (match p.Name with null -> "param" | n -> n)
 
 let genMethodBody
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (typeHandles : Map<string, ClassTypeRep>)
+        (classMap : Map<string, ClassTypeRep>)
         (funMap : FunMap)
         (md : MethodDefinition) =
 
@@ -941,10 +936,10 @@ let genMethodBody
 
     // create the entry block
     use bldr = new Builder(appendBasicBlock methodVal "entry")
-    let args = Array.map (genParam bldr typeHandles) md.AllParameters
+    let args = Array.map (genParam bldr classMap) md.AllParameters
     for i = 0 to args.Length - 1 do
         buildStore bldr (getParam methodVal (uint32 i)) args.[i] |> ignore
-    let locals = Array.map (genLocal bldr typeHandles) (Array.ofSeq md.Body.Variables)
+    let locals = Array.map (genLocal bldr classMap) (Array.ofSeq md.Body.Variables)
     let blocks = md.Body.BasicBlocks
     let blockDecs =
         [for b in blocks do
@@ -965,7 +960,7 @@ let genMethodBody
                 methodVal
                 args
                 locals
-                typeHandles
+                classMap
                 funMap
                 md
                 blockMap
@@ -975,25 +970,25 @@ let genMethodBody
 
 let genMethodDef
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, ClassTypeRep>)
+        (classMap : Map<string, ClassTypeRep>)
         (funMap : FunMap)
         (md : MethodDefinition) =
     
-    genMethodBody moduleRef funMap.[md.FullName] typeHandles funMap md
+    genMethodBody moduleRef funMap.[md.FullName] classMap funMap md
 
 let rec genTypeDef
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, ClassTypeRep>)
+        (classMap : Map<string, ClassTypeRep>)
         (funMap : FunMap)
         (td : TypeDefinition) =
-    Seq.iter (genTypeDef moduleRef typeHandles funMap) td.NestedTypes
+    Seq.iter (genTypeDef moduleRef classMap funMap) td.NestedTypes
     for md in td.Methods do
         if md.HasBody then
-            genMethodDef moduleRef typeHandles funMap md
+            genMethodDef moduleRef classMap funMap md
 
 let declareMethodDef
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, ClassTypeRep>)
+        (classMap : Map<string, ClassTypeRep>)
         (md : MethodDefinition) =
 
     let fnName = if md.Name = "main" then "_main" else md.Name
@@ -1004,8 +999,8 @@ let declareMethodDef
         | name -> setValueName llvmParam name
 
     if md.HasBody then
-        let paramTys = [|for p in md.AllParameters -> TypeUtil.ToLLVMType typeHandles p.ParameterType|]
-        let retTy = TypeUtil.ToLLVMType typeHandles md.ReturnType
+        let paramTys = [|for p in md.AllParameters -> TypeUtil.ToLLVMType classMap p.ParameterType|]
+        let retTy = TypeUtil.ToLLVMType classMap md.ReturnType
         let funcTy = functionType retTy paramTys
         let fn = addFunction moduleRef fnName funcTy
         
@@ -1025,8 +1020,8 @@ let declareMethodDef
                 pInv.EntryPoint
                 md.Name
 
-        let paramTys = [|for p in md.Parameters -> TypeUtil.ToLLVMType typeHandles p.ParameterType|]
-        let retTy = TypeUtil.ToLLVMType typeHandles md.ReturnType
+        let paramTys = [|for p in md.Parameters -> TypeUtil.ToLLVMType classMap p.ParameterType|]
+        let retTy = TypeUtil.ToLLVMType classMap md.ReturnType
         let funcTy = functionType retTy paramTys
         let fn = addFunction moduleRef fnName funcTy
         setLinkage fn Linkage.ExternalLinkage
@@ -1039,13 +1034,13 @@ let declareMethodDef
 
 let rec declareMethodDefs
         (moduleRef : ModuleRef)
-        (typeHandles : Map<string, ClassTypeRep>)
+        (classMap : Map<string, ClassTypeRep>)
         (td : TypeDefinition) =
     seq {
         for m in td.Methods do
-            yield declareMethodDef moduleRef typeHandles m
+            yield declareMethodDef moduleRef classMap m
         for t in td.NestedTypes do
-            yield! declareMethodDefs moduleRef typeHandles t
+            yield! declareMethodDefs moduleRef classMap t
     }
 
 let declareTypes (llvmModuleRef : ModuleRef) (tds : TypeDefinition list) =
@@ -1102,11 +1097,11 @@ let genTypeDefs
         (cilTypeDefs : seq<TypeDefinition>) =
 
     let cilTypeDefs = List.ofSeq cilTypeDefs
-    let typeHandles = declareTypes llvmModuleRef cilTypeDefs
+    let classMap = declareTypes llvmModuleRef cilTypeDefs
     let funMap =
-        seq {for t in cilTypeDefs do yield! declareMethodDefs llvmModuleRef typeHandles t}
+        seq {for t in cilTypeDefs do yield! declareMethodDefs llvmModuleRef classMap t}
         |> Map.ofSeq
-    Seq.iter (genTypeDef llvmModuleRef typeHandles funMap) cilTypeDefs
+    Seq.iter (genTypeDef llvmModuleRef classMap funMap) cilTypeDefs
     match methDefOpt with
     | None -> ()
     | Some methDef -> genMainFunction funMap methDef llvmModuleRef
