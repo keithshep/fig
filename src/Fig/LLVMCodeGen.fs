@@ -8,6 +8,8 @@ open Mono.Cecil.Cil
 open LLVM.Generated.Core
 open LLVM.Core
 
+open System.Collections.Generic
+
 type FunMap = Map<string, ValueRef>
 
 type PrimSizeBytes = One = 1 | Two = 2 | Four = 4 | Eight = 8
@@ -32,7 +34,7 @@ let llvmIntTypeSized = function
     | s -> failwithf "invalid primitive size given: %i" (int s)
 
 type TypeUtil () =
-    static member SaferTypeToLLVMType (classMap : Map<string, ClassTypeRep>) (ty : SaferTypeRef) =
+    static member SaferTypeToLLVMType (classMap : ClassMap) (ty : SaferTypeRef) =
 
         let noImpl () = failwithf "no impl for %A type yet" ty
     
@@ -56,15 +58,15 @@ type TypeUtil () =
         | Double -> doubleType ()
         | String -> noImpl ()
         | Pointer ptrTy ->
-            pointerType classMap.[ptrTy.ElementType.FullName].InstanceVarsType 0u
+            pointerType classMap.[ptrTy.ElementType].InstanceVarsType 0u
         | ByReference byRefType ->
-            pointerType classMap.[byRefType.ElementType.FullName].InstanceVarsType 0u
+            pointerType classMap.[byRefType.ElementType].InstanceVarsType 0u
         | ValueType typeRef ->
             // TODO have no idea if this is right
-            classMap.[typeRef.FullName].InstanceVarsType
+            classMap.[typeRef].InstanceVarsType
         | Class typeRef ->
             // TODO fix me
-            pointerType classMap.[typeRef.FullName].InstanceVarsType 0u
+            pointerType classMap.[typeRef].InstanceVarsType 0u
         | Var _ ->
             noImpl ()
         | Array arrTy ->
@@ -97,10 +99,25 @@ type TypeUtil () =
         | Pinned _ ->
             noImpl ()
 
-    static member ToLLVMType (classMap : Map<string, ClassTypeRep>) (ty : TypeReference) =
+    static member ToLLVMType (classMap : ClassMap) (ty : TypeReference) =
         TypeUtil.SaferTypeToLLVMType classMap (toSaferType ty)
 
-and ClassTypeRep (modRef : ModuleRef, td : TypeDefinition, classMap : Map<string, ClassTypeRep> ref) =
+and ClassMap (modRef : ModuleRef) =
+    let classDict = new Dictionary<string * string, ClassTypeRep>()
+
+    member x.Item
+        with get (tyRef : TypeReference) : ClassTypeRep =
+            let td = tyRef.Resolve()
+            let modName = td.Module.FullyQualifiedName
+            let key = (modName, td.FullName)
+            if classDict.ContainsKey key then
+                classDict.[key]
+            else
+                let classTyRep = new ClassTypeRep(modRef, td, x)
+                classDict.[key] <- classTyRep
+                classTyRep
+
+and ClassTypeRep (modRef : ModuleRef, td : TypeDefinition, classMap : ClassMap) =
     let mutable staticRefOpt = None : TypeRef option
     let mutable instanceRefOpt = None : TypeRef option
     let mutable staticVarsOpt = None : ValueRef option
@@ -113,7 +130,7 @@ and ClassTypeRep (modRef : ModuleRef, td : TypeDefinition, classMap : Map<string
             instanceRefOpt <- Some instanceRef
             let instanceFields =
                 [|for f in td.InstanceFields do
-                    yield TypeUtil.ToLLVMType !classMap f.FieldType|]
+                    yield TypeUtil.ToLLVMType classMap f.FieldType|]
             structSetBody instanceRef instanceFields false
             instanceRef
 
@@ -125,7 +142,7 @@ and ClassTypeRep (modRef : ModuleRef, td : TypeDefinition, classMap : Map<string
             staticRefOpt <- Some staticRef
             let staticFields =
                 [|for f in td.StaticFields do
-                    yield TypeUtil.ToLLVMType !classMap f.FieldType|]
+                    yield TypeUtil.ToLLVMType classMap f.FieldType|]
             structSetBody staticRef staticFields false
             staticRef
 
@@ -344,7 +361,7 @@ let rec genInstructions
         (methodVal : ValueRef)
         (args : ValueRef array)
         (locals : ValueRef array)
-        (classMap : Map<string, ClassTypeRep>)
+        (classMap : ClassMap)
         (funMap : FunMap)
         (md : MethodDefinition)
         (blockMap : Map<int, BasicBlockRef>)
@@ -702,13 +719,12 @@ let rec genInstructions
             // TODO implement GC along with object/class initialization code
             // FIXME naming is all screwed up! fix it
             let methDef = methRef.Resolve ()
-            let enclosingName = methDef.DeclaringType.FullName
             if not methDef.IsConstructor then
                 failwith "expected a .ctor here"
             else
                 let funRef = funMap.[methDef.FullName]
-                let llvmTy = classMap.[enclosingName].InstanceVarsType
-                let newObj = buildMalloc bldr llvmTy ("new" + enclosingName)
+                let llvmTy = classMap.[methDef.DeclaringType].InstanceVarsType
+                let newObj = buildMalloc bldr llvmTy ("new" + methDef.DeclaringType.FullName)
                 let stackItemToArg (i:int) (item:StackItem) =
                     item.AsTypeReference (methDef.AllParameters.[i].ParameterType)
                 let args = newObj :: List.mapi stackItemToArg (List.rev poppedStack)
@@ -733,7 +749,7 @@ let rec genInstructions
                 let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
 
                 // OK now we need to load the field
-                let declClassRep = classMap.[declaringTy.FullName]
+                let declClassRep = classMap.[declaringTy]
                 let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
                 let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
                 let fieldStackItem = StackItem.StackItemFromAny(bldr, fieldValue, fieldRef.FieldType)
@@ -769,7 +785,7 @@ let rec genInstructions
                 let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
 
                 // now store the field
-                let declClassRep = classMap.[declaringTy.FullName]
+                let declClassRep = classMap.[declaringTy]
                 let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
                 buildStore bldr (value.AsTypeReference fieldRef.FieldType) fieldPtr |> ignore
                 goNext stackTail
@@ -914,21 +930,21 @@ let rec genInstructions
 
 let genAlloca
         (bldr : BuilderRef)
-        (classMap : Map<string, ClassTypeRep>)
+        (classMap : ClassMap)
         (t : TypeReference)
         (name : string) =
     buildAlloca bldr (TypeUtil.ToLLVMType classMap t) (name + "Alloca")
 
-let genLocal (bldr : BuilderRef) (classMap : Map<string, ClassTypeRep>) (l : VariableDefinition) =
+let genLocal (bldr : BuilderRef) (classMap : ClassMap) (l : VariableDefinition) =
     genAlloca bldr classMap l.VariableType (match l.Name with null -> "local" | n -> n)
 
-let genParam (bldr : BuilderRef) (classMap : Map<string, ClassTypeRep>) (p : ParameterDefinition) =
+let genParam (bldr : BuilderRef) (classMap : ClassMap) (p : ParameterDefinition) =
     genAlloca bldr classMap p.ParameterType (match p.Name with null -> "param" | n -> n)
 
 let genMethodBody
         (moduleRef : ModuleRef)
         (methodVal : ValueRef)
-        (classMap : Map<string, ClassTypeRep>)
+        (classMap : ClassMap)
         (funMap : FunMap)
         (md : MethodDefinition) =
 
@@ -970,7 +986,7 @@ let genMethodBody
 
 let genMethodDef
         (moduleRef : ModuleRef)
-        (classMap : Map<string, ClassTypeRep>)
+        (classMap : ClassMap)
         (funMap : FunMap)
         (md : MethodDefinition) =
     
@@ -978,7 +994,7 @@ let genMethodDef
 
 let rec genTypeDef
         (moduleRef : ModuleRef)
-        (classMap : Map<string, ClassTypeRep>)
+        (classMap : ClassMap)
         (funMap : FunMap)
         (td : TypeDefinition) =
     Seq.iter (genTypeDef moduleRef classMap funMap) td.NestedTypes
@@ -988,7 +1004,7 @@ let rec genTypeDef
 
 let declareMethodDef
         (moduleRef : ModuleRef)
-        (classMap : Map<string, ClassTypeRep>)
+        (classMap : ClassMap)
         (md : MethodDefinition) =
 
     let fnName = if md.Name = "main" then "_main" else md.Name
@@ -1034,7 +1050,7 @@ let declareMethodDef
 
 let rec declareMethodDefs
         (moduleRef : ModuleRef)
-        (classMap : Map<string, ClassTypeRep>)
+        (classMap : ClassMap)
         (td : TypeDefinition) =
     seq {
         for m in td.Methods do
@@ -1042,16 +1058,6 @@ let rec declareMethodDefs
         for t in td.NestedTypes do
             yield! declareMethodDefs moduleRef classMap t
     }
-
-let declareTypes (llvmModuleRef : ModuleRef) (tds : TypeDefinition list) =
-    let classMap = ref (Map.empty : Map<string, ClassTypeRep>)
-    let rec go (td : TypeDefinition) = seq {
-        yield (td.FullName, new ClassTypeRep(llvmModuleRef, td, classMap))
-        for nested in td.NestedTypes do
-            yield! go nested
-    }
-    classMap := Map.ofSeq (Seq.collect go tds)
-    !classMap
 
 let genMainFunction
         (funMap : FunMap)
@@ -1097,7 +1103,7 @@ let genTypeDefs
         (cilTypeDefs : seq<TypeDefinition>) =
 
     let cilTypeDefs = List.ofSeq cilTypeDefs
-    let classMap = declareTypes llvmModuleRef cilTypeDefs
+    let classMap = new ClassMap(llvmModuleRef)
     let funMap =
         seq {for t in cilTypeDefs do yield! declareMethodDefs llvmModuleRef classMap t}
         |> Map.ofSeq
