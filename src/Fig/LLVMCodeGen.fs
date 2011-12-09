@@ -31,6 +31,21 @@ let llvmIntTypeSized = function
     | PrimSizeBytes.Eight -> int64Type ()
     | s -> failwithf "invalid primitive size given: %i" (int s)
 
+type [<AbstractClass>] DefAndImpl<'T> () =
+    let mutable valueOpt = None : 'T option
+
+    abstract member Define : unit -> 'T
+    abstract member Implement : 'T -> unit
+
+    member x.Value =
+        match valueOpt with
+        | Some value -> value
+        | None ->
+            let value = x.Define()
+            valueOpt <- Some value
+            x.Implement value
+            value
+
 /// See: ECMA-335 Partition III 1.1, Partition I 12.1
 ///
 /// From Partition III 1.1.1:
@@ -307,6 +322,9 @@ and ClassMap (modRef : ModuleRef) =
     member x.Item
         with get (tr : TypeReference) : ClassTypeRep =
             let td = tr.Resolve()
+            if td.FullName = "System.Object" then
+                failwith "wasn't expecting an System.Object type"
+
             let modName = td.Module.FullyQualifiedName
             let key = (modName, td.FullName)
             if classDict.ContainsKey key then
@@ -321,45 +339,33 @@ and ClassMap (modRef : ModuleRef) =
             x.[mr.Resolve().DeclaringType]
 
 and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, classMap : ClassMap) as x =
-    let mutable staticRefOpt = None : TypeRef option
-    let mutable instanceRefOpt = None : TypeRef option
-    let mutable staticVarsOpt = None : ValueRef option
+    let structNamed name = structCreateNamed (getModuleContext modRef) name
+    let staticRef = {
+        new DefAndImpl<TypeRef>() with
+            member x.Define() = structNamed (typeDef.FullName + "Static")
+            member x.Implement vr =
+                let staticFields =
+                    [|for f in typeDef.StaticFields ->
+                        TypeUtil.ToLLVMType classMap f.FieldType|]
+                structSetBody vr staticFields false
+    }
+    let instanceRef = {
+        new DefAndImpl<TypeRef>() with
+            member x.Define() = structNamed (typeDef.FullName + "Instance")
+            member x.Implement vr =
+                let instanceFields = [|
+                    for f in typeDef.InstanceFields do
+                        yield TypeUtil.ToLLVMType classMap f.FieldType
+                |]
+                structSetBody vr instanceFields false
+    }
+    let staticVars = lazy(addGlobal modRef staticRef.Value (typeDef.FullName + "Global"))
     let methMap = new MethodMap(modRef, classMap, x)
 
-    member x.InstanceVarsType =
-        match instanceRefOpt with
-        | Some instanceRef -> instanceRef
-        | None ->
-            let instanceRef = structCreateNamed (getModuleContext modRef) (typeDef.FullName + "Instance")
-            instanceRefOpt <- Some instanceRef
-            let instanceFields =
-                [|for f in typeDef.InstanceFields ->
-                    TypeUtil.ToLLVMType classMap f.FieldType|]
-            structSetBody instanceRef instanceFields false
-            instanceRef
-
-    member x.StaticVarsType =
-        match staticRefOpt with
-        | Some staticRef -> staticRef
-        | None ->
-            let staticRef = structCreateNamed (getModuleContext modRef) (typeDef.FullName + "Static")
-            staticRefOpt <- Some staticRef
-            let staticFields =
-                [|for f in typeDef.StaticFields ->
-                    TypeUtil.ToLLVMType classMap f.FieldType|]
-            structSetBody staticRef staticFields false
-            staticRef
-
-    member x.StaticVars =
-        match staticVarsOpt with
-        | Some staticVars -> staticVars
-        | None ->
-            let staticVars = addGlobal modRef x.StaticVarsType (typeDef.FullName + "Global")
-            staticVarsOpt <- Some staticVars
-            staticVars
-
+    member x.InstanceVarsType = instanceRef.Value
+    member x.StaticVarsType = staticRef.Value
+    member x.StaticVars = staticVars.Force()
     member x.MethodMap : MethodMap = methMap
-
     member x.TypeDef : TypeDefinition = typeDef
 
 and MethodMap (modRef : ModuleRef, classMap : ClassMap, classRep : ClassTypeRep) =
@@ -1042,17 +1048,13 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
         else
             failwith "don't know how to declare method without a body"
 
-    let mutable valueRefOpt = None : ValueRef option
+    let valueRef = {
+        new DefAndImpl<ValueRef>() with
+            member x.Define() = declareMethodDef ()
+            member x.Implement vr = if methDef.HasBody then genMethodBody vr
+    }
 
-    member x.ValueRef =
-        match valueRefOpt with
-        | Some valueRef -> valueRef
-        | None ->
-            let valueRef = declareMethodDef ()
-            valueRefOpt <- Some valueRef
-            if methDef.HasBody then
-                genMethodBody valueRef
-            valueRef
+    member x.ValueRef = valueRef.Value
 
 let genMainFunction
         (classMap : ClassMap)
