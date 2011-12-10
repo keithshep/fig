@@ -10,17 +10,13 @@ open LLVM.ExecutionEngine
 open LLVM.Generated.Target
 open LLVM.Generated.BitWriter
 
-let objRefAsOption = function
-    | null -> None
-    | x -> Some x
-
 [<EntryPoint>]
 let main args =
     match args with
     | [| inAssemFile; outBitcodeFile |] ->
         let assem = AssemblyDefinition.ReadAssembly inAssemFile
         let llvmModuleRef = moduleCreateWithName "module"
-        genTypeDefs (objRefAsOption assem.EntryPoint) llvmModuleRef assem.MainModule.Types
+        genTypeDefs llvmModuleRef assem
         
         // for debug only
         dumpModule llvmModuleRef

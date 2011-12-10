@@ -1096,10 +1096,7 @@ let genMainFunction
     | Int32 -> buildRet bldr callResult |> ignore
     | retTy -> failwith "don't know how to deal with main return type of %A" retTy
 
-let genTypeDefs
-        (methDefOpt : MethodDefinition option)
-        (llvmModuleRef : ModuleRef)
-        (cilTypeDefs : seq<TypeDefinition>) =
+let genTypeDefs (llvmModuleRef : ModuleRef) (assem : AssemblyDefinition) =
 
     let classMap = new ClassMap(llvmModuleRef)
 
@@ -1109,8 +1106,8 @@ let genTypeDefs
         for m in td.Methods do
             classRep.MethodMap.[m].ValueRef |> ignore
         Seq.iter goTypeDef td.NestedTypes
-    Seq.iter goTypeDef cilTypeDefs
+    Seq.iter goTypeDef assem.MainModule.Types
 
-    match methDefOpt with
-    | None -> ()
-    | Some methDef -> genMainFunction classMap methDef llvmModuleRef
+    match assem.EntryPoint with
+    | null -> ()
+    | methDef -> genMainFunction classMap methDef llvmModuleRef
