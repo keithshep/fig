@@ -91,7 +91,7 @@ type [<AbstractClass>] DefAndImpl<'T> () =
 /// are actually truncated or extended, as well as whether this is done in the called procedure
 /// or the calling procedure. The CIL instruction sequence is unaffected and it is as though
 /// the CIL sequence included an appropriate conv instruction.
-type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
+type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeReference option) =
     
     static member StackItemFromAny (bldr:BuilderRef, value:ValueRef, tyRef:TypeReference) =
         let ty = toSaferType tyRef
@@ -102,27 +102,27 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
         | Void -> noImpl ()
         | Boolean | Char | Byte | UInt16 ->
             let value = buildZExt bldr value (int32Type()) "extendedInt"
-            new StackItem(bldr, value, StackType.Int32_ST);
+            new StackItem(bldr, value, StackType.Int32_ST, Some tyRef)
         | SByte | Int16 ->
             let value = buildSExt bldr value (int32Type()) "extendedInt"
-            new StackItem(bldr, value, StackType.Int32_ST);
-        | Int32 | UInt32 -> new StackItem(bldr, value, StackType.Int32_ST);
-        | Int64 | UInt64 -> new StackItem(bldr, value, StackType.Int64_ST);
+            new StackItem(bldr, value, StackType.Int32_ST, Some tyRef)
+        | Int32 | UInt32 -> new StackItem(bldr, value, StackType.Int32_ST, Some tyRef)
+        | Int64 | UInt64 -> new StackItem(bldr, value, StackType.Int64_ST, Some tyRef)
         | Single -> noImpl ()
-        | Double -> new StackItem(bldr, value, StackType.Float32_ST)
+        | Double -> new StackItem(bldr, value, StackType.Float32_ST, Some tyRef)
         | String -> noImpl ()
-        | Pointer _ptrTy -> new StackItem(bldr, value, StackType.ManagedPointer_ST)
+        | Pointer _ptrTy -> new StackItem(bldr, value, StackType.ManagedPointer_ST, Some tyRef)
         | ByReference _byRefType ->
             // TODO not sure this is always right
-            new StackItem(bldr, value, StackType.ManagedPointer_ST)
+            new StackItem(bldr, value, StackType.ManagedPointer_ST, Some tyRef)
         | ValueType _typeRef ->
             noImpl ()
             // TODO have no idea if this is right
             //classMap.[typeRef.FullName].InstanceVarsType
-        | Class _typeRef -> new StackItem(bldr, value, StackType.ObjectRef_ST)
+        | Class _typeRef -> new StackItem(bldr, value, StackType.ObjectRef_ST, Some tyRef)
         | Var _ ->
             noImpl ()
-        | Array _arrTy -> new StackItem(bldr, value, StackType.ObjectRef_ST)
+        | Array _arrTy -> new StackItem(bldr, value, StackType.ObjectRef_ST, Some tyRef)
         | GenericInstance _
         | TypedByReference
         | IntPtr
@@ -138,17 +138,17 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
 
     static member StackItemFromInt (bldr:BuilderRef, value:ValueRef, signed:bool, size:PrimSizeBytes) =
         match size with
-        | PrimSizeBytes.Eight -> new StackItem(bldr, value, Int64_ST)
-        | PrimSizeBytes.Four -> new StackItem(bldr, value, Int32_ST)
+        | PrimSizeBytes.Eight -> new StackItem(bldr, value, Int64_ST, None)
+        | PrimSizeBytes.Four -> new StackItem(bldr, value, Int32_ST, None)
         | PrimSizeBytes.Two | PrimSizeBytes.One ->
             let extFun = if signed then buildSExt else buildZExt
             let value = extFun bldr value (int32Type()) "extendedInt"
-            new StackItem(bldr, value, Int32_ST)
+            new StackItem(bldr, value, Int32_ST, None)
         | _ -> failwith "does not compute"
     
     member x.Value = value
 
-    member x.AsTypeReference (tyRef:TypeReference) =
+    member x.AsTypeReference (classMap:ClassMap, tyRef:TypeReference) =
         let ty = toSaferType tyRef
 
         let noImpl () = failwithf "cannot convert as type reference %A" ty
@@ -175,16 +175,22 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
             noImpl ()
             // TODO have no idea if this is right
             //classMap.[typeRef.FullName].InstanceVarsType
-        | Class _typeRef -> value
-        | Var _ ->
-            noImpl ()
+        | Class _ | Object ->
+            match tyRefOpt with
+            | None -> value
+            | Some thisTyRef ->
+                // TODO if-else me!
+                if isSameType thisTyRef tyRef then
+                    value
+                else
+                    buildBitCast bldr value (pointerType classMap.[tyRef].InstanceVarsType 0u) ""
+        | Var _ -> noImpl ()
         | Array _arrTy -> value
         | GenericInstance _
         | TypedByReference
         | IntPtr
         | UIntPtr
         | FunctionPointer _
-        | Object
         | MVar _
         | RequiredModifier _
         | OptionalModifier _
@@ -247,8 +253,8 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType) =
     interface StackTyped with
         member x.StackType = ty
 
-type TypeUtil () =
-    static member SaferTypeToLLVMType (classMap : ClassMap) (ty : SaferTypeRef) =
+and TypeUtil () =
+    static member ToLLVMType (classMap : ClassMap) (ty : TypeReference) =
 
         let noImpl () = failwithf "no impl for %A type yet" ty
     
@@ -258,7 +264,7 @@ type TypeUtil () =
             else
                 None
 
-        match ty with
+        match toSaferType ty with
         | Void -> voidType ()
 
         // TODO probably need a separate function for getting stack type vs normal type
@@ -278,9 +284,8 @@ type TypeUtil () =
         | ValueType typeRef ->
             // TODO have no idea if this is right
             classMap.[typeRef].InstanceVarsType
-        | Class typeRef ->
-            // TODO fix me
-            pointerType classMap.[typeRef].InstanceVarsType 0u
+        | Class _ | Object ->
+            pointerType classMap.[ty].InstanceVarsType 0u
         | Var _ ->
             noImpl ()
         | Array arrTy ->
@@ -305,7 +310,6 @@ type TypeUtil () =
         | IntPtr
         | UIntPtr
         | FunctionPointer _
-        | Object
         | MVar _
         | RequiredModifier _
         | OptionalModifier _
@@ -313,19 +317,16 @@ type TypeUtil () =
         | Pinned _ ->
             noImpl ()
 
-    static member ToLLVMType (classMap : ClassMap) (ty : TypeReference) =
-        TypeUtil.SaferTypeToLLVMType classMap (toSaferType ty)
-
-and ClassMap (modRef : ModuleRef) =
+and ClassMap (modRef : ModuleRef, assem : AssemblyDefinition) =
     let classDict = new Dictionary<string * string, ClassTypeRep>()
 
     member x.Item
         with get (tr : TypeReference) : ClassTypeRep =
             let td = tr.Resolve()
-            if td.FullName = "System.Object" then
-                failwith "wasn't expecting an System.Object type"
-
             let modName = td.Module.FullyQualifiedName
+
+            // TODO make sure this addresses concerns mentioned in:
+            // http://groups.google.com/group/mono-cecil/browse_thread/thread/2d59759860f31458
             let key = (modName, td.FullName)
             if classDict.ContainsKey key then
                 classDict.[key]
@@ -337,6 +338,8 @@ and ClassMap (modRef : ModuleRef) =
     member x.Item
         with get (mr : MethodReference) : ClassTypeRep =
             x.[mr.Resolve().DeclaringType]
+
+    member x.AssemDef : AssemblyDefinition = assem
 
 and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, classMap : ClassMap) as x =
     let structNamed name = structCreateNamed (getModuleContext modRef) name
@@ -354,8 +357,8 @@ and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, classMap : Class
             member x.Define() = structNamed (typeDef.FullName + "Instance")
             member x.Implement vr =
                 let instanceFields = [|
-                    for f in typeDef.InstanceFields do
-                        yield TypeUtil.ToLLVMType classMap f.FieldType
+                    for f in typeDef.AllInstanceFields ->
+                        TypeUtil.ToLLVMType classMap f.FieldType
                 |]
                 structSetBody vr instanceFields false
     }
@@ -425,8 +428,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                 genInstructions bldr methodVal args locals blockMap ilBB stackVals instTail
             let goNextStackItem (si : StackItem) =
                 goNext (si :: stackTail)
-            let goNextValRef (value : ValueRef) =
-                goNextStackItem (new StackItem(bldr, value, pushType()))
+            let goNextValRef (value : ValueRef) (tyRefOpt : TypeReference option) =
+                goNextStackItem (new StackItem(bldr, value, pushType(), tyRefOpt))
             let noImpl () = failwithf "instruction <<%A>> not implemented" inst.Instruction
             let unexpPush () = failwithf "unexpected push types <<%A>> for instruction <<%A>>" pushType inst.Instruction
             let unexpPop () = failwithf "unexpected pop types <<%A>> for instruction <<%A>>" poppedStack inst.Instruction
@@ -446,7 +449,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                         | Float_ST -> buildFAdd bldr v1 v2 "tmpFAdd"
                         | Int_ST -> buildAdd bldr v1 v2 "tmpAdd"
                         | _ -> unexpPush()
-                    goNextValRef addResult
+                    goNextValRef addResult None
                 | _ -> unexpPop()
 
             | AddOvf -> noImpl ()
@@ -462,7 +465,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                         | Float_ST -> buildFDiv bldr v1 v2 "tmpFDiv"
                         | Int_ST -> buildSDiv bldr v1 v2 "tmpDiv"
                         | _ -> unexpPush()
-                    goNextValRef divResult
+                    goNextValRef divResult None
                 | _ -> unexpPop()
 
             | DivUn -> noImpl ()
@@ -479,7 +482,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | ConvI4 ->
                 match poppedStack with
                 | [STyped Int_ST as value] ->
-                    goNextValRef (value.AsInt(true, PrimSizeBytes.Four))
+                    goNextValRef (value.AsInt(true, PrimSizeBytes.Four)) None
                 | _ ->
                     failwithf "convi4 no imple for <<%A>>" [for x in poppedStack -> (x :> StackTyped).StackType]
             | ConvI8 -> noImpl ()
@@ -487,7 +490,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                 noImpl ()
             | ConvR8 ->
                 match poppedStack with
-                | [STyped Int_ST as value] -> goNextValRef (value.AsFloat(true, true))
+                | [STyped Int_ST as value] -> goNextValRef (value.AsFloat(true, true)) None
                 | _ -> noImpl()
 
             | ConvU4 -> noImpl ()
@@ -534,7 +537,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                         | Float_ST -> buildFMul bldr v1 v2 "tmpFMul"
                         | Int_ST -> buildMul bldr v1 v2 "tmpMul"
                         | _ -> unexpPush()
-                    goNextValRef mulResult
+                    goNextValRef mulResult None
                 | _ -> unexpPop()
 
             | MulOvf -> noImpl ()
@@ -559,7 +562,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                         | Float_ST -> buildFSub bldr v1 v2 "tmpFSub"
                         | Int_ST -> buildSub bldr v1 v2 "tmpSub"
                         | _ -> unexpPush()
-                    goNextValRef subResult
+                    goNextValRef subResult None
                 | _ -> unexpPop()
 
             | SubOvf -> noImpl ()
@@ -587,21 +590,21 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                 | _ -> unexpPop()
             | LdcI4 i ->
                 let constResult = constInt (int32Type ()) (uint64 i) false // TODO correct me!!
-                goNextValRef constResult
+                goNextValRef constResult None
             | LdcI8 i ->
                 let constResult = constInt (int64Type ()) (uint64 i) false // TODO correct me!!
-                goNextValRef constResult
+                goNextValRef constResult None
             | LdcR4 _ -> noImpl ()
             | LdcR8 r ->
                 let constResult = constReal (doubleType ()) r
-                goNextValRef constResult
+                goNextValRef constResult None
             | Ldarg paramDef ->
                 let name = "tmp_" + paramDef.Name
                 let value = buildLoad bldr args.[paramDef.Sequence] name
                 goNextStackItem (StackItem.StackItemFromAny(bldr, value, paramDef.ParameterType))
 
             | Ldarga paramDef ->
-                goNextValRef args.[paramDef.Sequence]
+                goNextValRef args.[paramDef.Sequence] (Some paramDef.ParameterType)
             | LdindI1 _ -> noImpl ()
             | LdindU1 _ -> noImpl ()
             | LdindI2 _ -> noImpl ()
@@ -620,7 +623,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | Starg paramDef ->
                 match poppedStack with
                 | [stackHead] ->
-                    let valRef = stackHead.AsTypeReference paramDef.ParameterType
+                    let valRef = stackHead.AsTypeReference(classMap, paramDef.ParameterType)
                     buildStore bldr valRef args.[paramDef.Sequence] |> ignore
                     goNext stackTail
                 | _ -> unexpPop()
@@ -635,7 +638,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | Stloc varDef ->
                 match poppedStack with
                 | [stackHead] ->
-                    let valRef = stackHead.AsTypeReference varDef.VariableType
+                    let valRef = stackHead.AsTypeReference(classMap, varDef.VariableType)
                     buildStore bldr valRef locals.[varDef.Index] |> ignore
                     goNext stackTail
                 | _ -> unexpPop()
@@ -719,7 +722,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                         failwith "expected a void return type"
                     buildRetVoid bldr |> ignore
                 | [stackHead] ->
-                    let retItem = stackHead.AsTypeReference(methDef.ReturnType)
+                    let retItem = stackHead.AsTypeReference(classMap, methDef.ReturnType)
                     buildRet bldr retItem |> ignore
                 | _ ->
                     unexpPop()
@@ -727,24 +730,19 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             // Method call
             | Call (tailCall, methRef) ->
                 // look up the corresponding LLVM function
-                let methDef = methRef.Resolve ()
-                let enclosingName = methDef.DeclaringType.FullName
-                if enclosingName = "System.Object" && methDef.IsConstructor then
-                    //TODO stop ignoring object constructor calls
+                let methDef = methRef.Resolve()
+                let funRef = classMap.[methDef].MethodMap.[methDef].ValueRef
+
+                let stackItemToArg (i:int) (item:StackItem) =
+                    item.AsTypeReference(classMap, methDef.AllParameters.[i].ParameterType)
+                let args = List.mapi stackItemToArg (List.rev poppedStack)
+                let resultName = if pushTypes.IsEmpty then "" else "callResult"
+                let callResult = buildCall bldr funRef (Array.ofList args) resultName
+                if tailCall then setTailCall callResult true
+                if pushTypes.IsEmpty then
                     goNext stackTail
                 else
-                    let funRef = classMap.[methDef].MethodMap.[methDef].ValueRef
-
-                    let stackItemToArg (i:int) (item:StackItem) =
-                        item.AsTypeReference (methDef.AllParameters.[i].ParameterType)
-                    let args = List.mapi stackItemToArg (List.rev poppedStack)
-                    let resultName = if pushTypes.IsEmpty then "" else "callResult"
-                    let callResult = buildCall bldr funRef (Array.ofList args) resultName
-                    if tailCall then setTailCall callResult true
-                    if pushTypes.IsEmpty then
-                        goNext stackTail
-                    else
-                        goNextStackItem (StackItem.StackItemFromAny(bldr, callResult, methRef.ReturnType))
+                    goNextStackItem (StackItem.StackItemFromAny(bldr, callResult, methRef.ReturnType))
 
             | Callvirt _ -> noImpl ()
             | Calli _ -> noImpl ()
@@ -760,7 +758,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                     let llvmTy = classMap.[methDef.DeclaringType].InstanceVarsType
                     let newObj = buildMalloc bldr llvmTy ("new" + methDef.DeclaringType.FullName)
                     let stackItemToArg (i:int) (item:StackItem) =
-                        item.AsTypeReference (methDef.AllParameters.[i].ParameterType)
+                        item.AsTypeReference(classMap, methDef.AllParameters.[i].ParameterType)
                     let args = newObj :: List.mapi stackItemToArg (List.rev poppedStack)
                     buildCall bldr funRef (Array.ofList args) "" |> ignore
                     goNextStackItem (StackItem.StackItemFromAny(bldr, newObj, methDef.DeclaringType))
@@ -796,8 +794,11 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                 | [selfPtr] ->
                     // TODO alignment and volitility
                     let fieldName = fieldRef.FullName
-                    let cilFields = (fieldRef.DeclaringType.Resolve ()).InstanceFields
+                    let decTy = fieldRef.DeclaringType.Resolve()
+                    let cilFields = decTy.InstanceFields
+                    // TODO maybe RVA or MetadataToken is better than FullName
                     let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) cilFields
+                    let fieldIndex = fieldIndex + decTy.NumInheritedInstanceFields
 
                     // OK now we need to load the field
                     let fieldPtr = buildStructGEP bldr selfPtr.Value (uint32 fieldIndex) (fieldRef.Name + "Ptr")
@@ -821,7 +822,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                     // now store the field
                     let declClassRep = classMap.[declaringTy]
                     let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
-                    buildStore bldr (value.AsTypeReference fieldRef.FieldType) fieldPtr |> ignore
+                    buildStore bldr (value.AsTypeReference(classMap, fieldRef.FieldType)) fieldPtr |> ignore
                     goNext stackTail
                 | _ ->
                     unexpPop()
@@ -831,12 +832,14 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                 | [value; selfPtr] ->
                     // TODO alignment and volitility
                     let fieldName = fieldRef.FullName
-                    let cilFields = (fieldRef.DeclaringType.Resolve ()).InstanceFields
+                    let decTy = fieldRef.DeclaringType.Resolve()
+                    let cilFields = decTy.InstanceFields
                     let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) cilFields
+                    let fieldIndex = fieldIndex + decTy.NumInheritedInstanceFields
 
                     // OK now we need to store the field
                     let fieldPtr = buildStructGEP bldr selfPtr.Value (uint32 fieldIndex) (fieldRef.Name + "Ptr")
-                    buildStore bldr (value.AsTypeReference fieldRef.FieldType) fieldPtr |> ignore
+                    buildStore bldr (value.AsTypeReference(classMap, fieldRef.FieldType)) fieldPtr |> ignore
                     goNext stackTail
                 | _ ->
                     unexpPop()
@@ -883,7 +886,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                     let arrPtr = buildLoad bldr arrPtrAddr "arrPtr"
                     // TODO: make sure that index.Value is good here... will work for all native ints or int32's
                     let elemAddr = buildGEP bldr arrPtr [|index.Value|] "elemAddr"
-                    buildStore bldr (value.AsTypeReference elemTyRef) elemAddr |> ignore
+                    buildStore bldr (value.AsTypeReference(classMap, elemTyRef)) elemAddr |> ignore
 
                     goNext stackTail
                 | _ ->
@@ -932,14 +935,15 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                     let arrPtrAddr = buildStructGEP bldr newArrObj 1u "arrPtrAddr"
                     buildStore bldr newArr arrPtrAddr |> ignore
 
-                    goNextValRef newArrObj
+                    // TODO "None" may be the wrong thing to do here
+                    goNextValRef newArrObj None
                 | _ ->
                     unexpPop()
             | Ldlen ->
                 match poppedStack with
                 | [arrObj] ->
                     let lenAddr = buildStructGEP bldr arrObj.Value 0u "lenAddr"
-                    goNextValRef (buildLoad bldr lenAddr "len")
+                    goNextValRef (buildLoad bldr lenAddr "len") None
                 | _ ->
                     unexpPop()
 
@@ -1098,7 +1102,7 @@ let genMainFunction
 
 let genTypeDefs (llvmModuleRef : ModuleRef) (assem : AssemblyDefinition) =
 
-    let classMap = new ClassMap(llvmModuleRef)
+    let classMap = new ClassMap(llvmModuleRef, assem)
 
     // force evaluation of all module types
     let rec goTypeDef (td : TypeDefinition) =

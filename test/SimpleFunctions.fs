@@ -29,12 +29,17 @@ let power (x : float) (y : int) =
         retVal <- retVal * x
     retVal
 
-[<ReferenceEquality>]
-type Point3D = {x : float; y : float; z : float}
+type Point2D(x:float, y:float) =
+    member this.X = x
+    member this.Y = y
 
-let distSq p = p.x * p.x + p.y * p.y + p.z * p.z
+type Point3D(x:float, y:float, z:float) =
+    inherit Point2D(x, y)
+    member x.Z = z
 
-let distSqOf789 () = distSq {x = 7.0; y = 8.0; z = 9.0}
+let distSq (p : Point3D) = p.X * p.X + p.Y * p.Y + p.Z * p.Z
+
+let distSqOf789 () = distSq (Point3D(7.0, 8.0, 9.0))
 
 let avgOfTwo (x : float) (y : float) = (x + y) / 2.0
 

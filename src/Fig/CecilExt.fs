@@ -1349,7 +1349,31 @@ type TypeDefinition with
             if not f.IsStatic then yield f
     |]
 
+    member x.AllInstanceFields = [|
+        match x.BaseType with
+        | null -> ()
+        | bt -> yield! bt.Resolve().AllInstanceFields
+
+        yield! x.InstanceFields
+    |]
+
+    member x.NumInheritedInstanceFields =
+        match x.BaseType with
+        | null -> 0
+        | bt ->
+            let bt = bt.Resolve()
+            bt.InstanceFields.Length + bt.NumInheritedInstanceFields
+
     member x.StaticFields = [|
         for f in x.Fields do
             if f.IsStatic then yield f
     |]
+
+let isSameType (ty1 : TypeReference) (ty2 : TypeReference) =
+    let ty1 = ty1.Resolve()
+    let ty2 = ty2.Resolve()
+
+    // TODO make sure this addresses concerns mentioned in:
+    // http://groups.google.com/group/mono-cecil/browse_thread/thread/2d59759860f31458
+    ty1.Module.FullyQualifiedName = ty2.Module.FullyQualifiedName &&
+    ty1.FullName = ty2.FullName
