@@ -1011,7 +1011,6 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
 
     let declareMethodDef () =
 
-        let fnName = if methDef.Name = "main" then "_main" else methDef.Name
         let nameFunParam (fn : ValueRef) (i : int) (p : ParameterDefinition) =
             let llvmParam = getParam fn (uint32 i)
             match p.Name with
@@ -1022,6 +1021,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             let paramTys = [|for p in methDef.AllParameters -> TypeUtil.ToLLVMType classMap p.ParameterType|]
             let retTy = TypeUtil.ToLLVMType classMap methDef.ReturnType
             let funcTy = functionType retTy paramTys
+            let fnName = if methDef.Name = "main" then "_main" else methDef.Name
             let fn = addFunction moduleRef fnName funcTy
         
             Array.iteri (nameFunParam fn) methDef.AllParameters
@@ -1034,16 +1034,10 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             if pInv.Module.Name <> "libc.dll" then
                 failwith "sorry! only works with libc for now. No dlopen etc."
 
-            if pInv.EntryPoint <> methDef.Name then
-                failwithf
-                    "sorry! for now the entry point name (%s) and function name (%s) must be the same"
-                    pInv.EntryPoint
-                    methDef.Name
-
             let paramTys = [|for p in methDef.Parameters -> TypeUtil.ToLLVMType classMap p.ParameterType|]
             let retTy = TypeUtil.ToLLVMType classMap methDef.ReturnType
             let funcTy = functionType retTy paramTys
-            let fn = addFunction moduleRef fnName funcTy
+            let fn = addFunction moduleRef pInv.EntryPoint funcTy
             setLinkage fn Linkage.ExternalLinkage
 
             Seq.iteri (nameFunParam fn) methDef.Parameters
