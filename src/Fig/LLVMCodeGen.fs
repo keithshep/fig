@@ -306,9 +306,8 @@ and TypeUtil () =
             else
                 failwithf "arrays of rank %i not yet implemented" arrTy.Rank
         | GenericInstance _
-        | TypedByReference
-        | IntPtr
-        | UIntPtr
+        | TypedByReference -> noImpl ()
+        | IntPtr | UIntPtr -> llvmIntTypeSized nativeIntSize
         | FunctionPointer _
         | MVar _
         | RequiredModifier _
@@ -395,6 +394,24 @@ and MethodMap (modRef : ModuleRef, classMap : ClassMap, classRep : ClassTypeRep)
                 methRep
 
 and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : ClassMap) =
+    
+    let makeNewObj (bldr : BuilderRef) (methRef : MethodReference) (args : StackItem list) =
+        // TODO implement GC along with object/class initialization code
+        // FIXME naming is all screwed up! fix it
+        let methDef = methRef.Resolve ()
+        if not methDef.IsConstructor then
+            failwith "expected a .ctor here"
+        else
+            let funRef = classMap.[methDef].MethodMap.[methDef].ValueRef
+            let llvmTy = classMap.[methDef.DeclaringType].InstanceVarsType
+            let newObj = buildMalloc bldr llvmTy ("new" + methDef.DeclaringType.FullName)
+            let stackItemToArg (i:int) (item:StackItem) =
+                item.AsTypeReference(classMap, methDef.AllParameters.[i].ParameterType)
+            //let args = newObj :: List.mapi stackItemToArg (List.rev poppedStack)
+            let args = newObj :: List.mapi stackItemToArg args
+            buildCall bldr funRef (Array.ofList args) "" |> ignore
+            //goNextStackItem (StackItem.StackItemFromAny(bldr, newObj, methDef.DeclaringType))
+            StackItem.StackItemFromAny(bldr, newObj, methDef.DeclaringType)
 
     let rec genInstructions
             (bldr : BuilderRef)
@@ -430,6 +447,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                 goNext (si :: stackTail)
             let goNextValRef (value : ValueRef) (tyRefOpt : TypeReference option) =
                 goNextStackItem (new StackItem(bldr, value, pushType(), tyRefOpt))
+
             let noImpl () = failwithf "instruction <<%A>> not implemented" inst.Instruction
             let unexpPush () = failwithf "unexpected push types <<%A>> for instruction <<%A>>" pushType inst.Instruction
             let unexpPop () = failwithf "unexpected pop types <<%A>> for instruction <<%A>>" poppedStack inst.Instruction
@@ -747,21 +765,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | Callvirt _ -> noImpl ()
             | Calli _ -> noImpl ()
             | Ldftn _ -> noImpl ()
-            | Newobj methRef ->
-                // TODO implement GC along with object/class initialization code
-                // FIXME naming is all screwed up! fix it
-                let methDef = methRef.Resolve ()
-                if not methDef.IsConstructor then
-                    failwith "expected a .ctor here"
-                else
-                    let funRef = classMap.[methDef].MethodMap.[methDef].ValueRef
-                    let llvmTy = classMap.[methDef.DeclaringType].InstanceVarsType
-                    let newObj = buildMalloc bldr llvmTy ("new" + methDef.DeclaringType.FullName)
-                    let stackItemToArg (i:int) (item:StackItem) =
-                        item.AsTypeReference(classMap, methDef.AllParameters.[i].ParameterType)
-                    let args = newObj :: List.mapi stackItemToArg (List.rev poppedStack)
-                    buildCall bldr funRef (Array.ofList args) "" |> ignore
-                    goNextStackItem (StackItem.StackItemFromAny(bldr, newObj, methDef.DeclaringType))
+            | Newobj methRef -> makeNewObj bldr methRef (List.rev poppedStack) |> goNextStackItem
 
             // Exceptions
             | Throw -> noImpl ()
@@ -847,7 +851,35 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | Ldstr _ -> noImpl ()
             | Isinst _ -> noImpl ()
             | Castclass _ -> noImpl ()
-            | Ldtoken _ -> noImpl ()
+            | Ldtoken tokProvider ->
+                match tokProvider with
+                | :? FieldReference as fr ->
+                    let corelibName = classMap.AssemDef.MainModule.TypeSystem.Corlib.Name
+                    let corelib = classMap.AssemDef.MainModule.AssemblyResolver.Resolve corelibName
+                    let allCorelibTys = seq {for m in corelib.Modules do yield! m.Types}
+                    let isRunFieldHdl (t : TypeDefinition) =
+                        t.FullName = "System.RuntimeFieldHandle"
+                    match Seq.tryFind isRunFieldHdl allCorelibTys with
+                    | None -> failwithf "failed to locate System.RuntimeFieldHandle in %s" corelibName
+                    | Some td ->
+                        let isCtor (md : MethodDefinition) =
+                            md.IsConstructor && Seq.length md.Parameters = 1 && (
+                                match toSaferType (Seq.head md.Parameters).ParameterType with
+                                | IntPtr -> true
+                                | _ -> false
+                            )
+                        match Seq.tryFind isCtor td.Methods with
+                        | Some md ->
+                            let fieldID = 0uL
+                            let fieldIDVal = constInt (llvmIntTypeSized nativeIntSize) fieldID false
+                            let fieldIDStackItem = StackItem(bldr, fieldIDVal, StackType.NativeInt_ST, None)
+                            let objStackItem = makeNewObj bldr md [fieldIDStackItem]
+                            goNextStackItem objStackItem
+                        | None -> failwith "failed to find constructor for runtime field handle"
+
+                | _ ->
+                    failwithf "no code to deal with tokProvider of type %s" (tokProvider.GetType().FullName)
+                failwith "load tok"
             | Ldvirtftn _ -> noImpl ()
 
             // Value type instructions
@@ -1027,6 +1059,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             Array.iteri (nameFunParam fn) methDef.AllParameters
         
             fn
+        elif methDef.IsInternalCall then
+            failwith "wo wo wo wo... it's an internal call"
         elif methDef.HasPInvokeInfo then
             let pInv = methDef.PInvokeInfo
 
