@@ -118,7 +118,7 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
         | ValueType _typeRef ->
             noImpl ()
             // TODO have no idea if this is right
-            //classMap.[typeRef.FullName].InstanceVarsType
+            //assemGen.[typeRef.FullName].InstanceVarsType
         | Class _typeRef -> new StackItem(bldr, value, StackType.ObjectRef_ST, Some tyRef)
         | Var _ ->
             noImpl ()
@@ -148,7 +148,7 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
     
     member x.Value = value
 
-    member x.AsTypeReference (classMap:ClassMap, tyRef:TypeReference) =
+    member x.AsTypeReference (assemGen:AssemGen, tyRef:TypeReference) =
         let ty = toSaferType tyRef
 
         let noImpl () = failwithf "cannot convert as type reference %A" ty
@@ -170,11 +170,11 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
         | Pointer _ptrTy -> value
         | ByReference _byRefType ->
             noImpl ()
-            //pointerType classMap.[byRefType.ElementType.FullName].InstanceVarsType 0u
+            //pointerType assemGen.[byRefType.ElementType.FullName].InstanceVarsType 0u
         | ValueType _typeRef ->
             noImpl ()
             // TODO have no idea if this is right
-            //classMap.[typeRef.FullName].InstanceVarsType
+            //assemGen.[typeRef.FullName].InstanceVarsType
         | Class _ | Object ->
             match tyRefOpt with
             | None -> value
@@ -183,7 +183,7 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
                 if isSameType thisTyRef tyRef then
                     value
                 else
-                    buildBitCast bldr value (pointerType classMap.[tyRef].InstanceVarsType 0u) ""
+                    buildBitCast bldr value (pointerType assemGen.ClassMap.[tyRef].InstanceVarsType 0u) ""
         | Var _ -> noImpl ()
         | Array _arrTy -> value
         | GenericInstance _
@@ -254,7 +254,7 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
         member x.StackType = ty
 
 and TypeUtil () =
-    static member ToLLVMType (classMap : ClassMap) (ty : TypeReference) =
+    static member ToLLVMType (assemGen : AssemGen) (ty : TypeReference) =
 
         let noImpl () = failwithf "no impl for %A type yet" ty
     
@@ -278,14 +278,14 @@ and TypeUtil () =
         | Double -> doubleType ()
         | String -> noImpl ()
         | Pointer ptrTy ->
-            pointerType classMap.[ptrTy.ElementType].InstanceVarsType 0u
+            pointerType assemGen.ClassMap.[ptrTy.ElementType].InstanceVarsType 0u
         | ByReference byRefType ->
-            pointerType classMap.[byRefType.ElementType].InstanceVarsType 0u
+            pointerType assemGen.ClassMap.[byRefType.ElementType].InstanceVarsType 0u
         | ValueType typeRef ->
             // TODO have no idea if this is right
-            classMap.[typeRef].InstanceVarsType
+            assemGen.ClassMap.[typeRef].InstanceVarsType
         | Class _ | Object ->
-            pointerType classMap.[ty].InstanceVarsType 0u
+            pointerType assemGen.ClassMap.[ty].InstanceVarsType 0u
         | Var _ ->
             noImpl ()
         | Array arrTy ->
@@ -297,7 +297,7 @@ and TypeUtil () =
                     // "... 'variable sized array' addressing can be implemented in LLVM
                     // with a zero length array type". So, we implement this as a struct
                     // which contains a length element and an array element
-                    let elemTy = TypeUtil.ToLLVMType classMap arrTy.ElementType
+                    let elemTy = TypeUtil.ToLLVMType assemGen arrTy.ElementType
                     let basicArrTy = pointerType elemTy 0u
                     // FIXME array len should correspond to "native unsigned int" not int32
                     pointerType (structType [|int32Type (); basicArrTy|] false) 0u
@@ -316,7 +316,14 @@ and TypeUtil () =
         | Pinned _ ->
             noImpl ()
 
-and ClassMap (modRef : ModuleRef, assem : AssemblyDefinition) =
+and AssemGen (modRef : ModuleRef, assem : AssemblyDefinition) as x =
+    let classMap = new ClassMap(modRef, x)
+
+    member x.ClassMap : ClassMap = classMap
+
+    member x.AssemDef : AssemblyDefinition = assem
+
+and ClassMap (modRef : ModuleRef, assemGen : AssemGen) =
     let classDict = new Dictionary<string * string, ClassTypeRep>()
 
     member x.Item
@@ -330,7 +337,7 @@ and ClassMap (modRef : ModuleRef, assem : AssemblyDefinition) =
             if classDict.ContainsKey key then
                 classDict.[key]
             else
-                let classTyRep = new ClassTypeRep(modRef, td, x)
+                let classTyRep = new ClassTypeRep(modRef, td, assemGen)
                 classDict.[key] <- classTyRep
                 classTyRep
 
@@ -338,9 +345,7 @@ and ClassMap (modRef : ModuleRef, assem : AssemblyDefinition) =
         with get (mr : MethodReference) : ClassTypeRep =
             x.[mr.Resolve().DeclaringType]
 
-    member x.AssemDef : AssemblyDefinition = assem
-
-and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, classMap : ClassMap) as x =
+and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, assemGen : AssemGen) as x =
     let structNamed name = structCreateNamed (getModuleContext modRef) name
     let staticRef = {
         new DefAndImpl<TypeRef>() with
@@ -348,7 +353,7 @@ and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, classMap : Class
             member x.Implement vr =
                 let staticFields =
                     [|for f in typeDef.StaticFields ->
-                        TypeUtil.ToLLVMType classMap f.FieldType|]
+                        TypeUtil.ToLLVMType assemGen f.FieldType|]
                 structSetBody vr staticFields false
     }
     let instanceRef = {
@@ -357,12 +362,12 @@ and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, classMap : Class
             member x.Implement vr =
                 let instanceFields = [|
                     for f in typeDef.AllInstanceFields ->
-                        TypeUtil.ToLLVMType classMap f.FieldType
+                        TypeUtil.ToLLVMType assemGen f.FieldType
                 |]
                 structSetBody vr instanceFields false
     }
     let staticVars = lazy(addGlobal modRef staticRef.Value (typeDef.FullName + "Global"))
-    let methMap = new MethodMap(modRef, classMap, x)
+    let methMap = new MethodMap(modRef, assemGen, x)
 
     member x.InstanceVarsType = instanceRef.Value
     member x.StaticVarsType = staticRef.Value
@@ -370,7 +375,7 @@ and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, classMap : Class
     member x.MethodMap : MethodMap = methMap
     member x.TypeDef : TypeDefinition = typeDef
 
-and MethodMap (modRef : ModuleRef, classMap : ClassMap, classRep : ClassTypeRep) =
+and MethodMap (modRef : ModuleRef, assemGen : AssemGen, classRep : ClassTypeRep) =
     let methDict = new Dictionary<string * bool * string, MethodRep>()
 
     member x.Item
@@ -389,11 +394,11 @@ and MethodMap (modRef : ModuleRef, classMap : ClassMap, classRep : ClassTypeRep)
             if methDict.ContainsKey key then
                 methDict.[key]
             else
-                let methRep = new MethodRep(modRef, methDef, classMap)
+                let methRep = new MethodRep(modRef, methDef, assemGen)
                 methDict.[key] <- methRep
                 methRep
 
-and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : ClassMap) =
+and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : AssemGen) =
     
     let makeNewObj (bldr : BuilderRef) (methRef : MethodReference) (args : StackItem list) =
         // TODO implement GC along with object/class initialization code
@@ -402,11 +407,11 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
         if not methDef.IsConstructor then
             failwith "expected a .ctor here"
         else
-            let funRef = classMap.[methDef].MethodMap.[methDef].ValueRef
-            let llvmTy = classMap.[methDef.DeclaringType].InstanceVarsType
+            let funRef = assemGen.ClassMap.[methDef].MethodMap.[methDef].ValueRef
+            let llvmTy = assemGen.ClassMap.[methDef.DeclaringType].InstanceVarsType
             let newObj = buildMalloc bldr llvmTy ("new" + methDef.DeclaringType.FullName)
             let stackItemToArg (i:int) (item:StackItem) =
-                item.AsTypeReference(classMap, methDef.AllParameters.[i].ParameterType)
+                item.AsTypeReference(assemGen, methDef.AllParameters.[i].ParameterType)
             //let args = newObj :: List.mapi stackItemToArg (List.rev poppedStack)
             let args = newObj :: List.mapi stackItemToArg args
             buildCall bldr funRef (Array.ofList args) "" |> ignore
@@ -641,7 +646,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | Starg paramDef ->
                 match poppedStack with
                 | [stackHead] ->
-                    let valRef = stackHead.AsTypeReference(classMap, paramDef.ParameterType)
+                    let valRef = stackHead.AsTypeReference(assemGen, paramDef.ParameterType)
                     buildStore bldr valRef args.[paramDef.Sequence] |> ignore
                     goNext stackTail
                 | _ -> unexpPop()
@@ -656,7 +661,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | Stloc varDef ->
                 match poppedStack with
                 | [stackHead] ->
-                    let valRef = stackHead.AsTypeReference(classMap, varDef.VariableType)
+                    let valRef = stackHead.AsTypeReference(assemGen, varDef.VariableType)
                     buildStore bldr valRef locals.[varDef.Index] |> ignore
                     goNext stackTail
                 | _ -> unexpPop()
@@ -740,7 +745,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                         failwith "expected a void return type"
                     buildRetVoid bldr |> ignore
                 | [stackHead] ->
-                    let retItem = stackHead.AsTypeReference(classMap, methDef.ReturnType)
+                    let retItem = stackHead.AsTypeReference(assemGen, methDef.ReturnType)
                     buildRet bldr retItem |> ignore
                 | _ ->
                     unexpPop()
@@ -749,10 +754,10 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | Call (tailCall, methRef) ->
                 // look up the corresponding LLVM function
                 let methDef = methRef.Resolve()
-                let funRef = classMap.[methDef].MethodMap.[methDef].ValueRef
+                let funRef = assemGen.ClassMap.[methDef].MethodMap.[methDef].ValueRef
 
                 let stackItemToArg (i:int) (item:StackItem) =
-                    item.AsTypeReference(classMap, methDef.AllParameters.[i].ParameterType)
+                    item.AsTypeReference(assemGen, methDef.AllParameters.[i].ParameterType)
                 let args = List.mapi stackItemToArg (List.rev poppedStack)
                 let resultName = if pushTypes.IsEmpty then "" else "callResult"
                 let callResult = buildCall bldr funRef (Array.ofList args) resultName
@@ -785,7 +790,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                     let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
 
                     // OK now we need to load the field
-                    let declClassRep = classMap.[declaringTy]
+                    let declClassRep = assemGen.ClassMap.[declaringTy]
                     let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
                     let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
                     let fieldStackItem = StackItem.StackItemFromAny(bldr, fieldValue, fieldRef.FieldType)
@@ -824,9 +829,9 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                     let fieldIndex = Seq.findIndex (fun (f : FieldDefinition) -> f.FullName = fieldName) staticCilFields
 
                     // now store the field
-                    let declClassRep = classMap.[declaringTy]
+                    let declClassRep = assemGen.ClassMap.[declaringTy]
                     let fieldPtr = buildStructGEP bldr declClassRep.StaticVars (uint32 fieldIndex) (fieldRef.Name + "Ptr")
-                    buildStore bldr (value.AsTypeReference(classMap, fieldRef.FieldType)) fieldPtr |> ignore
+                    buildStore bldr (value.AsTypeReference(assemGen, fieldRef.FieldType)) fieldPtr |> ignore
                     goNext stackTail
                 | _ ->
                     unexpPop()
@@ -843,7 +848,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
 
                     // OK now we need to store the field
                     let fieldPtr = buildStructGEP bldr selfPtr.Value (uint32 fieldIndex) (fieldRef.Name + "Ptr")
-                    buildStore bldr (value.AsTypeReference(classMap, fieldRef.FieldType)) fieldPtr |> ignore
+                    buildStore bldr (value.AsTypeReference(assemGen, fieldRef.FieldType)) fieldPtr |> ignore
                     goNext stackTail
                 | _ ->
                     unexpPop()
@@ -854,8 +859,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | Ldtoken tokProvider ->
                 match tokProvider with
                 | :? FieldReference as fr ->
-                    let corelibName = classMap.AssemDef.MainModule.TypeSystem.Corlib.Name
-                    let corelib = classMap.AssemDef.MainModule.AssemblyResolver.Resolve corelibName
+                    let corelibName = assemGen.AssemDef.MainModule.TypeSystem.Corlib.Name
+                    let corelib = assemGen.AssemDef.MainModule.AssemblyResolver.Resolve corelibName
                     let allCorelibTys = seq {for m in corelib.Modules do yield! m.Types}
                     let isRunFieldHdl (t : TypeDefinition) =
                         t.FullName = "System.RuntimeFieldHandle"
@@ -918,7 +923,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                     let arrPtr = buildLoad bldr arrPtrAddr "arrPtr"
                     // TODO: make sure that index.Value is good here... will work for all native ints or int32's
                     let elemAddr = buildGEP bldr arrPtr [|index.Value|] "elemAddr"
-                    buildStore bldr (value.AsTypeReference(classMap, elemTyRef)) elemAddr |> ignore
+                    buildStore bldr (value.AsTypeReference(assemGen, elemTyRef)) elemAddr |> ignore
 
                     goNext stackTail
                 | _ ->
@@ -949,7 +954,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
                     // allocate the array to the heap
                     // TODO it seems pretty lame to have this code here. need to think
                     // about how this should really be structured
-                    let elemTy = TypeUtil.ToLLVMType classMap elemTypeRef
+                    let elemTy = TypeUtil.ToLLVMType assemGen elemTypeRef
                     // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
                     let newArr = buildArrayMalloc bldr elemTy numElems.Value "newArr"
 
@@ -999,7 +1004,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | Initblk _ -> noImpl ()
 
     let genAlloca (bldr : BuilderRef) (t : TypeReference) (name : string) =
-        buildAlloca bldr (TypeUtil.ToLLVMType classMap t) (name + "Alloca")
+        buildAlloca bldr (TypeUtil.ToLLVMType assemGen t) (name + "Alloca")
 
     let genLocal (bldr : BuilderRef) (l : VariableDefinition) =
         genAlloca bldr l.VariableType (match l.Name with null -> "local" | n -> n)
@@ -1050,8 +1055,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             | name -> setValueName llvmParam name
 
         if methDef.HasBody then
-            let paramTys = [|for p in methDef.AllParameters -> TypeUtil.ToLLVMType classMap p.ParameterType|]
-            let retTy = TypeUtil.ToLLVMType classMap methDef.ReturnType
+            let paramTys = [|for p in methDef.AllParameters -> TypeUtil.ToLLVMType assemGen p.ParameterType|]
+            let retTy = TypeUtil.ToLLVMType assemGen methDef.ReturnType
             let funcTy = functionType retTy paramTys
             let fnName = if methDef.Name = "main" then "_main" else methDef.Name
             let fn = addFunction moduleRef fnName funcTy
@@ -1068,8 +1073,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
             if pInv.Module.Name <> "libc.dll" then
                 failwith "sorry! only works with libc for now. No dlopen etc."
 
-            let paramTys = [|for p in methDef.Parameters -> TypeUtil.ToLLVMType classMap p.ParameterType|]
-            let retTy = TypeUtil.ToLLVMType classMap methDef.ReturnType
+            let paramTys = [|for p in methDef.Parameters -> TypeUtil.ToLLVMType assemGen p.ParameterType|]
+            let retTy = TypeUtil.ToLLVMType assemGen methDef.ReturnType
             let funcTy = functionType retTy paramTys
             let fn = addFunction moduleRef pInv.EntryPoint funcTy
             setLinkage fn Linkage.ExternalLinkage
@@ -1089,7 +1094,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, classMap : Cla
     member x.ValueRef = valueRef.Value
 
 let genMainFunction
-        (classMap : ClassMap)
+        (assemGen : AssemGen)
         (methDef : MethodDefinition)
         (llvmModuleRef : ModuleRef) =
 
@@ -1106,7 +1111,7 @@ let genMainFunction
         let resultName = if voidRet then "" else "result"
         match methDef.AllParameters with
         | [||] ->
-            let valRef = classMap.[methDef].MethodMap.[methDef].ValueRef
+            let valRef = assemGen.ClassMap.[methDef].MethodMap.[methDef].ValueRef
             buildCall bldr valRef [||] resultName
         | [|cmdLineArgs|] ->
             let safeParamTy = toSaferType cmdLineArgs.ParameterType
@@ -1130,11 +1135,11 @@ let genMainFunction
 
 let genTypeDefs (llvmModuleRef : ModuleRef) (assem : AssemblyDefinition) =
 
-    let classMap = new ClassMap(llvmModuleRef, assem)
+    let assemGen = new AssemGen(llvmModuleRef, assem)
 
     // force evaluation of all module types
     let rec goTypeDef (td : TypeDefinition) =
-        let classRep = classMap.[td]
+        let classRep = assemGen.ClassMap.[td]
         for m in td.Methods do
             classRep.MethodMap.[m].ValueRef |> ignore
         Seq.iter goTypeDef td.NestedTypes
@@ -1142,4 +1147,4 @@ let genTypeDefs (llvmModuleRef : ModuleRef) (assem : AssemblyDefinition) =
 
     match assem.EntryPoint with
     | null -> ()
-    | methDef -> genMainFunction classMap methDef llvmModuleRef
+    | methDef -> genMainFunction assemGen methDef llvmModuleRef
