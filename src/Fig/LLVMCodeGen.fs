@@ -7,6 +7,7 @@ open Mono.Cecil.Cil
 
 open LLVM.Generated.Core
 open LLVM.Core
+open LLVM.Extra
 
 open System.Collections.Generic
 
@@ -125,8 +126,7 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
         | Array _arrTy -> new StackItem(bldr, value, StackType.ObjectRef_ST, Some tyRef)
         | GenericInstance _
         | TypedByReference
-        | IntPtr
-        | UIntPtr
+        | IntPtr | UIntPtr -> new StackItem(bldr, value, StackType.NativeInt_ST, Some tyRef)
         | FunctionPointer _
         | Object
         | MVar _
@@ -147,6 +147,16 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
         | _ -> failwith "does not compute"
     
     member x.Value = value
+
+    member x.AsPointerTo (assemGen:AssemGen, tyRef:TypeReference) : ValueRef =
+        let ty = toSaferType tyRef
+
+        let noImpl () = failwithf "no implementation for creating a pointer to %A" ty
+        if not tyRef.IsPrimitive then
+            // TODO how should we implement for non primitives
+            noImpl ()
+        let ptrTy = pointerType (TypeUtil.ToLLVMType assemGen tyRef) 0u
+        buildBitCast bldr x.Value ptrTy ""
 
     member x.AsTypeReference (assemGen:AssemGen, tyRef:TypeReference) =
         let ty = toSaferType tyRef
@@ -171,15 +181,10 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
         | ByReference _byRefType ->
             noImpl ()
             //pointerType assemGen.[byRefType.ElementType.FullName].InstanceVarsType 0u
-        | ValueType _typeRef ->
-            noImpl ()
-            // TODO have no idea if this is right
-            //assemGen.[typeRef.FullName].InstanceVarsType
-        | Class _ | Object ->
+        | ValueType _ | Class _ | Object ->
             match tyRefOpt with
             | None -> value
             | Some thisTyRef ->
-                // TODO if-else me!
                 if isSameType thisTyRef tyRef then
                     value
                 else
@@ -188,8 +193,8 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
         | Array _arrTy -> value
         | GenericInstance _
         | TypedByReference
-        | IntPtr
-        | UIntPtr
+        | IntPtr -> x.AsNativeInt true
+        | UIntPtr -> x.AsNativeInt false
         | FunctionPointer _
         | MVar _
         | RequiredModifier _
@@ -507,20 +512,24 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
                 | [STyped Int_ST as value] ->
                     goNextValRef (value.AsInt(true, PrimSizeBytes.Four)) None
                 | _ ->
-                    failwithf "convi4 no imple for <<%A>>" [for x in poppedStack -> (x :> StackTyped).StackType]
+                    failwithf "convi4 no impl for <<%A>>" [for x in poppedStack -> (x :> StackTyped).StackType]
             | ConvI8 -> noImpl ()
             | ConvR4 ->
                 noImpl ()
             | ConvR8 ->
                 match poppedStack with
-                | [STyped Int_ST as value] -> goNextValRef (value.AsFloat(true, true)) None
+                | [value] -> goNextValRef (value.AsFloat(true, true)) None
                 | _ -> noImpl()
 
             | ConvU4 -> noImpl ()
             | ConvU8 -> noImpl ()
             | ConvU2 -> noImpl ()
             | ConvU1 -> noImpl ()
-            | ConvI -> noImpl ()
+            | ConvI ->
+                match poppedStack with
+                | [value] -> goNextValRef (value.AsNativeInt true) None
+                | _ -> noImpl()
+
             | ConvU -> noImpl ()
 
             | ConvRUn -> noImpl ()
@@ -642,7 +651,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
             | Ldloc varDef ->
                 let loadResult = buildLoad bldr locals.[varDef.Index] "tmp"
                 goNextStackItem (StackItem.StackItemFromAny(bldr, loadResult, varDef.VariableType))
-            | Ldloca _ -> noImpl ()
+            | Ldloca varDef ->
+                goNextValRef locals.[varDef.Index] None
             | Starg paramDef ->
                 match poppedStack with
                 | [stackHead] ->
@@ -890,12 +900,72 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
             // Value type instructions
             | Cpobj _ -> noImpl ()
             | Initobj _ -> noImpl ()
-            | Ldobj _ -> noImpl ()
-            | Stobj _ -> noImpl ()
+            | Ldobj (unalignedPrefix, volatilePrefix, tyRef) ->
+                // TODO deal with unaligned
+                match poppedStack with
+                | [src] ->
+                    // TODO FIXME leaking memory here also this impl is probably wrong for many types
+                    let cpTy = getElementType (TypeUtil.ToLLVMType assemGen tyRef)
+                    let dest = buildMalloc bldr cpTy "ldobj_copy_dest"
+                    // TODO does this take care of volatile requirement?
+                    buildCopy moduleRef bldr dest (src.AsTypeReference(assemGen, tyRef)) volatilePrefix
+                    let destCast = buildBitCast bldr dest (TypeUtil.ToLLVMType assemGen tyRef) "ldobj_copy_dest_cast"
+                    goNextValRef destCast (Some tyRef)
+                | _ ->
+                    unexpPop()
+
+            | Stobj (unalignedPrefix, volatilePrefix, tyRef) ->
+                // TODO deal with unaligned
+                match poppedStack with
+                | [src; dest] ->
+                    printfn "dest type: %A" (dest :> StackTyped).StackType
+                    if tyRef.IsPrimitive then
+                        // TODO volatile?
+                        let srcPrim = src.AsTypeReference(assemGen, tyRef)
+                        let destPtr = dest.AsPointerTo(assemGen, tyRef)
+                        buildStore bldr srcPrim destPtr |> ignore
+                    else
+                        let srcVal = src.AsTypeReference(assemGen, tyRef)
+                        // TODO does this take care of volatile requirement?
+                        buildCopy moduleRef bldr dest.Value srcVal volatilePrefix
+                    goNext stackTail
+                | _ ->
+                    unexpPop()
             | Box _ -> noImpl ()
             | Unbox _ -> noImpl ()
             | UnboxAny _ -> noImpl ()
-            | Sizeof _ -> noImpl ()
+            | Sizeof tyRef ->
+                let size =
+                    match toSaferType tyRef with
+                    | Boolean | Byte | SByte ->
+                        1uL
+                    | Char | UInt16 | Int16 ->
+                        2uL
+                    | Int32 | UInt32 | Single ->
+                        4uL
+                    | Int64 | UInt64 | Double ->
+                        8uL
+                    | Pointer _ | IntPtr | UIntPtr ->
+                        uint64 nativeIntSize
+                    | Void
+                    | String
+                    | ByReference _
+                    | ValueType _
+                    | Class _
+                    | Object
+                    | Var _
+                    | Array _
+                    | GenericInstance _
+                    | TypedByReference
+                    | FunctionPointer _
+                    | MVar _
+                    | RequiredModifier _
+                    | OptionalModifier _
+                    | Sentinel _
+                    | Pinned _ ->
+                        noImpl()
+
+                goNextValRef (constInt (int32Type()) size false) None
 
             // Generalized array instructions. In AbsIL these instructions include
             // both the single-dimensional variants (with ILArrayShape == ILArrayShape.SingleDimensional)
