@@ -11,6 +11,12 @@ open LLVM.Extra
 
 open System.Collections.Generic
 
+let nullableAsOption (n : System.Nullable<'a>) =
+    if n.HasValue then
+        Some n.Value
+    else
+        None
+
 type PrimSizeBytes = One = 1 | Two = 2 | Four = 4 | Eight = 8
 
 // TODO this should be configurable
@@ -155,8 +161,16 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
         if not tyRef.IsPrimitive then
             // TODO how should we implement for non primitives
             noImpl ()
-        let ptrTy = pointerType (TypeUtil.ToLLVMType assemGen tyRef) 0u
-        buildBitCast bldr x.Value ptrTy ""
+        let ptrTy = pointerType (TypeUtil.LLVMVarTypeOf assemGen tyRef) 0u
+
+        // TODO is this really the way to do this? maybe the types should be normalized on construction
+        match getTypeKind (typeOf x.Value) with
+        | TypeKind.IntegerTypeKind ->
+            buildIntToPtr bldr x.Value ptrTy ""
+        | TypeKind.PointerTypeKind ->
+            buildBitCast bldr x.Value ptrTy ""
+        | tk ->
+            failwithf "cannot convert type kind %A to pointer" tk
 
     member x.AsTypeReference (assemGen:AssemGen, tyRef:TypeReference) =
         let ty = toSaferType tyRef
@@ -259,16 +273,11 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
         member x.StackType = ty
 
 and TypeUtil () =
-    static member ToLLVMType (assemGen : AssemGen) (ty : TypeReference) =
+
+    static member LLVMVarTypeOf (assemGen : AssemGen) (ty : TypeReference) =
 
         let noImpl () = failwithf "no impl for %A type yet" ty
     
-        let nullableAsOption (n : System.Nullable<'a>) =
-            if n.HasValue then
-                Some n.Value
-            else
-                None
-
         match toSaferType ty with
         | Void -> voidType ()
 
@@ -302,7 +311,7 @@ and TypeUtil () =
                     // "... 'variable sized array' addressing can be implemented in LLVM
                     // with a zero length array type". So, we implement this as a struct
                     // which contains a length element and an array element
-                    let elemTy = TypeUtil.ToLLVMType assemGen arrTy.ElementType
+                    let elemTy = TypeUtil.LLVMVarTypeOf assemGen arrTy.ElementType
                     let basicArrTy = pointerType elemTy 0u
                     // FIXME array len should correspond to "native unsigned int" not int32
                     pointerType (structType [|int32Type (); basicArrTy|] false) 0u
@@ -310,6 +319,42 @@ and TypeUtil () =
                     failwithf "dont know how to deal with given array shape yet %A->%A" lowerBound upperBound
             else
                 failwithf "arrays of rank %i not yet implemented" arrTy.Rank
+        | GenericInstance _
+        | TypedByReference -> noImpl ()
+        | IntPtr | UIntPtr -> llvmIntTypeSized nativeIntSize
+        | FunctionPointer _
+        | MVar _
+        | RequiredModifier _
+        | OptionalModifier _
+        | Sentinel _
+        | Pinned _ ->
+            noImpl ()
+
+    static member LLVMNewableTypeOf (assemGen : AssemGen) (ty : TypeReference) =
+
+        let noImpl () = failwithf "no allocable type impl for %A type yet" ty
+
+        match toSaferType ty with
+        | Void -> voidType ()
+
+        // TODO probably need a separate function for getting stack type vs normal type
+        | Boolean -> int8Type ()
+        | Char -> int16Type ()
+        | SByte | Byte -> int8Type ()
+        | Int16 | UInt16 -> noImpl ()
+        | Int32 | UInt32 -> int32Type ()
+        | Int64 | UInt64 -> int64Type ()
+        | Single -> noImpl ()
+        | Double -> doubleType ()
+        | String -> noImpl ()
+        | Pointer _ -> noImpl ()
+        | ByReference _ -> noImpl ()
+        | ValueType _ | Class _ | Object ->
+            assemGen.ClassMap.[ty].InstanceVarsType
+        | Var _ ->
+            noImpl ()
+        | Array _ ->
+            noImpl ()
         | GenericInstance _
         | TypedByReference -> noImpl ()
         | IntPtr | UIntPtr -> llvmIntTypeSized nativeIntSize
@@ -358,7 +403,7 @@ and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, assemGen : Assem
             member x.Implement vr =
                 let staticFields =
                     [|for f in typeDef.StaticFields ->
-                        TypeUtil.ToLLVMType assemGen f.FieldType|]
+                        TypeUtil.LLVMVarTypeOf assemGen f.FieldType|]
                 structSetBody vr staticFields false
     }
     let instanceRef = {
@@ -367,7 +412,7 @@ and ClassTypeRep (modRef : ModuleRef, typeDef : TypeDefinition, assemGen : Assem
             member x.Implement vr =
                 let instanceFields = [|
                     for f in typeDef.AllInstanceFields ->
-                        TypeUtil.ToLLVMType assemGen f.FieldType
+                        TypeUtil.LLVMVarTypeOf assemGen f.FieldType
                 |]
                 structSetBody vr instanceFields false
     }
@@ -417,10 +462,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
             let newObj = buildMalloc bldr llvmTy ("new" + methDef.DeclaringType.FullName)
             let stackItemToArg (i:int) (item:StackItem) =
                 item.AsTypeReference(assemGen, methDef.AllParameters.[i].ParameterType)
-            //let args = newObj :: List.mapi stackItemToArg (List.rev poppedStack)
             let args = newObj :: List.mapi stackItemToArg args
             buildCall bldr funRef (Array.ofList args) "" |> ignore
-            //goNextStackItem (StackItem.StackItemFromAny(bldr, newObj, methDef.DeclaringType))
             StackItem.StackItemFromAny(bldr, newObj, methDef.DeclaringType)
 
     let rec genInstructions
@@ -900,21 +943,24 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
             // Value type instructions
             | Cpobj _ -> noImpl ()
             | Initobj _ -> noImpl ()
-            | Ldobj (unalignedPrefix, volatilePrefix, tyRef) ->
+            | Ldobj (_unalignedPrefix, volatilePrefix, tyRef) ->
                 // TODO deal with unaligned
                 match poppedStack with
                 | [src] ->
                     // TODO FIXME leaking memory here also this impl is probably wrong for many types
-                    let cpTy = getElementType (TypeUtil.ToLLVMType assemGen tyRef)
+                    let cpTy = TypeUtil.LLVMNewableTypeOf assemGen tyRef
                     let dest = buildMalloc bldr cpTy "ldobj_copy_dest"
                     // TODO does this take care of volatile requirement?
                     buildCopy moduleRef bldr dest (src.AsTypeReference(assemGen, tyRef)) volatilePrefix
-                    let destCast = buildBitCast bldr dest (TypeUtil.ToLLVMType assemGen tyRef) "ldobj_copy_dest_cast"
-                    goNextValRef destCast (Some tyRef)
+                    let castTy = pointerType cpTy 0u
+                    let destCast = buildBitCast bldr dest castTy "ldobj_copy_dest_cast"
+                    // TODO is this load always right?? it seems strange but it works for now
+                    let destLoad = buildLoad bldr destCast "ldobj_load_dest"
+                    goNextValRef destLoad (Some tyRef)
                 | _ ->
                     unexpPop()
 
-            | Stobj (unalignedPrefix, volatilePrefix, tyRef) ->
+            | Stobj (_unalignedPrefix, volatilePrefix, tyRef) ->
                 // TODO deal with unaligned
                 match poppedStack with
                 | [src; dest] ->
@@ -1024,7 +1070,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
                     // allocate the array to the heap
                     // TODO it seems pretty lame to have this code here. need to think
                     // about how this should really be structured
-                    let elemTy = TypeUtil.ToLLVMType assemGen elemTypeRef
+                    let elemTy = TypeUtil.LLVMVarTypeOf assemGen elemTypeRef
                     // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
                     let newArr = buildArrayMalloc bldr elemTy numElems.Value "newArr"
 
@@ -1074,13 +1120,13 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
             | Initblk _ -> noImpl ()
 
     let genAlloca (bldr : BuilderRef) (t : TypeReference) (name : string) =
-        buildAlloca bldr (TypeUtil.ToLLVMType assemGen t) (name + "Alloca")
+        buildAlloca bldr (TypeUtil.LLVMVarTypeOf assemGen t) (name + "Alloca")
 
     let genLocal (bldr : BuilderRef) (l : VariableDefinition) =
-        genAlloca bldr l.VariableType (match l.Name with null -> "local" | n -> n)
+        genAlloca bldr l.VariableType (match l.Name with null | "" -> "local" | n -> n)
 
     let genParam (bldr : BuilderRef) (p : ParameterDefinition) =
-        genAlloca bldr p.ParameterType (match p.Name with null -> "param" | n -> n)
+        genAlloca bldr p.ParameterType (match p.Name with null | "" -> "param" | n -> n)
 
     let genMethodBody (methodVal : ValueRef) =
 
@@ -1125,8 +1171,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
             | name -> setValueName llvmParam name
 
         if methDef.HasBody then
-            let paramTys = [|for p in methDef.AllParameters -> TypeUtil.ToLLVMType assemGen p.ParameterType|]
-            let retTy = TypeUtil.ToLLVMType assemGen methDef.ReturnType
+            let paramTys = [|for p in methDef.AllParameters -> TypeUtil.LLVMVarTypeOf assemGen p.ParameterType|]
+            let retTy = TypeUtil.LLVMVarTypeOf assemGen methDef.ReturnType
             let funcTy = functionType retTy paramTys
             let fnName = if methDef.Name = "main" then "_main" else methDef.Name
             let fn = addFunction moduleRef fnName funcTy
@@ -1143,8 +1189,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
             if pInv.Module.Name <> "libc.dll" then
                 failwith "sorry! only works with libc for now. No dlopen etc."
 
-            let paramTys = [|for p in methDef.Parameters -> TypeUtil.ToLLVMType assemGen p.ParameterType|]
-            let retTy = TypeUtil.ToLLVMType assemGen methDef.ReturnType
+            let paramTys = [|for p in methDef.Parameters -> TypeUtil.LLVMVarTypeOf assemGen p.ParameterType|]
+            let retTy = TypeUtil.LLVMVarTypeOf assemGen methDef.ReturnType
             let funcTy = functionType retTy paramTys
             let fn = addFunction moduleRef pInv.EntryPoint funcTy
             setLinkage fn Linkage.ExternalLinkage
