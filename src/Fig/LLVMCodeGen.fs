@@ -11,6 +11,11 @@ open LLVM.Extra
 
 open System.Collections.Generic
 
+let nameOrDefault (name : string) (def : string) : string =
+    match name with
+    | null | "" -> def
+    | _ -> name
+
 let nullableAsOption (n : System.Nullable<'a>) =
     if n.HasValue then
         Some n.Value
@@ -1072,14 +1077,14 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
                     // about how this should really be structured
                     let elemTy = TypeUtil.LLVMVarTypeOf assemGen elemTypeRef
                     // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
-                    let newArr = buildArrayMalloc bldr elemTy numElems.Value "newArr"
+                    let newArr = buildArrayMalloc bldr elemTy numElems.Value ("new" + elemTypeRef.Name + "Arr")
 
                     // TODO I think we have to initialize the arrays
 
                     let basicArrTy = pointerType elemTy 0u
                     // FIXME array len should correspond to "native unsigned int" not int32
                     let arrObjTy = structType [|int32Type (); basicArrTy|] false
-                    let newArrObj = buildMalloc bldr arrObjTy "newArrObj"
+                    let newArrObj = buildMalloc bldr arrObjTy ("new" + elemTypeRef.Name + "ArrObj")
 
                     // fill in the array object
                     let lenAddr = buildStructGEP bldr newArrObj 0u "lenAddr"
@@ -1123,10 +1128,10 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
         buildAlloca bldr (TypeUtil.LLVMVarTypeOf assemGen t) (name + "Alloca")
 
     let genLocal (bldr : BuilderRef) (l : VariableDefinition) =
-        genAlloca bldr l.VariableType (match l.Name with null | "" -> "local" | n -> n)
+        genAlloca bldr l.VariableType (nameOrDefault l.Name "local")
 
     let genParam (bldr : BuilderRef) (p : ParameterDefinition) =
-        genAlloca bldr p.ParameterType (match p.Name with null | "" -> "param" | n -> n)
+        genAlloca bldr p.ParameterType (nameOrDefault p.Name "param")
 
     let genMethodBody (methodVal : ValueRef) =
 
@@ -1166,9 +1171,8 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
 
         let nameFunParam (fn : ValueRef) (i : int) (p : ParameterDefinition) =
             let llvmParam = getParam fn (uint32 i)
-            match p.Name with
-            | null -> setValueName llvmParam ("arg" + string i)
-            | name -> setValueName llvmParam name
+            let name = nameOrDefault p.Name ("arg" + string i)
+            setValueName llvmParam name
 
         if methDef.HasBody then
             let paramTys = [|for p in methDef.AllParameters -> TypeUtil.LLVMVarTypeOf assemGen p.ParameterType|]

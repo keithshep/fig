@@ -1,4 +1,4 @@
+mono-il-code/
 fig.suo
-CIL.dll
-LLVMFSharp.dll
 build/
+*.dll
