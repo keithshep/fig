@@ -60,7 +60,7 @@
     <Compile Include="src\Fig\LLVMCodeGen.fs">
       <Link>LLVMCodeGen.fs</Link>
     </Compile>
-    <Compile Include="test\CompileCIL.fs">
+    <Compile Include="src\Fig\CompileCIL.fs">
       <Link>CompileCIL.fs</Link>
     </Compile>
   </ItemGroup>

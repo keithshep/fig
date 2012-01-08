@@ -6,7 +6,6 @@ set -o nounset
 set -x
 
 ./build.bash
-fsc --nologo --debug --out:build/CompileCIL.exe -r Mono.Cecil.dll -r Mono.Cecil.Rocks.dll -r LLVMFSharp.dll -r build/fig.dll test/CompileCIL.fs
 
 # test out the our new CIL parsing module against some simple F# functions
 fsc --nologo --debug --optimize- --target:exe --out:build/SimpleMain.exe test/SimpleMain.fs
