@@ -51,6 +51,9 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="test\InternalCalls.fs">
+      <Link>InternalCalls.fs</Link>
+    </Compile>
     <Compile Include="test\SimpleFunctions.fs">
       <Link>SimpleFunctions.fs</Link>
     </Compile>

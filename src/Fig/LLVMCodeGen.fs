@@ -160,24 +160,45 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
     member x.Value = value
 
     member x.AsPointerTo (assemGen:AssemGen, tyRef:TypeReference) : ValueRef =
+        //let tyRef = tyRef.Resolve()
         let ty = toSaferType tyRef
 
         let noImpl () = failwithf "no implementation for creating a pointer to %A" ty
-        if not tyRef.IsPrimitive then
+        (*if not tyRef.IsPrimitive then
             // TODO how should we implement for non primitives
-            noImpl ()
+            noImpl ()*)
         let ptrTy = pointerType (TypeUtil.LLVMVarTypeOf assemGen tyRef) 0u
 
         // TODO is this really the way to do this? maybe the types should be normalized on construction
         match getTypeKind (typeOf x.Value) with
         | TypeKind.IntegerTypeKind ->
-            buildIntToPtr bldr x.Value ptrTy ""
+            buildIntToPtr bldr x.Value ptrTy "ptrFromInt"
         | TypeKind.PointerTypeKind ->
-            buildBitCast bldr x.Value ptrTy ""
+            buildBitCast bldr x.Value ptrTy "ptr"
+        | tk ->
+            failwithf "cannot convert type kind %A to pointer" tk
+
+    member x.AsInvokable(assemGen:AssemGen, tyRef:TypeReference) : ValueRef =
+        //let tyRef = tyRef.Resolve()
+        let ty = toSaferType tyRef
+
+        let noImpl () = failwith "no implementation for creating an invokable from %A" ty
+        if not tyRef.IsPrimitive then
+            // TODO how should we implement for non primitives
+            noImpl ()
+        let ptrTy = pointerType (TypeUtil.LLVMInvokableTypeOf assemGen tyRef) 0u
+
+        // TODO is this really the way to do this? maybe the types should be normalized on construction
+        match getTypeKind (typeOf x.Value) with
+        | TypeKind.IntegerTypeKind ->
+            buildIntToPtr bldr x.Value ptrTy "invokablePtrFromInt"
+        | TypeKind.PointerTypeKind ->
+            buildBitCast bldr x.Value ptrTy "invokablePtr"
         | tk ->
             failwithf "cannot convert type kind %A to pointer" tk
 
     member x.AsTypeReference (assemGen:AssemGen, tyRef:TypeReference) =
+        //let tyRef = tyRef.Resolve()
         let ty = toSaferType tyRef
 
         let noImpl () = failwithf "cannot convert as type reference %A" ty
@@ -252,6 +273,8 @@ type StackItem (bldr:BuilderRef, value:ValueRef, ty:StackType, tyRefOpt:TypeRefe
                 extFun bldr value (llvmIntTypeSized asSize) "extendedInt"
         | Float_ST ->
             buildFPToSI bldr value (llvmIntTypeSized asSize) "truncatedFP"
+        | ObjectRef_ST ->
+            buildPtrToInt bldr value (llvmIntTypeSized asSize) "ptrAsInt"
         | _ ->
             failwithf "TODO implement int conversion for %A" ty
 
@@ -371,6 +394,10 @@ and TypeUtil () =
         | Pinned _ ->
             noImpl ()
 
+    static member LLVMInvokableTypeOf (assemGen : AssemGen) (ty : TypeReference) =
+        let newableTy = TypeUtil.LLVMNewableTypeOf assemGen ty
+        pointerType newableTy 0u
+
 and AssemGen (modRef : ModuleRef, assem : AssemblyDefinition) as x =
     let classMap = new ClassMap(modRef, x)
 
@@ -469,7 +496,12 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
                 item.AsTypeReference(assemGen, methDef.AllParameters.[i].ParameterType)
             let args = newObj :: List.mapi stackItemToArg args
             buildCall bldr funRef (Array.ofList args) "" |> ignore
-            StackItem.StackItemFromAny(bldr, newObj, methDef.DeclaringType)
+            let ty =
+                if methDef.DeclaringType.IsValueType then
+                    new PointerType(methDef.DeclaringType) :> TypeReference
+                else
+                    methDef.DeclaringType :> TypeReference
+            StackItem.StackItemFromAny(bldr, newObj, ty)
 
     let rec genInstructions
             (bldr : BuilderRef)
@@ -729,8 +761,19 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
                 buildBr bldr blockMap.[bb.OffsetBytes] |> ignore
             | Jmp _ ->
                 noImpl ()
-            | Brfalse (_ifBB, _elseBB) | Brtrue (_ifBB, _elseBB) ->
-                noImpl ()
+            | Brfalse (zeroBB, nonZeroBB) | Brtrue (nonZeroBB, zeroBB) ->
+                match poppedStack with
+                | [value] ->
+                    // TODO would be more efficient to have custom test per size
+                    let valToTest = value.AsInt(false, PrimSizeBytes.Eight)
+                    let zero = constInt (int64Type()) 0uL false
+                    let isZero = buildICmp bldr IntPredicate.IntEQ valToTest zero "isZero"
+                    let nonZeroBlk = blockMap.[nonZeroBB.OffsetBytes]
+                    let zeroBlk = blockMap.[zeroBB.OffsetBytes]
+                    buildCondBr bldr isZero zeroBlk nonZeroBlk |> ignore
+                | _ ->
+                    failwithf "expected a single value to be popped from the stack for: %A" inst
+                    
             | Beq (ifBB, elseBB) | Bge (ifBB, elseBB) | Bgt (ifBB, elseBB)
             | Ble (ifBB, elseBB) | Blt (ifBB, elseBB) | BneUn (ifBB, elseBB)
             | BgeUn (ifBB, elseBB) | BgtUn (ifBB, elseBB) | BleUn (ifBB, elseBB)
@@ -868,7 +911,10 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
                     let fieldIndex = fieldIndex + decTy.NumInheritedInstanceFields
 
                     // OK now we need to load the field
-                    let fieldPtr = buildStructGEP bldr selfPtr.Value (uint32 fieldIndex) (fieldRef.Name + "Ptr")
+                    // TODO this doesn't seem to work. Figure out why
+                    //let selfPtrVal = selfPtr.AsPointerTo(assemGen, decTy)
+                    let selfPtrVal = selfPtr.Value
+                    let fieldPtr = buildStructGEP bldr selfPtrVal (uint32 fieldIndex) (fieldRef.Name + "Ptr")
                     let fieldValue = buildLoad bldr fieldPtr (fieldRef.Name + "Value")
                     let fieldStackItem = StackItem.StackItemFromAny(bldr, fieldValue, fieldRef.FieldType)
                     goNextStackItem fieldStackItem
@@ -935,7 +981,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
                         | Some md ->
                             let fieldID = 0uL
                             let fieldIDVal = constInt (llvmIntTypeSized nativeIntSize) fieldID false
-                            let fieldIDStackItem = StackItem(bldr, fieldIDVal, StackType.NativeInt_ST, None)
+                            let fieldIDStackItem = new StackItem(bldr, fieldIDVal, StackType.NativeInt_ST, None)
                             let objStackItem = makeNewObj bldr md [fieldIDStackItem]
                             goNextStackItem objStackItem
                         | None -> failwith "failed to find constructor for runtime field handle"
@@ -969,7 +1015,6 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
                 // TODO deal with unaligned
                 match poppedStack with
                 | [src; dest] ->
-                    printfn "dest type: %A" (dest :> StackTyped).StackType
                     if tyRef.IsPrimitive then
                         // TODO volatile?
                         let srcPrim = src.AsTypeReference(assemGen, tyRef)
@@ -1135,7 +1180,7 @@ and MethodRep (moduleRef : ModuleRef, methDef : MethodDefinition, assemGen : Ass
 
     let genMethodBody (methodVal : ValueRef) =
 
-        //printfn "Method: %s" md.FullName
+        //printfn "genMethodBody for: %s" methDef.FullName
 
         // create the entry block
         use bldr = new Builder(appendBasicBlock methodVal "entry")

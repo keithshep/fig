@@ -7,6 +7,12 @@ set -x
 
 ./build.bash
 
+fsc --nologo --debug --optimize- --target:library --out:build/InternalCalls.dll test/InternalCalls.fs
+monodis build/InternalCalls.dll > build/InternalCalls.il
+mono build/CompileCIL.exe build/InternalCalls.dll build/InternalCalls.bc
+llvm-dis build/InternalCalls.bc
+llc -march=x86-64 -filetype=obj build/InternalCalls.bc
+
 # test out the our new CIL parsing module against some simple F# functions
 fsc --nologo --debug --optimize- --target:exe --out:build/SimpleMain.exe test/SimpleMain.fs
 monodis build/SimpleMain.exe > build/SimpleMain.il
