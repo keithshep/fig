@@ -630,10 +630,24 @@ type DeclSecurityRow = {
     parentIndex : uint32
     permissionSetIndex : uint32}
 
+type EventMapRow = {
+    parentTypeDefIndex : uint32
+    eventStartIndex : uint32}
+
+type EventRow = {
+    eventFlags : uint16
+    name : string
+    eventTypeKind : MetadataTableKind
+    eventTypeIndex : uint32}
+
 type FieldRow = {
     fieldAttrFlags : uint16
     name : string
     signatureIndex : uint32}
+
+type FieldLayoutRow = {
+    offset : uint32
+    fieldIndex : uint32}
 
 type FieldMarshalRow = {
     parentKind : MetadataTableKind
@@ -766,7 +780,10 @@ type MetadataTables = {
     constants : ConstantRow array
     customAttributes : CustomAttributeRow array
     declSecurities : DeclSecurityRow array
+    eventMap : EventMapRow array
+    events : EventRow array
     fields : FieldRow array
+    fieldLayouts : FieldLayoutRow array
     fieldMarshals : FieldMarshalRow array
     fieldRVAs : FieldRVARow array
     genericParams : GenericParamRow array
@@ -860,11 +877,12 @@ let readMetadataTables
 
         let codedIndicesWide (cik : CodedIndexKind) =
             let maxCount =
-                Array.max
+                let allCounts =
                     [|for mt in possibleTableKinds cik do
                         match rowCounts.TryFind mt with
                         | None -> ()
                         | Some x -> yield x|]
+                if Array.isEmpty allCounts then 0u else Array.max allCounts
             let mask = 0xFFFF0000u ||| (0xFFFF0000u >>> codeBitCount cik)
             maxCount &&& mask <> 0u
 
@@ -887,7 +905,10 @@ let readMetadataTables
         let mutable constants = ([||] : ConstantRow array)
         let mutable customAttributes = ([||] : CustomAttributeRow array)
         let mutable declSecurities = ([||] : DeclSecurityRow array)
+        let mutable eventMap = ([||] : EventMapRow array)
+        let mutable events = ([||] : EventRow array)
         let mutable fields = ([||] : FieldRow array)
+        let mutable fieldLayouts = ([||] : FieldLayoutRow array)
         let mutable fieldMarshals = ([||] : FieldMarshalRow array)
         let mutable fieldRVAs = ([||] : FieldRVARow array)
         let mutable genericParams = ([||] : GenericParamRow array)
@@ -912,6 +933,7 @@ let readMetadataTables
         let mutable typeSpecs = ([||] : TypeSpecRow array)
 
         for kv in rowCounts do
+            printfn "MetadataTableKind=%A" kv.Key
             let rowCount = kv.Value
             let noImpl () = failwithf "no implementation for %A" kv.Key
             match kv.Key with
@@ -1053,8 +1075,39 @@ let readMetadataTables
                             parentKind = parentKind
                             parentIndex = parentIndex
                             permissionSetIndex = permissionSetIndex}|]
-            | MetadataTableKind.EventMapKind -> noImpl ()
-            | MetadataTableKind.EventKind -> noImpl ()
+            | MetadataTableKind.EventMapKind ->
+                eventMap <-
+                    [|for _ in 1u .. rowCount do
+                        let parentTypeDefIndex = readTableIndex MetadataTableKind.TypeDefKind
+                        let eventStartIndex = readTableIndex MetadataTableKind.EventKind
+
+                        printfn
+                            "EventMapKind: parent=%i, eventStart=%i"
+                            parentTypeDefIndex
+                            eventStartIndex
+
+                        yield {
+                            EventMapRow.parentTypeDefIndex = parentTypeDefIndex
+                            eventStartIndex = eventStartIndex}|]
+            | MetadataTableKind.EventKind ->
+                events <-
+                    [|for _ in 1u .. rowCount do
+                        let eventFlags = r.ReadUInt16()
+                        let name = readHeapString()
+                        let eventTypeKind, eventTypeIndex = readCodedIndex TypeDefOrRef
+
+                        printfn
+                            "EventKind: flags=0x%X, name=%s, eventType=(%A, %i)"
+                            eventFlags
+                            name
+                            eventTypeKind
+                            eventTypeIndex
+
+                        yield {
+                            EventRow.eventFlags = eventFlags
+                            name = name
+                            eventTypeKind = eventTypeKind
+                            eventTypeIndex = eventTypeIndex}|]
             | MetadataTableKind.ExportedTypeKind -> noImpl ()
             | MetadataTableKind.FieldKind ->
                 fields <-
@@ -1069,7 +1122,17 @@ let readMetadataTables
                             FieldRow.fieldAttrFlags = fieldAttrFlags
                             name = name
                             signatureIndex = signatureIndex}|]
-            | MetadataTableKind.FieldLayoutKind -> noImpl ()
+            | MetadataTableKind.FieldLayoutKind ->
+                fieldLayouts <-
+                    [|for _ in 1u .. rowCount do
+                        let offset = r.ReadUInt32()
+                        let fieldIndex = readTableIndex MetadataTableKind.FieldKind
+
+                        printfn "FieldLayout: offset=%i, fieldIndex=%i" offset fieldIndex
+
+                        yield {
+                            FieldLayoutRow.offset = offset
+                            fieldIndex = fieldIndex}|]
             | MetadataTableKind.FieldMarshalKind ->
                 fieldMarshals <-
                     [|for _ in 1u .. rowCount do
@@ -1408,8 +1471,11 @@ let readMetadataTables
             customAttributes = customAttributes
             declSecurities = declSecurities
             fields = fields
+            fieldLayouts = fieldLayouts
             fieldMarshals = fieldMarshals
             fieldRVAs = fieldRVAs
+            eventMap = eventMap
+            events = events
             genericParams = genericParams
             genericParamConstraints = genericParamConstraints
             implMaps = implMaps
