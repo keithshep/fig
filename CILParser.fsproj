@@ -42,6 +42,12 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="src\Fig\IOUtil.fs">
+      <Link>IOUtil.fs</Link>
+    </Compile>
+    <Compile Include="src\Fig\ParseCode.fs">
+      <Link>ParseCode.fs</Link>
+    </Compile>
     <Compile Include="src\Fig\AssemblyParser.fs">
       <Link>AssemblyParser.fs</Link>
     </Compile>

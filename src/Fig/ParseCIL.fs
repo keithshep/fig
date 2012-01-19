@@ -1,5 +1,6 @@
 open Fig.AbstractCode
 open Fig.AssemblyParser
+open Fig.IOUtil
 
 open System.IO
 

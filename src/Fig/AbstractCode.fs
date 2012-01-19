@@ -1,7 +1,9 @@
 module Fig.AbstractCode
 
-open Fig.AssemblyParser
 open System.IO
+
+open Fig.AssemblyParser
+open Fig.ParseCode
 
 type CodeType =
     | ILCodeType

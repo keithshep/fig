@@ -7,6 +7,8 @@ set -x
 
 mkdir -p build
 fsc --nologo --debug --warnon:1182 --out:build/ParseCIL.exe \
+    src/Fig/IOUtil.fs \
+    src/Fig/ParseCode.fs \
     src/Fig/AssemblyParser.fs \
     src/Fig/AbstractCode.fs \
     src/Fig/ParseCIL.fs
