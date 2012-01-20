@@ -23,7 +23,8 @@ type Parameter (r : BinaryReader, mt : MetadataTables, selfIndex : int) =
     let pRow = mt.paramRows.[selfIndex]
     do failwith "implement me!"
 
-type MethodDef (r : BinaryReader, secHdrs : SectionHeader list, mt : MetadataTables, selfIndex : int) =
+type MethodDef (r : BinaryReader, assem : Assembly, selfIndex : int) =
+    let mt = assem.MetadataTables
     let mdRow = mt.methodDefs.[selfIndex]
     let isFlagSet mask = mdRow.flags &&& mask <> 0us
     let isImplFlagSet mask = mdRow.implFlags &&& mask <> 0us
@@ -114,7 +115,7 @@ type MethodDef (r : BinaryReader, secHdrs : SectionHeader list, mt : MetadataTab
                 // c. RVA shall point into the CIL code stream in this file
                 // TODO check these conditions
 
-                r.BaseStream.Seek (rvaToDiskPos secHdrs mdRow.rva, SeekOrigin.Begin) |> ignore
+                r.BaseStream.Seek (assem.RVAToDiskPos mdRow.rva, SeekOrigin.Begin) |> ignore
 
                 let insts, excepts = readMethodBody r
                 Some (AbstractInstruction.toAbstInstBlocks insts, excepts)

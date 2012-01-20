@@ -10,16 +10,10 @@ let main args =
     | [|inFile|] ->
 
         use r = new PosStackBinaryReader(new FileStream(inFile, FileMode.Open))
-        let pe = readPEHeader r
-        let secHdrs = readSectionHeaders r pe
-        for hdr in secHdrs do
-            printfn "SECTION HEADER:"
-            printfn "%A" hdr
-        let cliHeader = readCLIHeader r secHdrs pe
-        let streamHeaders = readStreamHeaders r secHdrs cliHeader
-        let mt = readMetadataTables r secHdrs cliHeader streamHeaders
+        let assem = new Assembly(r)
+        let mt = assem.MetadataTables
         for i in 0 .. mt.methodDefs.Length - 1 do
-            let md = new MethodDef (r, secHdrs, mt, i)
+            let md = new MethodDef(r, assem, i)
             printfn ""
             printfn "METHOD BODY"
             match md.MethodBody with
