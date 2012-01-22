@@ -1,5 +1,5 @@
-open Fig.AbstractCode
 open Fig.AssemblyParser
+open Fig.Disassemble
 open Fig.IOUtil
 
 open System.IO
@@ -11,8 +11,15 @@ let main args =
 
         use r = new PosStackBinaryReader(new FileStream(inFile, FileMode.Open))
         let assem = new Assembly(r)
-        let mt = assem.MetadataTables
-        for i in 0 .. mt.methodDefs.Length - 1 do
+        disassemble System.Console.Out assem
+        (*let mt = assem.MetadataTables
+
+        printfn "assemref count %i" mt.assemblyRefs.Length
+        for ar in assem.AssemblyReferences do
+            printfn "IsPublicKeySet: %b" ar.IsPublicKeySet
+            printfn "PublicKeyOrToken: %A" ar.PublicKeyOrToken*)
+
+        (*for i in 0 .. mt.methodDefs.Length - 1 do
             let md = new MethodDef(r, assem, i)
             printfn ""
             printfn "METHOD BODY"
@@ -29,7 +36,7 @@ let main args =
                 if not (Array.isEmpty exceptionSecs) then
                     printfn "    EXCEPTION SECTION:"
                     for exSec in exceptionSecs do
-                        printfn "        %A" exSec
+                        printfn "        %A" exSec*)
 
     | _ -> failwith (sprintf "bad options %A" args)
 

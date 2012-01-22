@@ -51,8 +51,8 @@
     <Compile Include="src\Fig\AssemblyParser.fs">
       <Link>AssemblyParser.fs</Link>
     </Compile>
-    <Compile Include="src\Fig\AbstractCode.fs">
-      <Link>AbstractCode.fs</Link>
+    <Compile Include="src\Fig\Disassemble.fs">
+      <Link>Disassemble.fs</Link>
     </Compile>
     <Compile Include="src\Fig\ParseCIL.fs">
       <Link>ParseCIL.fs</Link>

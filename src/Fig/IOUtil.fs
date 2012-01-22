@@ -3,8 +3,20 @@ module Fig.IOUtil
 open System.IO
 open System.Text
 
-let warnf fmt = eprintfn fmt
-let failwithf fmt = Printf.ksprintf failwith fmt
+// an indented version of the fprintfn function
+let ifprintf (tr : TextWriter) (depth : uint32) fmt =
+    let printIndented (s : string) =
+        for _ in 1u .. depth do
+            tr.Write "    "
+        tr.Write s
+    Printf.ksprintf printIndented fmt
+
+let ifprintfn (tr : TextWriter) (depth : uint32) fmt =
+    let printIndented (s : string) =
+        for _ in 1u .. depth do
+            tr.Write "    "
+        tr.WriteLine s
+    Printf.ksprintf printIndented fmt
 
 // PosStackBinaryReader is a binary reader that allows you to push and pop the
 // file position which can be more convenient than explicit seeks
@@ -89,3 +101,117 @@ let readAlignedASCII (r : BinaryReader) (align : int) =
         let padding = align - overhang
         r.BaseStream.Seek (int64 padding, SeekOrigin.Current) |> ignore
     sb.ToString ()
+
+type [<RequireQualifiedAccess>] ElementType =
+    | End // 0x00 Marks end of a list
+    | Void // 0x01
+    | Boolean // 0x02
+    | Char // 0x03
+    | I1 // 0x04
+    | U1 // 0x05
+    | I2 // 0x06
+    | U2 // 0x07
+    | I4 // 0x08
+    | U4 // 0x09
+    | I8 // 0x0a
+    | U8 // 0x0b
+    | R4 // 0x0c
+    | R8 // 0x0d
+    | String // 0x0e
+    | Ptr // 0x0f  Followed by type
+    | ByRef // 0x10  Followed by type
+    | ValueType // 0x11  Followed by TypeDef or TypeRef token
+    | Class // 0x12  Followed by TypeDef or TypeRef token
+    | Var // 0x13  Generic parameter in a generic type definition, represented as number (compressed unsigned integer)
+    | Array // 0x14  type rank boundsCount bound1 … loCount lo1 …
+    | GenericInst // 0x15  Generic type instantiation.  Followed by type type-arg-count  type-1 ... type-n
+    | TypedByRef // 0x16
+    | I // 0x18  System.IntPtr
+    | U // 0x19  System.UIntPtr
+    | FnPtr // 0x1b  Followed by full method signature
+    | Object // 0x1c  System.Object
+    | SzArray // 0x1d  Single-dim array with 0 lower bound
+    | MVar // 0x1e  Generic parameter in a generic method definition, represented as number (compressed unsigned integer)
+    | CmodReqd // 0x1f  Required modifier : followed by a TypeDef or TypeRef token
+    | CmodOpt // 0x20  Optional modifier : followed by a TypeDef or TypeRef token
+    | Internal // 0x21  Implemented within the CLI
+    | Modifier // 0x40  Or’d with following element types
+    | Sentinel // 0x41  Sentinel for vararg method signature
+    | Pinned // 0x45  Denotes a local variable that points at a pinned object
+    | SysType // 0x50  Indicates an argument of type System.Type.
+    | Boxed // 0x51  Used in custom attributes to specify a boxed object (§23.3).
+    | Reserved // 0x52  Reserved
+    | Field // 0x53  Used in custom attributes to indicate a FIELD (§22.10, 23.3).
+    | Property // 0x54  Used in custom attributes to indicate a PROPERTY (§22.10, 23.3).
+    | Enum // 0x55  Used in custom attributes to specify an enum (§23.3).
+
+let readType (r : BinaryReader) =
+    match r.ReadByte() with
+    | 0x00uy -> ElementType.End
+    | 0x01uy -> ElementType.Void
+    | 0x02uy -> ElementType.Boolean
+    | 0x03uy -> ElementType.Char
+    | 0x04uy -> ElementType.I1
+    | 0x05uy -> ElementType.U1
+    | 0x06uy -> ElementType.I2
+    | 0x07uy -> ElementType.U2
+    | 0x08uy -> ElementType.I4
+    | 0x09uy -> ElementType.U4
+    | 0x0auy -> ElementType.I8
+    | 0x0buy -> ElementType.U8
+    | 0x0cuy -> ElementType.R4
+    | 0x0duy -> ElementType.R8
+    | 0x0euy -> ElementType.String
+    | 0x0fuy -> ElementType.Ptr
+    | 0x10uy -> ElementType.ByRef
+    | 0x11uy -> ElementType.ValueType
+    | 0x12uy -> ElementType.Class
+    | 0x13uy -> ElementType.Var
+    | 0x14uy -> ElementType.Array
+    | 0x15uy -> ElementType.GenericInst
+    | 0x16uy -> ElementType.TypedByRef
+    | 0x18uy -> ElementType.I
+    | 0x19uy -> ElementType.U
+    | 0x1buy -> ElementType.FnPtr
+    | 0x1cuy -> ElementType.Object
+    | 0x1duy -> ElementType.SzArray
+    | 0x1euy -> ElementType.MVar
+    | 0x1fuy -> ElementType.CmodReqd
+    | 0x20uy -> ElementType.CmodOpt
+    | 0x21uy -> ElementType.Internal
+    | 0x40uy -> ElementType.Modifier
+    | 0x41uy -> ElementType.Sentinel
+    | 0x45uy -> ElementType.Pinned
+    | 0x50uy -> ElementType.SysType
+    | 0x51uy -> ElementType.Boxed
+    | 0x52uy -> ElementType.Reserved
+    | 0x53uy -> ElementType.Field
+    | 0x54uy -> ElementType.Property
+    | 0x55uy -> ElementType.Enum
+    | tyCode -> failwithf "0x%X is not a valid type code" tyCode
+
+// defined in section 23.2: compressed integers are stored big-endian
+let readCompressedUnsignedInt (r : BinaryReader) =
+    let b1 = r.ReadByte () |> uint32
+    // If the value lies between 0 (0x00) and 127 (0x7F), inclusive, encode
+    // as a one-byte integer (bit 7 is clear, value held in bits 6 through 0)
+    if b1 &&& 0b10000000u = 0u then
+        // it's a 1 byte integer
+        b1
+    else
+        // If the value lies between 28 (0x80) and 214 – 1 (0x3FFF), inclusive,
+        // encode as a 2-byte integer with bit 15 set, bit 14 clear (value held
+        // in bits 13 through 0). Otherwise, encode as a 4-byte integer, with
+        // bit 31 set, bit 30 set, bit 29 clear (value held in bits 28 through 0)
+        let maskedB1 = b1 &&& 0b00111111u
+        let b2 = r.ReadByte () |> uint32
+        if b1 &&& 0b01000000u = 0u then
+            // it's a 2 byte integer
+            (maskedB1 <<< 8) ||| b2
+        else
+            // it's a 4 byte integer
+            if b1 &&& 0b00100000u <> 0u then
+                failwith "expected bit 29 to be clear for an compressed unisigned int"
+            let b3 = r.ReadByte () |> uint32
+            let b4 = r.ReadByte () |> uint32
+            (maskedB1 <<< 24) ||| (b2 <<< 16) ||| (b3 <<< 8) ||| b4

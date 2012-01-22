@@ -1,4 +1,5 @@
 mono-il-code/
-fig.suo
+*.suo
 build/
+build-bck/
 *.dll
