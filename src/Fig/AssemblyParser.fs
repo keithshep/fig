@@ -199,6 +199,21 @@ type EventRow = {
     eventTypeKind : MetadataTableKind
     eventTypeIndex : uint32}
 
+/// The rows in the ExportedType table are the result of the .class	extern directive
+type ExportedTypeRow = {
+    flags : uint32
+
+    /// This column is used as a hint only. If the entry in the target TypeDef table
+    /// matches the TypeName and TypeNamespace entries in this table, resolution has
+    /// succeeded. But if there is a mismatch, the CLI shall fall back to a search
+    /// of the target TypeDef table.
+    /// Ignored and should be zero if Flags has IsTypeForwarder set.
+    typeDefId : uint32
+    typeName : string
+    typeNamespace : string
+    implKind : MetadataTableKind
+    implIndex : uint32}
+
 type FieldRow = {
     fieldAttrFlags : uint16
     name : string
@@ -341,6 +356,7 @@ type MetadataTables = {
     declSecurities : DeclSecurityRow array
     eventMap : EventMapRow array
     events : EventRow array
+    exportedTypes : ExportedTypeRow array
     fields : FieldRow array
     fieldLayouts : FieldLayoutRow array
     fieldMarshals : FieldMarshalRow array
@@ -808,6 +824,7 @@ type Assembly(r : PosStackBinaryReader) =
         let mutable declSecurities = ([||] : DeclSecurityRow array)
         let mutable eventMap = ([||] : EventMapRow array)
         let mutable events = ([||] : EventRow array)
+        let mutable exportedTypes = ([||] : ExportedTypeRow array)
         let mutable fields = ([||] : FieldRow array)
         let mutable fieldLayouts = ([||] : FieldLayoutRow array)
         let mutable fieldMarshals = ([||] : FieldMarshalRow array)
@@ -1009,7 +1026,33 @@ type Assembly(r : PosStackBinaryReader) =
                             name = name
                             eventTypeKind = eventTypeKind
                             eventTypeIndex = eventTypeIndex}|]
-            | MetadataTableKind.ExportedTypeKind -> noImpl ()
+            | MetadataTableKind.ExportedTypeKind ->
+                exportedTypes <- [|
+                    for _ in 1u .. rowCount do
+                        let flags = r.ReadUInt32()
+                        let typeDefId = r.ReadUInt32()
+                        let typeName = readHeapString()
+                        let typeNamespace = readHeapString()
+                        let implKind, implIndex = readCodedIndex Implementation
+
+                        printfn
+                            "ExportedTypeKind: flags=0x%X, typeDefId=%i, typeName=%s, typeNamespace=%s, impl=(%A, %i)"
+                            flags
+                            typeDefId
+                            typeName
+                            typeNamespace
+                            implKind
+                            implIndex
+
+                        yield {
+                            ExportedTypeRow.flags = flags
+                            typeDefId = typeDefId
+                            typeName = typeName
+                            typeNamespace = typeNamespace
+                            implKind = implKind
+                            implIndex = implIndex
+                        }
+                |]
             | MetadataTableKind.FieldKind ->
                 fields <-
                     [|for _ in 1u .. rowCount do
@@ -1371,6 +1414,7 @@ type Assembly(r : PosStackBinaryReader) =
             constants = constants
             customAttributes = customAttributes
             declSecurities = declSecurities
+            exportedTypes = exportedTypes
             fields = fields
             fieldLayouts = fieldLayouts
             fieldMarshals = fieldMarshals
