@@ -1,4 +1,5 @@
 open Fig.AssemblyParser
+open Fig.AssemblyResolution
 open Fig.Disassemble
 open Fig.IOUtil
 
@@ -10,7 +11,7 @@ let main args =
     | [|inFile|] ->
 
         use r = new PosStackBinaryReader(new FileStream(inFile, FileMode.Open))
-        let assem = new Assembly(r)
+        let assem = new Assembly(r, new MonoAssemblyResolution([||]))
         disassemble System.Console.Out assem
         (*let mt = assem.MetadataTables
 

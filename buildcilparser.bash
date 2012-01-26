@@ -11,5 +11,6 @@ fsc --nologo --debug --warnon:1182 --out:build/ParseCIL.exe \
     src/Fig/ParseCode.fs \
     src/Fig/AssemblyParser.fs \
     src/Fig/Disassemble.fs \
+    src/Fig/AssemblyResolution.fs \
     src/Fig/ParseCIL.fs
 

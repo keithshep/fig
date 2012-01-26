@@ -30,7 +30,9 @@ let versionString (assemRef : AssemblyRef) =
 
 let genConstrToStr (genConstr : TypeDefOrRef) =
     // Partition II 10.1.7 Generic parameters (GenPars)
-    "TODO"
+
+    // TODO I know this is wrong
+    genConstr.FullName
 
 let genParToStr (genPar : GenericParam) =
     // Partition II 10.1.7 Generic parameters (GenPars)
@@ -48,7 +50,7 @@ let genParToStr (genPar : GenericParam) =
 
         let genConstrs = Array.ofSeq genPar.Constraints
         if not <| Array.isEmpty genConstrs then
-            yield "(" + (commaSepStrs <| Array.map genConstrToStr genConstrs) + ")"
+            yield "(" + commaSepStrs (Array.map genConstrToStr genConstrs) + ")"
 
         yield genPar.Name
     |]
@@ -114,8 +116,20 @@ let disTypeDef (tr : TextWriter) (indent : uint32) (td : TypeDef) =
         yield td.Name
 
         // base type
+        match td.Extends with
+        | None -> ()
+        | Some ty ->
+            yield "extends"
+
+            // TODO need to add something along the lines of "[assembly name]" to this
+            yield ty.FullName
 
         // an optional list of interfaces
+        let imps = td.Implements
+        if not (Array.isEmpty imps) then
+            yield "implements"
+            // TODO need to add something along the lines of "[assembly name]" to this
+            yield commaSepStrs [|for imp in imps -> imp.FullName|]
     |]
 
     ifprintfn tr indent "%s" (spaceSepStrs classHeaderStrs)

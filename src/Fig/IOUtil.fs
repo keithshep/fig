@@ -144,51 +144,50 @@ type [<RequireQualifiedAccess>] ElementType =
     | Field // 0x53  Used in custom attributes to indicate a FIELD (§22.10, 23.3).
     | Property // 0x54  Used in custom attributes to indicate a PROPERTY (§22.10, 23.3).
     | Enum // 0x55  Used in custom attributes to specify an enum (§23.3).
-
-let readType (r : BinaryReader) =
-    match r.ReadByte() with
-    | 0x00uy -> ElementType.End
-    | 0x01uy -> ElementType.Void
-    | 0x02uy -> ElementType.Boolean
-    | 0x03uy -> ElementType.Char
-    | 0x04uy -> ElementType.I1
-    | 0x05uy -> ElementType.U1
-    | 0x06uy -> ElementType.I2
-    | 0x07uy -> ElementType.U2
-    | 0x08uy -> ElementType.I4
-    | 0x09uy -> ElementType.U4
-    | 0x0auy -> ElementType.I8
-    | 0x0buy -> ElementType.U8
-    | 0x0cuy -> ElementType.R4
-    | 0x0duy -> ElementType.R8
-    | 0x0euy -> ElementType.String
-    | 0x0fuy -> ElementType.Ptr
-    | 0x10uy -> ElementType.ByRef
-    | 0x11uy -> ElementType.ValueType
-    | 0x12uy -> ElementType.Class
-    | 0x13uy -> ElementType.Var
-    | 0x14uy -> ElementType.Array
-    | 0x15uy -> ElementType.GenericInst
-    | 0x16uy -> ElementType.TypedByRef
-    | 0x18uy -> ElementType.I
-    | 0x19uy -> ElementType.U
-    | 0x1buy -> ElementType.FnPtr
-    | 0x1cuy -> ElementType.Object
-    | 0x1duy -> ElementType.SzArray
-    | 0x1euy -> ElementType.MVar
-    | 0x1fuy -> ElementType.CmodReqd
-    | 0x20uy -> ElementType.CmodOpt
-    | 0x21uy -> ElementType.Internal
-    | 0x40uy -> ElementType.Modifier
-    | 0x41uy -> ElementType.Sentinel
-    | 0x45uy -> ElementType.Pinned
-    | 0x50uy -> ElementType.SysType
-    | 0x51uy -> ElementType.Boxed
-    | 0x52uy -> ElementType.Reserved
-    | 0x53uy -> ElementType.Field
-    | 0x54uy -> ElementType.Property
-    | 0x55uy -> ElementType.Enum
-    | tyCode -> failwithf "0x%X is not a valid type code" tyCode
+    with
+        static member FromByte = function
+            | 0x00uy -> ElementType.End
+            | 0x01uy -> ElementType.Void
+            | 0x02uy -> ElementType.Boolean
+            | 0x03uy -> ElementType.Char
+            | 0x04uy -> ElementType.I1
+            | 0x05uy -> ElementType.U1
+            | 0x06uy -> ElementType.I2
+            | 0x07uy -> ElementType.U2
+            | 0x08uy -> ElementType.I4
+            | 0x09uy -> ElementType.U4
+            | 0x0auy -> ElementType.I8
+            | 0x0buy -> ElementType.U8
+            | 0x0cuy -> ElementType.R4
+            | 0x0duy -> ElementType.R8
+            | 0x0euy -> ElementType.String
+            | 0x0fuy -> ElementType.Ptr
+            | 0x10uy -> ElementType.ByRef
+            | 0x11uy -> ElementType.ValueType
+            | 0x12uy -> ElementType.Class
+            | 0x13uy -> ElementType.Var
+            | 0x14uy -> ElementType.Array
+            | 0x15uy -> ElementType.GenericInst
+            | 0x16uy -> ElementType.TypedByRef
+            | 0x18uy -> ElementType.I
+            | 0x19uy -> ElementType.U
+            | 0x1buy -> ElementType.FnPtr
+            | 0x1cuy -> ElementType.Object
+            | 0x1duy -> ElementType.SzArray
+            | 0x1euy -> ElementType.MVar
+            | 0x1fuy -> ElementType.CmodReqd
+            | 0x20uy -> ElementType.CmodOpt
+            | 0x21uy -> ElementType.Internal
+            | 0x40uy -> ElementType.Modifier
+            | 0x41uy -> ElementType.Sentinel
+            | 0x45uy -> ElementType.Pinned
+            | 0x50uy -> ElementType.SysType
+            | 0x51uy -> ElementType.Boxed
+            | 0x52uy -> ElementType.Reserved
+            | 0x53uy -> ElementType.Field
+            | 0x54uy -> ElementType.Property
+            | 0x55uy -> ElementType.Enum
+            | tyCode -> failwithf "0x%X is not a valid type code" tyCode
 
 // defined in section 23.2: compressed integers are stored big-endian
 let readCompressedUnsignedInt (r : BinaryReader) =

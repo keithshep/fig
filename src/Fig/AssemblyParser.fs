@@ -68,7 +68,7 @@ type CLIHeader = {
     vTableFixupsRVA : uint32
     vTableFixupsSize : uint32}
 
-type CodedIndexKind =
+type [<RequireQualifiedAccess>] CodedIndexKind =
     | TypeDefOrRef
     | HasConstant
     | HasCustomAttribute
@@ -382,8 +382,11 @@ type MetadataTables = {
     typeRefs : TypeRefRow array
     typeSpecs : TypeSpecRow array}
 
-type Assembly(r : PosStackBinaryReader) =
+type IAssemblyResolution =
+    abstract ResolveAssembly : AssemblyRef -> Assembly
 
+and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
+    
     // see EMCA-335 25.2.1
     let readMSDOSHeader () : uint32 =
         let prePEOffsetBytes =
@@ -939,7 +942,7 @@ type Assembly(r : PosStackBinaryReader) =
                     [|for _ in 1u .. rowCount do
                         let typeVal = r.ReadByte ()
                         readByteEq r 0x00uy "constant type padding"
-                        let parentKind, parentIndex = readCodedIndex HasConstant
+                        let parentKind, parentIndex = readCodedIndex CodedIndexKind.HasConstant
                         let valueIndex = readBlobHeapIndex ()
 
                         printfn "ConstantKind: type=0x0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
@@ -952,12 +955,12 @@ type Assembly(r : PosStackBinaryReader) =
             | MetadataTableKind.CustomAttributeKind ->
                 customAttributes <-
                     [|for _ in 1u .. rowCount do
-                        let parentKind, parentIndex = readCodedIndex HasCustomAttribute
+                        let parentKind, parentIndex = readCodedIndex CodedIndexKind.HasCustomAttribute
                         // The column called Type is slightly misleading
                         // it actually indexes a constructor method
                         // the owner of that constructor method is
                         // the Type of the Custom Attribute.
-                        let typeKind, typeIndex = readCodedIndex CustomAttributeType
+                        let typeKind, typeIndex = readCodedIndex CodedIndexKind.CustomAttributeType
                         let valueIndex = readBlobHeapIndex ()
 
                         printfn
@@ -978,7 +981,7 @@ type Assembly(r : PosStackBinaryReader) =
                 declSecurities <-
                     [|for _ in 1u .. rowCount do
                         let action = r.ReadUInt16 ()
-                        let parentKind, parentIndex = readCodedIndex HasDeclSecurity
+                        let parentKind, parentIndex = readCodedIndex CodedIndexKind.HasDeclSecurity
                         let permissionSetIndex = readBlobHeapIndex ()
 
                         printfn
@@ -1012,7 +1015,7 @@ type Assembly(r : PosStackBinaryReader) =
                     [|for _ in 1u .. rowCount do
                         let eventFlags = r.ReadUInt16()
                         let name = readHeapString()
-                        let eventTypeKind, eventTypeIndex = readCodedIndex TypeDefOrRef
+                        let eventTypeKind, eventTypeIndex = readCodedIndex CodedIndexKind.TypeDefOrRef
 
                         printfn
                             "EventKind: flags=0x%X, name=%s, eventType=(%A, %i)"
@@ -1033,7 +1036,7 @@ type Assembly(r : PosStackBinaryReader) =
                         let typeDefId = r.ReadUInt32()
                         let typeName = readHeapString()
                         let typeNamespace = readHeapString()
-                        let implKind, implIndex = readCodedIndex Implementation
+                        let implKind, implIndex = readCodedIndex CodedIndexKind.Implementation
 
                         printfn
                             "ExportedTypeKind: flags=0x%X, typeDefId=%i, typeName=%s, typeNamespace=%s, impl=(%A, %i)"
@@ -1080,7 +1083,7 @@ type Assembly(r : PosStackBinaryReader) =
             | MetadataTableKind.FieldMarshalKind ->
                 fieldMarshals <-
                     [|for _ in 1u .. rowCount do
-                        let parentKind, parentIndex = readCodedIndex HasFieldMarshall
+                        let parentKind, parentIndex = readCodedIndex CodedIndexKind.HasFieldMarshall
                         let nativeTypeIndex = readBlobHeapIndex ()
 
                         printfn "FieldMarshalKind: parent=(%A, %i), nativeType=%i" parentKind parentIndex nativeTypeIndex
@@ -1106,7 +1109,7 @@ type Assembly(r : PosStackBinaryReader) =
                     [|for _ in 1u .. rowCount do
                         let number = r.ReadUInt16 ()
                         let flags = r.ReadUInt16 ()
-                        let ownerKind, ownerIndex = readCodedIndex TypeOrMethodDef
+                        let ownerKind, ownerIndex = readCodedIndex CodedIndexKind.TypeOrMethodDef
                         let name = readHeapString ()
 
                         printfn
@@ -1127,7 +1130,7 @@ type Assembly(r : PosStackBinaryReader) =
                 genericParamConstraints <-
                     [|for _ in 1u .. rowCount do
                         let ownerIndex = readTableIndex MetadataTableKind.GenericParamKind
-                        let constraintKind, constraintIndex = readCodedIndex TypeDefOrRef
+                        let constraintKind, constraintIndex = readCodedIndex CodedIndexKind.TypeDefOrRef
 
                         printfn
                             "GenericParamConstraintKind: owner=%i, constraint=(%A, %i)"
@@ -1144,7 +1147,7 @@ type Assembly(r : PosStackBinaryReader) =
                     [|for _ in 1u .. rowCount do
                         let mappingFlags = r.ReadUInt16 ()
                         //it only ever indexes the MethodDef table, since Field export is not supported
-                        let memberForwardedKind, memberForwardedIndex = readCodedIndex MemberForwarded
+                        let memberForwardedKind, memberForwardedIndex = readCodedIndex CodedIndexKind.MemberForwarded
                         let importName = readHeapString ()
                         let importScopeIndex = readTableIndex MetadataTableKind.ModuleRefKind
 
@@ -1165,7 +1168,7 @@ type Assembly(r : PosStackBinaryReader) =
                 interfaceImpls <-
                     [|for _ in 1u .. rowCount do
                         let classIndex = readTableIndex MetadataTableKind.TypeDefKind
-                        let ifaceKind, ifaceIndex = readCodedIndex TypeDefOrRef
+                        let ifaceKind, ifaceIndex = readCodedIndex CodedIndexKind.TypeDefOrRef
 
                         printfn "InterfaceImplKind: class=%i, interface=(%A, %i)" classIndex ifaceKind ifaceIndex
 
@@ -1179,7 +1182,7 @@ type Assembly(r : PosStackBinaryReader) =
                         let offset = r.ReadUInt32 ()
                         let flags = r.ReadUInt32 ()
                         let name = readHeapString ()
-                        let implKind, implIndex = readCodedIndex Implementation
+                        let implKind, implIndex = readCodedIndex CodedIndexKind.Implementation
 
                         printfn "ManifestResourceKind: name=\"%s\", impl=(%A, %i)" name implKind implIndex
 
@@ -1192,7 +1195,7 @@ type Assembly(r : PosStackBinaryReader) =
             | MetadataTableKind.MemberRefKind ->
                 memberRefs <-
                     [|for _ in 1u .. rowCount do
-                        let classKind, classIndex = readCodedIndex MemberRefParent
+                        let classKind, classIndex = readCodedIndex CodedIndexKind.MemberRefParent
                         let name = readHeapString ()
                         let signatureIndex = readBlobHeapIndex ()
                         
@@ -1226,8 +1229,8 @@ type Assembly(r : PosStackBinaryReader) =
                 methodImpls <-
                     [|for _ in 1u .. rowCount do
                         let classIndex = readTableIndex MetadataTableKind.TypeDefKind
-                        let methodBodyKind, methodBodyIndex = readCodedIndex MethodDefOrRef
-                        let methodDecKind, methodDecIndex = readCodedIndex MethodDefOrRef
+                        let methodBodyKind, methodBodyIndex = readCodedIndex CodedIndexKind.MethodDefOrRef
+                        let methodDecKind, methodDecIndex = readCodedIndex CodedIndexKind.MethodDefOrRef
 
                         printfn
                             "MethodImplKind: class=%i, body=(%A, %i), declaration=(%A, %i)"
@@ -1248,7 +1251,7 @@ type Assembly(r : PosStackBinaryReader) =
                     [|for _ in 1u .. rowCount do
                         let semanticsFlags = r.ReadUInt16 ()
                         let methodIndex = readTableIndex MetadataTableKind.MethodDefKind
-                        let assocKind, assocIndex = readCodedIndex HasSemantics
+                        let assocKind, assocIndex = readCodedIndex CodedIndexKind.HasSemantics
 
                         printfn
                             "MethodSemanticsKind: semantics=0x%X, methodIndex=%i, assoc=(%A, %i)"
@@ -1265,7 +1268,7 @@ type Assembly(r : PosStackBinaryReader) =
             | MetadataTableKind.MethodSpecKind ->
                 methodSpecs <-
                     [|for _ in 1u .. rowCount do
-                        let methodKind, methodIndex = readCodedIndex MethodDefOrRef
+                        let methodKind, methodIndex = readCodedIndex CodedIndexKind.MethodDefOrRef
                         let instIndex = readBlobHeapIndex ()
 
                         printfn "MethodSpecKind: method=(%A, %i), instantiation=%i" methodKind methodIndex instIndex
@@ -1365,7 +1368,7 @@ type Assembly(r : PosStackBinaryReader) =
                         let flags = r.ReadUInt32 ()
                         let typeName = readHeapString ()
                         let typeNamespace = readHeapString ()
-                        let extendsKind, extendsIndex = readCodedIndex TypeDefOrRef
+                        let extendsKind, extendsIndex = readCodedIndex CodedIndexKind.TypeDefOrRef
                         let fieldsIndex = readTableIndex MetadataTableKind.FieldKind
                         let methodsIndex = readTableIndex MetadataTableKind.MethodDefKind
 
@@ -1382,7 +1385,7 @@ type Assembly(r : PosStackBinaryReader) =
             | MetadataTableKind.TypeRefKind ->
                 typeRefs <-
                     [|for _ in 1u .. rowCount do
-                        let resolutionScopeKind, resolutionScopeIndex = readCodedIndex ResolutionScope
+                        let resolutionScopeKind, resolutionScopeIndex = readCodedIndex CodedIndexKind.ResolutionScope
                         let typeName = readHeapString ()
                         let typeNamespace = readHeapString ()
 
@@ -1442,6 +1445,10 @@ type Assembly(r : PosStackBinaryReader) =
             typeRefs = typeRefs
             typeSpecs = typeSpecs
         }
+
+    interface IAssemblyResolution with
+        member x.ResolveAssembly(assemRef : AssemblyRef) =
+            assemRes.ResolveAssembly assemRef
     
     member x.SectionHeaders = sectionHeaders
     member x.MetadataTables = metadataTables
@@ -1460,19 +1467,19 @@ type Assembly(r : PosStackBinaryReader) =
         let numBytes = readCompressedUnsignedInt r
         r.ReadBytes(int numBytes)
 
-    member x.AssemblyRefs =
-        seq {
-            for i in 0 .. x.MetadataTables.assemblyRefs.Length - 1 do
-                yield new AssemblyRef(x, i)
-        }
+    member x.AssemblyRefs = seq {
+        for i in 0 .. x.MetadataTables.assemblyRefs.Length - 1 do
+            yield new AssemblyRef(x, i)
+    }
 
-    member x.TypeDefs =
-        seq {
-            for i in 0 .. x.MetadataTables.typeDefs.Length - 1 do
-                yield new TypeDef(x, i)
-        }
+    member x.TypeDefs = seq {
+        for i in 0 .. x.MetadataTables.typeDefs.Length - 1 do
+            yield new TypeDef(x, i)
+    }
 
     member x.Name = x.AsssemblyRow.name
+
+    member x.AssemblyResolution = assemRes
 
 and AssemblyRef(assem : Assembly, selfIndex : int) =
     let mt = assem.MetadataTables
@@ -1490,6 +1497,11 @@ and AssemblyRef(assem : Assembly, selfIndex : int) =
     member x.MinorVersion = assemRefRow.minorVersion
     member x.RevisionNumber = assemRefRow.revisionNumber
     member x.BuildNumber = assemRefRow.buildNumber
+    member x.Version =
+        string x.MajorVersion + "." +
+        string x.MinorVersion + "." +
+        string x.RevisionNumber + "." +
+        string x.BuildNumber
 
     member x.IsPublicKeySet = isFlagSet 0x0001u
 
@@ -1517,36 +1529,77 @@ and [<RequireQualifiedAccess>] TypeVisibilityAttr =
 and [<RequireQualifiedAccess>] ClassLayoutAttr = Auto | Sequential | Explicit
 and [<RequireQualifiedAccess>] StringFmtAttr = Ansi | Unicode | Auto | Custom
 
-and TypeDefOrRef =
+and [<AbstractClass>] TypeDefOrRef() =
     abstract Namespace : string
     abstract Name : string
+    abstract Resolve : unit -> TypeDef
+
+    member x.FullName =
+        match x.Namespace with
+        | null | "" -> x.Name
+        | ns        -> ns + "." + x.Name
+
+    static member FromKindAndIndex(assem : Assembly, mt : MetadataTableKind, rowIndex : int) : TypeDefOrRef =
+        match mt with
+        | MetadataTableKind.TypeDefKind -> upcast new TypeDef(assem, rowIndex)
+        | MetadataTableKind.TypeRefKind -> upcast new TypeRef(assem, rowIndex)
+        | MetadataTableKind.TypeSpecKind -> upcast new TypeSpec(assem, rowIndex)
+        | _ -> failwithf "cannot create a TypeDefOrRef from a %A" mt
+
+    static member FromKindAndIndexOpt(assem : Assembly, mt : MetadataTableKind, rowIndex : int) : TypeDefOrRef option =
+        // TODO assert that object class gives None for Inherits
+        if rowIndex = 0 then
+            None
+        else
+            Some(TypeDefOrRef.FromKindAndIndex(assem, mt, rowIndex))
 
 and TypeSpec(assem : Assembly, selfIndex : int) =
-    interface TypeDefOrRef with
-        member x.Namespace = failwith "TODO implement me!!"
-        member x.Name = failwith "TODO implement me!!"
+    inherit TypeDefOrRef()
+
+    let mt = assem.MetadataTables
+    let typeSpecRow = mt.typeSpecs.[selfIndex]
+
+    let q =
+        let blob = assem.ReadBlobAtIndex typeSpecRow.sigIndex
+        ()
+
+    override x.Namespace = failwith "TODO implement me!!"
+    override x.Name = failwith "TODO implement me!!"
+    override x.Resolve() = failwith "TODO implement me!!"
 
 and TypeRef(assem : Assembly, selfIndex : int) =
+    inherit TypeDefOrRef()
+
     let mt = assem.MetadataTables
     let typeRefRow = mt.typeRefs.[selfIndex]
 
-    interface TypeDefOrRef with
-        member x.Namespace = typeRefRow.typeNamespace
-        member x.Name = typeRefRow.typeName
-    member x.Namespace = (x :> TypeDefOrRef).Namespace
-    member x.Name = (x :> TypeDefOrRef).Name
+    override x.Namespace = typeRefRow.typeNamespace
+    override x.Name = typeRefRow.typeName
+    override x.Resolve() =
+        let assemRes = assem.AssemblyResolution
+        match typeRefRow.resolutionScopeKind with
+        | MetadataTableKind.ModuleKind ->
+            failwith "impl ref"
+        | MetadataTableKind.ModuleRefKind ->
+            failwith "impl mod ref"
+        | MetadataTableKind.AssemblyRefKind ->
+            failwith "impl assem ref"
+        | MetadataTableKind.TypeRefKind ->
+            failwith "impl type ref"
+        | rsk ->
+            failwith "unexpected resolution scope table kind %A" rsk
 
 and TypeDef(assem : Assembly, selfIndex : int) =
+    inherit TypeDefOrRef()
+
     let mt = assem.MetadataTables
     let typeDefRow = mt.typeDefs.[selfIndex]
     
     let isFlagSet mask = typeDefRow.flags &&& mask <> 0u
 
-    interface TypeDefOrRef with
-        member x.Namespace = typeDefRow.typeNamespace
-        member x.Name = typeDefRow.typeName
-    member x.Namespace = (x :> TypeDefOrRef).Namespace
-    member x.Name = (x :> TypeDefOrRef).Name
+    override x.Namespace = typeDefRow.typeNamespace
+    override x.Name = typeDefRow.typeName
+    override x.Resolve() = x
 
     member x.TypeVisibilityAttr =
         let visibilityMask = 0x00000007u
@@ -1600,6 +1653,15 @@ and TypeDef(assem : Assembly, selfIndex : int) =
             if isMatch then
                 yield new GenericParam(assem, i)
     }
+
+    member x.Extends =
+        TypeDefOrRef.FromKindAndIndexOpt(assem, typeDefRow.extendsKind, int typeDefRow.extendsIndex)
+
+    member x.Implements = [|
+        for iImpl in mt.interfaceImpls do
+            if int iImpl.classIndex = selfIndex then
+                yield TypeDefOrRef.FromKindAndIndex(assem, iImpl.ifaceKind, int iImpl.ifaceIndex)
+    |]
 
 and [<RequireQualifiedAccess>] GenericParamVariance = None | Covariant | Contravariant
 
