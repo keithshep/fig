@@ -1464,7 +1464,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
         r.BaseStream.Seek (diskPos, SeekOrigin.Begin) |> ignore
     member x.ReadBlobAtIndex (blobIndex : uint32) =
         x.SeekToBlobIndex blobIndex
-        let numBytes = readCompressedUnsignedInt r
+        let numBytes = readCompressedUnsignedInt r.ReadByte
         r.ReadBytes(int numBytes)
 
     member x.AssemblyRefs = seq {
@@ -1529,6 +1529,94 @@ and [<RequireQualifiedAccess>] TypeVisibilityAttr =
 and [<RequireQualifiedAccess>] ClassLayoutAttr = Auto | Sequential | Explicit
 and [<RequireQualifiedAccess>] StringFmtAttr = Ansi | Unicode | Auto | Custom
 
+and [<RequireQualifiedAccess>] CustomModBlob =
+    | CmodOpt of TypeDefOrRef
+    | CmodReqd of TypeDefOrRef
+    with
+        static member FromBlob (assem : Assembly) (blob : byte list ref) =
+            match listRead blob with
+            | None -> failwith "unexpected end of blob while reading custom mod"
+            | Some b ->
+                match ElementType.FromByte b with
+                | ElementType.CmodOpt -> CmodOpt (TypeDefOrRef.FromBlob assem blob)
+                | ElementType.CmodReqd -> CmodReqd (TypeDefOrRef.FromBlob assem blob)
+                | et -> failwithf "unexpected element type while reading custom mod: %A" et
+
+and [<RequireQualifiedAccess>] TypeBlob =
+    | TODO
+    with
+        static member FromBlob (blob : byte list ref) =
+            TODO
+
+and [<RequireQualifiedAccess>] MethodDefOrRefSigBlob =
+    | TODO
+    with
+        static member FromBlob (blob : byte list ref) =
+            TODO
+
+and ArrayShape = {rank : uint32; sizes : uint32 array; loBounds : int array}
+with
+    static member FromBlob (blob : byte list ref) =
+        let readByte = makeReadByteFun blob
+        let rank = readCompressedUnsignedInt readByte
+        let numSizes = readCompressedUnsignedInt readByte
+        let sizes = [|
+            for _ in 1u .. numSizes do
+                yield readCompressedUnsignedInt readByte
+        |]
+        let numLoBounds = readCompressedUnsignedInt readByte
+        let loBounds = [|
+            for _ in 1u .. numSizes do
+                yield readCompressedInt readByte
+        |]
+
+        {ArrayShape.rank = rank; sizes = sizes; loBounds = loBounds}
+
+and [<RequireQualifiedAccess>] TypeSpecBlob =
+    | Ptr of List<CustomModBlob> * Option<TypeBlob>
+    | FnPtr of MethodDefOrRefSigBlob
+    | Array of TypeBlob * ArrayShape
+    | SzArray of List<CustomModBlob> * TypeBlob
+    // GenericInst bool isClass with false indicating valuetype
+    | GenericInst of bool * TypeDefOrRef * uint32 * List<TypeBlob>
+    with
+        static member FromBlob (assem : Assembly) (blob : byte list ref) =
+            match listRead blob with
+            | None ->  failwith "cannot parse a type spec from an empty blob"
+            | Some b ->
+                let unexpEnd() = failwith "unexpected end of type"
+                let custModList() = ElementType.UntilEnd (CustomModBlob.FromBlob assem) blob
+
+                match ElementType.FromByte b with
+                | ElementType.Ptr ->
+                    match listPeek blob with
+                    | None -> unexpEnd()
+                    | Some(ElTy ElementType.Void) ->
+                        listSkip blob
+                        Ptr(custModList(), None)
+                    | _ ->
+                        Ptr(custModList(), Some(TypeBlob.FromBlob blob))
+
+                | ElementType.FnPtr -> FnPtr(MethodDefOrRefSigBlob.FromBlob blob)
+                | ElementType.Array -> Array(TypeBlob.FromBlob blob, ArrayShape.FromBlob blob)
+                | ElementType.SzArray -> SzArray(custModList(), TypeBlob.FromBlob blob)
+                | ElementType.GenericInst ->
+                    match listRead blob with
+                    | None -> unexpEnd()
+                    | Some b ->
+                        let isClass =
+                            match ElementType.FromByte b with
+                            | ElementType.Class -> true
+                            | ElementType.ValueType -> false
+                            | et ->
+                                failwithf "unexpected element type while reading generic instruction blob: %A" et
+                        let tyDefRefSpecBlob = TypeDefOrRef.FromBlob assem blob
+                        let genArgCount = readCompressedUnsignedInt (makeReadByteFun blob)
+                        let tys = ElementType.UntilEnd TypeBlob.FromBlob blob
+                        GenericInst(isClass, tyDefRefSpecBlob, genArgCount, tys)
+                | et ->
+                    failwithf "the following element type is not valid for a type spec: %A" et
+
 and [<AbstractClass>] TypeDefOrRef() =
     abstract Namespace : string
     abstract Name : string
@@ -1539,19 +1627,31 @@ and [<AbstractClass>] TypeDefOrRef() =
         | null | "" -> x.Name
         | ns        -> ns + "." + x.Name
 
-    static member FromKindAndIndex(assem : Assembly, mt : MetadataTableKind, rowIndex : int) : TypeDefOrRef =
+    static member FromKindAndIndex(assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefOrRef =
         match mt with
         | MetadataTableKind.TypeDefKind -> upcast new TypeDef(assem, rowIndex)
         | MetadataTableKind.TypeRefKind -> upcast new TypeRef(assem, rowIndex)
         | MetadataTableKind.TypeSpecKind -> upcast new TypeSpec(assem, rowIndex)
         | _ -> failwithf "cannot create a TypeDefOrRef from a %A" mt
 
-    static member FromKindAndIndexOpt(assem : Assembly, mt : MetadataTableKind, rowIndex : int) : TypeDefOrRef option =
+    static member FromKindAndIndexOpt (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefOrRef option =
         // TODO assert that object class gives None for Inherits
         if rowIndex = 0 then
             None
         else
-            Some(TypeDefOrRef.FromKindAndIndex(assem, mt, rowIndex))
+            Some(TypeDefOrRef.FromKindAndIndex assem mt rowIndex)
+
+    static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeDefOrRef =
+        // see partition II 23.2.8 TypeDefOrRefOrSpecEncoded
+        let encoding = readCompressedUnsignedInt (makeReadByteFun blob)
+        let rowIndex = int (encoding >>> 2)
+        let tableKind =
+            match encoding &&& 0b11u with
+            | 0u -> MetadataTableKind.TypeDefKind
+            | 1u -> MetadataTableKind.TypeRefKind
+            | 2u -> MetadataTableKind.TypeSpecKind
+            | _ -> failwith "this is impossible"
+        TypeDefOrRef.FromKindAndIndex assem tableKind rowIndex
 
 and TypeSpec(assem : Assembly, selfIndex : int) =
     inherit TypeDefOrRef()
@@ -1655,12 +1755,12 @@ and TypeDef(assem : Assembly, selfIndex : int) =
     }
 
     member x.Extends =
-        TypeDefOrRef.FromKindAndIndexOpt(assem, typeDefRow.extendsKind, int typeDefRow.extendsIndex)
+        TypeDefOrRef.FromKindAndIndexOpt assem typeDefRow.extendsKind (int typeDefRow.extendsIndex)
 
     member x.Implements = [|
         for iImpl in mt.interfaceImpls do
             if int iImpl.classIndex = selfIndex then
-                yield TypeDefOrRef.FromKindAndIndex(assem, iImpl.ifaceKind, int iImpl.ifaceIndex)
+                yield TypeDefOrRef.FromKindAndIndex assem iImpl.ifaceKind (int iImpl.ifaceIndex)
     |]
 
 and [<RequireQualifiedAccess>] GenericParamVariance = None | Covariant | Contravariant

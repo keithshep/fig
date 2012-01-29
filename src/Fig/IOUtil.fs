@@ -18,6 +18,22 @@ let ifprintfn (tr : TextWriter) (depth : uint32) fmt =
         tr.WriteLine s
     Printf.ksprintf printIndented fmt
 
+// TODO make sure all of these list functions are actually used in the final versions
+let listRead (xs : 'a list ref) : 'a option =
+    match !xs with
+    | [] -> None
+    | x :: xt ->
+        xs := xt
+        Some x
+let listPeek (xs : 'a list ref) : 'a option =
+    match !xs with
+    | [] -> None
+    | x :: _ -> Some x
+let listSkip (xs : 'a list ref) : unit =
+    match !xs with
+    | [] -> failwith "cannot skip an empty list"
+    | _ :: xt -> xs := xt
+
 // PosStackBinaryReader is a binary reader that allows you to push and pop the
 // file position which can be more convenient than explicit seeks
 type PosStackBinaryReader(stream : Stream) =
@@ -189,9 +205,27 @@ type [<RequireQualifiedAccess>] ElementType =
             | 0x55uy -> ElementType.Enum
             | tyCode -> failwithf "0x%X is not a valid type code" tyCode
 
+        static member UntilEnd (f : byte list ref -> 'a) (bytes : byte list ref) : 'a list =
+            // TODO pretty inefficient
+            match !bytes with
+            | [] -> failwith "unexpected end of blob in UntilEnd"
+            | fstByte :: _ ->
+                match ElementType.FromByte fstByte with
+                | ElementType.End -> []
+                | _ ->
+                    let currVal = f bytes
+                    currVal :: ElementType.UntilEnd f bytes
+
+let (|ElTy|) (b : byte) = ElementType.FromByte b
+
 // defined in section 23.2: compressed integers are stored big-endian
-let readCompressedUnsignedInt (r : BinaryReader) =
-    let b1 = r.ReadByte () |> uint32
+let makeReadByteFun (xs : byte list ref) : unit -> byte =
+    fun () ->
+        match listRead xs with
+        | None -> failwith "unexpected end of byte list"
+        | Some b -> b
+let readCompressedUnsignedInt (readByte : unit -> byte) : uint32 =
+    let b1 = readByte() |> uint32
     // If the value lies between 0 (0x00) and 127 (0x7F), inclusive, encode
     // as a one-byte integer (bit 7 is clear, value held in bits 6 through 0)
     if b1 &&& 0b10000000u = 0u then
@@ -203,7 +237,7 @@ let readCompressedUnsignedInt (r : BinaryReader) =
         // in bits 13 through 0). Otherwise, encode as a 4-byte integer, with
         // bit 31 set, bit 30 set, bit 29 clear (value held in bits 28 through 0)
         let maskedB1 = b1 &&& 0b00111111u
-        let b2 = r.ReadByte () |> uint32
+        let b2 = readByte() |> uint32
         if b1 &&& 0b01000000u = 0u then
             // it's a 2 byte integer
             (maskedB1 <<< 8) ||| b2
@@ -211,6 +245,13 @@ let readCompressedUnsignedInt (r : BinaryReader) =
             // it's a 4 byte integer
             if b1 &&& 0b00100000u <> 0u then
                 failwith "expected bit 29 to be clear for an compressed unisigned int"
-            let b3 = r.ReadByte () |> uint32
-            let b4 = r.ReadByte () |> uint32
+            let b3 = readByte() |> uint32
+            let b4 = readByte() |> uint32
             (maskedB1 <<< 24) ||| (b2 <<< 16) ||| (b3 <<< 8) ||| b4
+let readCompressedInt (readByte : unit -> byte) : int =
+    let x = int (readCompressedUnsignedInt readByte >>> 1)
+    if   x &&& 1 = 0    then x
+    elif x < 0x40       then x - 0x40
+    elif x < 0x2000     then x - 0x2000
+    elif x < 0x10000000 then x - 0x10000000
+    else                     x - 0x20000000
