@@ -66,7 +66,7 @@ let toMetadataToken (mtBytes : uint32) =
 
 let readMetadataToken (r : BinaryReader) = toMetadataToken (r.ReadUInt32 ())
 
-type Instruction =
+type [<RequireQualifiedAccess>] RawInst =
     | Add
     | And
     | Beq of int
@@ -295,214 +295,214 @@ let readInsts (r : BinaryReader) (codeSize : uint32) =
             (unalignedPrefix : byte option)
             (volatilePrefix : bool) =
         match readByte () with
-        | 0x00uy -> Nop
-        | 0x01uy -> Break
-        | 0x02uy -> Ldarg 0us
-        | 0x03uy -> Ldarg 1us
-        | 0x04uy -> Ldarg 2us
-        | 0x05uy -> Ldarg 3us
-        | 0x06uy -> Ldloc 0us
-        | 0x07uy -> Ldloc 1us
-        | 0x08uy -> Ldloc 2us
-        | 0x09uy -> Ldloc 3us
-        | 0x0Auy -> Stloc 0us
-        | 0x0Buy -> Stloc 1us
-        | 0x0Cuy -> Stloc 2us
-        | 0x0Duy -> Stloc 3us
-        | 0x0Euy -> Ldarg (readByte () |> uint16)
-        | 0x0Fuy -> Ldarga (readByte () |> uint16)
-        | 0x10uy -> Starg (readByte () |> uint16)
-        | 0x11uy -> Ldloc (readByte () |> uint16)
-        | 0x12uy -> Ldloca (readByte () |> uint16)
-        | 0x13uy -> Stloc (readByte () |> uint16)
-        | 0x14uy -> Ldnull
-        | 0x15uy -> LdcI4 -1
-        | 0x16uy -> LdcI4 0
-        | 0x17uy -> LdcI4 1
-        | 0x18uy -> LdcI4 2
-        | 0x19uy -> LdcI4 3
-        | 0x1Auy -> LdcI4 4
-        | 0x1Buy -> LdcI4 5
-        | 0x1Cuy -> LdcI4 6
-        | 0x1Duy -> LdcI4 7
-        | 0x1Euy -> LdcI4 8
-        | 0x1Fuy -> LdcI4 (readSByte () |> int) // TODO will this do the right thing for -1y
-        | 0x20uy -> LdcI4 (readInt32 ())
-        | 0x21uy -> LdcI8 (readInt64 ())
-        | 0x22uy -> LdcR4 (readSingle ())
-        | 0x23uy -> LdcR8 (readDouble ())
-        | 0x25uy -> Dup
-        | 0x26uy -> Pop
-        | 0x27uy -> Jmp (readMetaTok ())
-        | 0x28uy -> Call (tailPrefix, readMetaTok ())
-        | 0x29uy -> Calli (tailPrefix, readMetaTok ())
-        | 0x2Auy -> Ret
-        | 0x2Buy -> Br (readSByte () |> int)
-        | 0x2Cuy -> Brfalse (readSByte () |> int)
-        | 0x2Duy -> Brtrue (readSByte () |> int)
-        | 0x2Euy -> Beq (readSByte () |> int)
-        | 0x2Fuy -> Bge (readSByte () |> int)
-        | 0x30uy -> Bgt (readSByte () |> int)
-        | 0x31uy -> Ble (readSByte () |> int)
-        | 0x32uy -> Blt (readSByte () |> int)
-        | 0x33uy -> BneUn (readSByte () |> int)
-        | 0x34uy -> BgeUn (readSByte () |> int)
-        | 0x35uy -> BgtUn (readSByte () |> int)
-        | 0x36uy -> BleUn (readSByte () |> int)
-        | 0x37uy -> BltUn (readSByte () |> int)
-        | 0x38uy -> Br (readInt32 ())
-        | 0x39uy -> Brfalse (readInt32 ())
-        | 0x3Auy -> Brtrue (readInt32 ())
-        | 0x3Buy -> Beq (readInt32 ())
-        | 0x3Cuy -> Bge (readInt32 ())
-        | 0x3Duy -> Bgt (readInt32 ())
-        | 0x3Euy -> Ble (readInt32 ())
-        | 0x3Fuy -> Blt (readInt32 ())
-        | 0x40uy -> BneUn (readInt32 ())
-        | 0x41uy -> BgeUn (readInt32 ())
-        | 0x42uy -> BgtUn (readInt32 ())
-        | 0x43uy -> BleUn (readInt32 ())
-        | 0x44uy -> BltUn (readInt32 ())
-        | 0x45uy -> Switch [|for _ in 1u .. readUInt32 () -> readInt32 ()|]
-        | 0x47uy -> LdindU1 unalignedPrefix
-        | 0x48uy -> LdindI2 unalignedPrefix
-        | 0x49uy -> LdindU2 unalignedPrefix
-        | 0x4Auy -> LdindI4 unalignedPrefix
-        | 0x4Buy -> LdindU4 unalignedPrefix
-        | 0x4Cuy -> LdindI8 unalignedPrefix
-        | 0x4Duy -> LdindI unalignedPrefix
-        | 0x4Euy -> LdindR4 unalignedPrefix
-        | 0x4Fuy -> LdindR8 unalignedPrefix
-        | 0x50uy -> LdindRef unalignedPrefix
-        | 0x51uy -> StindRef unalignedPrefix
-        | 0x52uy -> StindI1 unalignedPrefix
-        | 0x53uy -> StindI2 unalignedPrefix
-        | 0x54uy -> StindI4 unalignedPrefix
-        | 0x55uy -> StindI8 unalignedPrefix
-        | 0x56uy -> StindR4 unalignedPrefix
-        | 0x57uy -> StindR8 unalignedPrefix
-        | 0x58uy -> Add
-        | 0x59uy -> Sub
-        | 0x5Auy -> Mul
-        | 0x5Buy -> Div
-        | 0x5Cuy -> DivUn
-        | 0x5Duy -> Rem
-        | 0x5Euy -> RemUn
-        | 0x5Fuy -> And
-        | 0x60uy -> Or
-        | 0x61uy -> Xor
-        | 0x62uy -> Shl
-        | 0x63uy -> Shr
-        | 0x64uy -> ShrUn
-        | 0x65uy -> Neg
-        | 0x66uy -> Not
-        | 0x67uy -> ConvI1
-        | 0x68uy -> ConvI2
-        | 0x69uy -> ConvI4
-        | 0x6Auy -> ConvI8
-        | 0x6Buy -> ConvR4
-        | 0x6Cuy -> ConvR8
-        | 0x6Duy -> ConvU4
-        | 0x6Euy -> ConvU8
-        | 0x6Fuy -> Callvirt (constrainedPrefix, tailPrefix, readMetaTok ())
-        | 0x70uy -> Cpobj (readMetaTok ())
-        | 0x71uy -> Ldobj (unalignedPrefix, readMetaTok ())
-        | 0x72uy -> Ldstr (readMetaTok ())
-        | 0x73uy -> Newobj (readMetaTok ())
-        | 0x74uy -> Castclass (readMetaTok ())
-        | 0x75uy -> Isinst (readMetaTok ())
-        | 0x76uy -> ConvRUn
-        | 0x79uy -> Unbox (readMetaTok ())
-        | 0x7Auy -> Throw
-        | 0x7Buy -> Ldfld (unalignedPrefix, readMetaTok ())
-        | 0x7Cuy -> Ldflda (unalignedPrefix, readMetaTok ())
-        | 0x7Duy -> Stfld (unalignedPrefix, readMetaTok ())
-        | 0x7Euy -> Ldsfld (readMetaTok ())
-        | 0x7Fuy -> Ldsflda (readMetaTok ())
-        | 0x80uy -> Stsfld (readMetaTok ())
-        | 0x81uy -> Stobj (unalignedPrefix, readMetaTok ())
-        | 0x82uy -> ConvOvfI1Un
-        | 0x83uy -> ConvOvfI2Un
-        | 0x84uy -> ConvOvfI4Un
-        | 0x85uy -> ConvOvfI8Un
-        | 0x86uy -> ConvOvfU1Un
-        | 0x87uy -> ConvOvfU2Un
-        | 0x88uy -> ConvOvfU4Un
-        | 0x89uy -> ConvOvfU8Un
-        | 0x8Auy -> ConvOvfIUn
-        | 0x8Buy -> ConvOvfUUn
-        | 0x8Cuy -> Box (readMetaTok ())
-        | 0x8Duy -> Newarr (readMetaTok ())
-        | 0x8Euy -> Ldlen
-        | 0x8Fuy -> Ldelema (readMetaTok ())
-        | 0x90uy -> LdelemI1
-        | 0x91uy -> LdelemU1
-        | 0x92uy -> LdelemI2
-        | 0x93uy -> LdelemU2
-        | 0x94uy -> LdelemI4
-        | 0x95uy -> LdelemU4
-        | 0x96uy -> LdelemI8
-        | 0x97uy -> LdelemI
-        | 0x98uy -> LdelemR4
-        | 0x99uy -> LdelemR8
-        | 0x9Auy -> LdelemRef
-        | 0x9Buy -> StelemI
-        | 0x9Cuy -> StelemI1
-        | 0x9Duy -> StelemI2
-        | 0x9Euy -> StelemI4
-        | 0x9Fuy -> StelemI8
-        | 0xA0uy -> StelemR4
-        | 0xA1uy -> StelemR8
-        | 0xA2uy -> StelemRef
-        | 0xA3uy -> Ldelem (readMetaTok ())
-        | 0xA4uy -> Stelem (readMetaTok ())
-        | 0xA5uy -> UnboxAny (readMetaTok ())
-        | 0xB3uy -> ConvOvfI1
-        | 0xB4uy -> ConvOvfU1
-        | 0xB5uy -> ConvOvfI2
-        | 0xB6uy -> ConvOvfU2
-        | 0xB7uy -> ConvOvfI4
-        | 0xB8uy -> ConvOvfU4
-        | 0xB9uy -> ConvOvfI8
-        | 0xBAuy -> ConvOvfU8
-        | 0xC2uy -> Refanyval (readMetaTok ())
-        | 0xC3uy -> Ckfinite
-        | 0xC6uy -> Mkrefany (readMetaTok ())
-        | 0xD0uy -> Ldtoken (readMetaTok ())
-        | 0xD1uy -> ConvU2
-        | 0xD2uy -> ConvU1
-        | 0xD3uy -> ConvI
-        | 0xD4uy -> ConvOvfI
-        | 0xD5uy -> ConvOvfU
-        | 0xD6uy -> AddOvf
-        | 0xD7uy -> AddOvfUn
-        | 0xD8uy -> MulOvf
-        | 0xD9uy -> MulOvfUn
-        | 0xDAuy -> SubOvf
-        | 0xDBuy -> SubOvfUn
-        | 0xDCuy -> Endfinally
-        | 0xDDuy -> Leave (readInt32 ())
-        | 0xDEuy -> Leave (readSByte () |> int)
-        | 0xDFuy -> StindI unalignedPrefix
-        | 0xE0uy -> ConvU
+        | 0x00uy -> RawInst.Nop
+        | 0x01uy -> RawInst.Break
+        | 0x02uy -> RawInst.Ldarg 0us
+        | 0x03uy -> RawInst.Ldarg 1us
+        | 0x04uy -> RawInst.Ldarg 2us
+        | 0x05uy -> RawInst.Ldarg 3us
+        | 0x06uy -> RawInst.Ldloc 0us
+        | 0x07uy -> RawInst.Ldloc 1us
+        | 0x08uy -> RawInst.Ldloc 2us
+        | 0x09uy -> RawInst.Ldloc 3us
+        | 0x0Auy -> RawInst.Stloc 0us
+        | 0x0Buy -> RawInst.Stloc 1us
+        | 0x0Cuy -> RawInst.Stloc 2us
+        | 0x0Duy -> RawInst.Stloc 3us
+        | 0x0Euy -> RawInst.Ldarg (readByte () |> uint16)
+        | 0x0Fuy -> RawInst.Ldarga (readByte () |> uint16)
+        | 0x10uy -> RawInst.Starg (readByte () |> uint16)
+        | 0x11uy -> RawInst.Ldloc (readByte () |> uint16)
+        | 0x12uy -> RawInst.Ldloca (readByte () |> uint16)
+        | 0x13uy -> RawInst.Stloc (readByte () |> uint16)
+        | 0x14uy -> RawInst.Ldnull
+        | 0x15uy -> RawInst.LdcI4 -1
+        | 0x16uy -> RawInst.LdcI4 0
+        | 0x17uy -> RawInst.LdcI4 1
+        | 0x18uy -> RawInst.LdcI4 2
+        | 0x19uy -> RawInst.LdcI4 3
+        | 0x1Auy -> RawInst.LdcI4 4
+        | 0x1Buy -> RawInst.LdcI4 5
+        | 0x1Cuy -> RawInst.LdcI4 6
+        | 0x1Duy -> RawInst.LdcI4 7
+        | 0x1Euy -> RawInst.LdcI4 8
+        | 0x1Fuy -> RawInst.LdcI4 (readSByte () |> int) // TODO will this do the right thing for -1y
+        | 0x20uy -> RawInst.LdcI4 (readInt32 ())
+        | 0x21uy -> RawInst.LdcI8 (readInt64 ())
+        | 0x22uy -> RawInst.LdcR4 (readSingle ())
+        | 0x23uy -> RawInst.LdcR8 (readDouble ())
+        | 0x25uy -> RawInst.Dup
+        | 0x26uy -> RawInst.Pop
+        | 0x27uy -> RawInst.Jmp (readMetaTok ())
+        | 0x28uy -> RawInst.Call (tailPrefix, readMetaTok ())
+        | 0x29uy -> RawInst.Calli (tailPrefix, readMetaTok ())
+        | 0x2Auy -> RawInst.Ret
+        | 0x2Buy -> RawInst.Br (readSByte () |> int)
+        | 0x2Cuy -> RawInst.Brfalse (readSByte () |> int)
+        | 0x2Duy -> RawInst.Brtrue (readSByte () |> int)
+        | 0x2Euy -> RawInst.Beq (readSByte () |> int)
+        | 0x2Fuy -> RawInst.Bge (readSByte () |> int)
+        | 0x30uy -> RawInst.Bgt (readSByte () |> int)
+        | 0x31uy -> RawInst.Ble (readSByte () |> int)
+        | 0x32uy -> RawInst.Blt (readSByte () |> int)
+        | 0x33uy -> RawInst.BneUn (readSByte () |> int)
+        | 0x34uy -> RawInst.BgeUn (readSByte () |> int)
+        | 0x35uy -> RawInst.BgtUn (readSByte () |> int)
+        | 0x36uy -> RawInst.BleUn (readSByte () |> int)
+        | 0x37uy -> RawInst.BltUn (readSByte () |> int)
+        | 0x38uy -> RawInst.Br (readInt32 ())
+        | 0x39uy -> RawInst.Brfalse (readInt32 ())
+        | 0x3Auy -> RawInst.Brtrue (readInt32 ())
+        | 0x3Buy -> RawInst.Beq (readInt32 ())
+        | 0x3Cuy -> RawInst.Bge (readInt32 ())
+        | 0x3Duy -> RawInst.Bgt (readInt32 ())
+        | 0x3Euy -> RawInst.Ble (readInt32 ())
+        | 0x3Fuy -> RawInst.Blt (readInt32 ())
+        | 0x40uy -> RawInst.BneUn (readInt32 ())
+        | 0x41uy -> RawInst.BgeUn (readInt32 ())
+        | 0x42uy -> RawInst.BgtUn (readInt32 ())
+        | 0x43uy -> RawInst.BleUn (readInt32 ())
+        | 0x44uy -> RawInst.BltUn (readInt32 ())
+        | 0x45uy -> RawInst.Switch [|for _ in 1u .. readUInt32 () -> readInt32 ()|]
+        | 0x47uy -> RawInst.LdindU1 unalignedPrefix
+        | 0x48uy -> RawInst.LdindI2 unalignedPrefix
+        | 0x49uy -> RawInst.LdindU2 unalignedPrefix
+        | 0x4Auy -> RawInst.LdindI4 unalignedPrefix
+        | 0x4Buy -> RawInst.LdindU4 unalignedPrefix
+        | 0x4Cuy -> RawInst.LdindI8 unalignedPrefix
+        | 0x4Duy -> RawInst.LdindI unalignedPrefix
+        | 0x4Euy -> RawInst.LdindR4 unalignedPrefix
+        | 0x4Fuy -> RawInst.LdindR8 unalignedPrefix
+        | 0x50uy -> RawInst.LdindRef unalignedPrefix
+        | 0x51uy -> RawInst.StindRef unalignedPrefix
+        | 0x52uy -> RawInst.StindI1 unalignedPrefix
+        | 0x53uy -> RawInst.StindI2 unalignedPrefix
+        | 0x54uy -> RawInst.StindI4 unalignedPrefix
+        | 0x55uy -> RawInst.StindI8 unalignedPrefix
+        | 0x56uy -> RawInst.StindR4 unalignedPrefix
+        | 0x57uy -> RawInst.StindR8 unalignedPrefix
+        | 0x58uy -> RawInst.Add
+        | 0x59uy -> RawInst.Sub
+        | 0x5Auy -> RawInst.Mul
+        | 0x5Buy -> RawInst.Div
+        | 0x5Cuy -> RawInst.DivUn
+        | 0x5Duy -> RawInst.Rem
+        | 0x5Euy -> RawInst.RemUn
+        | 0x5Fuy -> RawInst.And
+        | 0x60uy -> RawInst.Or
+        | 0x61uy -> RawInst.Xor
+        | 0x62uy -> RawInst.Shl
+        | 0x63uy -> RawInst.Shr
+        | 0x64uy -> RawInst.ShrUn
+        | 0x65uy -> RawInst.Neg
+        | 0x66uy -> RawInst.Not
+        | 0x67uy -> RawInst.ConvI1
+        | 0x68uy -> RawInst.ConvI2
+        | 0x69uy -> RawInst.ConvI4
+        | 0x6Auy -> RawInst.ConvI8
+        | 0x6Buy -> RawInst.ConvR4
+        | 0x6Cuy -> RawInst.ConvR8
+        | 0x6Duy -> RawInst.ConvU4
+        | 0x6Euy -> RawInst.ConvU8
+        | 0x6Fuy -> RawInst.Callvirt (constrainedPrefix, tailPrefix, readMetaTok ())
+        | 0x70uy -> RawInst.Cpobj (readMetaTok ())
+        | 0x71uy -> RawInst.Ldobj (unalignedPrefix, readMetaTok ())
+        | 0x72uy -> RawInst.Ldstr (readMetaTok ())
+        | 0x73uy -> RawInst.Newobj (readMetaTok ())
+        | 0x74uy -> RawInst.Castclass (readMetaTok ())
+        | 0x75uy -> RawInst.Isinst (readMetaTok ())
+        | 0x76uy -> RawInst.ConvRUn
+        | 0x79uy -> RawInst.Unbox (readMetaTok ())
+        | 0x7Auy -> RawInst.Throw
+        | 0x7Buy -> RawInst.Ldfld (unalignedPrefix, readMetaTok ())
+        | 0x7Cuy -> RawInst.Ldflda (unalignedPrefix, readMetaTok ())
+        | 0x7Duy -> RawInst.Stfld (unalignedPrefix, readMetaTok ())
+        | 0x7Euy -> RawInst.Ldsfld (readMetaTok ())
+        | 0x7Fuy -> RawInst.Ldsflda (readMetaTok ())
+        | 0x80uy -> RawInst.Stsfld (readMetaTok ())
+        | 0x81uy -> RawInst.Stobj (unalignedPrefix, readMetaTok ())
+        | 0x82uy -> RawInst.ConvOvfI1Un
+        | 0x83uy -> RawInst.ConvOvfI2Un
+        | 0x84uy -> RawInst.ConvOvfI4Un
+        | 0x85uy -> RawInst.ConvOvfI8Un
+        | 0x86uy -> RawInst.ConvOvfU1Un
+        | 0x87uy -> RawInst.ConvOvfU2Un
+        | 0x88uy -> RawInst.ConvOvfU4Un
+        | 0x89uy -> RawInst.ConvOvfU8Un
+        | 0x8Auy -> RawInst.ConvOvfIUn
+        | 0x8Buy -> RawInst.ConvOvfUUn
+        | 0x8Cuy -> RawInst.Box (readMetaTok ())
+        | 0x8Duy -> RawInst.Newarr (readMetaTok ())
+        | 0x8Euy -> RawInst.Ldlen
+        | 0x8Fuy -> RawInst.Ldelema (readMetaTok ())
+        | 0x90uy -> RawInst.LdelemI1
+        | 0x91uy -> RawInst.LdelemU1
+        | 0x92uy -> RawInst.LdelemI2
+        | 0x93uy -> RawInst.LdelemU2
+        | 0x94uy -> RawInst.LdelemI4
+        | 0x95uy -> RawInst.LdelemU4
+        | 0x96uy -> RawInst.LdelemI8
+        | 0x97uy -> RawInst.LdelemI
+        | 0x98uy -> RawInst.LdelemR4
+        | 0x99uy -> RawInst.LdelemR8
+        | 0x9Auy -> RawInst.LdelemRef
+        | 0x9Buy -> RawInst.StelemI
+        | 0x9Cuy -> RawInst.StelemI1
+        | 0x9Duy -> RawInst.StelemI2
+        | 0x9Euy -> RawInst.StelemI4
+        | 0x9Fuy -> RawInst.StelemI8
+        | 0xA0uy -> RawInst.StelemR4
+        | 0xA1uy -> RawInst.StelemR8
+        | 0xA2uy -> RawInst.StelemRef
+        | 0xA3uy -> RawInst.Ldelem (readMetaTok ())
+        | 0xA4uy -> RawInst.Stelem (readMetaTok ())
+        | 0xA5uy -> RawInst.UnboxAny (readMetaTok ())
+        | 0xB3uy -> RawInst.ConvOvfI1
+        | 0xB4uy -> RawInst.ConvOvfU1
+        | 0xB5uy -> RawInst.ConvOvfI2
+        | 0xB6uy -> RawInst.ConvOvfU2
+        | 0xB7uy -> RawInst.ConvOvfI4
+        | 0xB8uy -> RawInst.ConvOvfU4
+        | 0xB9uy -> RawInst.ConvOvfI8
+        | 0xBAuy -> RawInst.ConvOvfU8
+        | 0xC2uy -> RawInst.Refanyval (readMetaTok ())
+        | 0xC3uy -> RawInst.Ckfinite
+        | 0xC6uy -> RawInst.Mkrefany (readMetaTok ())
+        | 0xD0uy -> RawInst.Ldtoken (readMetaTok ())
+        | 0xD1uy -> RawInst.ConvU2
+        | 0xD2uy -> RawInst.ConvU1
+        | 0xD3uy -> RawInst.ConvI
+        | 0xD4uy -> RawInst.ConvOvfI
+        | 0xD5uy -> RawInst.ConvOvfU
+        | 0xD6uy -> RawInst.AddOvf
+        | 0xD7uy -> RawInst.AddOvfUn
+        | 0xD8uy -> RawInst.MulOvf
+        | 0xD9uy -> RawInst.MulOvfUn
+        | 0xDAuy -> RawInst.SubOvf
+        | 0xDBuy -> RawInst.SubOvfUn
+        | 0xDCuy -> RawInst.Endfinally
+        | 0xDDuy -> RawInst.Leave (readInt32 ())
+        | 0xDEuy -> RawInst.Leave (readSByte () |> int)
+        | 0xDFuy -> RawInst.StindI unalignedPrefix
+        | 0xE0uy -> RawInst.ConvU
         | 0xFEuy ->
             match readByte () with
-            | 0x00uy -> Arglist
-            | 0x01uy -> Ceq
-            | 0x02uy -> Cgt
-            | 0x03uy -> CgtUn
-            | 0x04uy -> Clt
-            | 0x05uy -> CltUn
-            | 0x06uy -> Ldftn (readMetaTok ())
-            | 0x07uy -> Ldvirtftn (readMetaTok ())
-            | 0x09uy -> Ldarg (readUInt16 ())
-            | 0x0Auy -> Ldarga (readUInt16 ())
-            | 0x0Buy -> Starg (readUInt16 ())
-            | 0x0Cuy -> Ldloc (readUInt16 ())
-            | 0x0Duy -> Ldloca (readUInt16 ())
-            | 0x0Euy -> Stloc (readUInt16 ())
-            | 0x0Fuy -> Localloc
-            | 0x11uy -> Endfilter
+            | 0x00uy -> RawInst.Arglist
+            | 0x01uy -> RawInst.Ceq
+            | 0x02uy -> RawInst.Cgt
+            | 0x03uy -> RawInst.CgtUn
+            | 0x04uy -> RawInst.Clt
+            | 0x05uy -> RawInst.CltUn
+            | 0x06uy -> RawInst.Ldftn (readMetaTok ())
+            | 0x07uy -> RawInst.Ldvirtftn (readMetaTok ())
+            | 0x09uy -> RawInst.Ldarg (readUInt16 ())
+            | 0x0Auy -> RawInst.Ldarga (readUInt16 ())
+            | 0x0Buy -> RawInst.Starg (readUInt16 ())
+            | 0x0Cuy -> RawInst.Ldloc (readUInt16 ())
+            | 0x0Duy -> RawInst.Ldloca (readUInt16 ())
+            | 0x0Euy -> RawInst.Stloc (readUInt16 ())
+            | 0x0Fuy -> RawInst.Localloc
+            | 0x11uy -> RawInst.Endfilter
             | 0x12uy ->
                 match unalignedPrefix with
                 | Some _ -> failwith "repeated unaligned. prefixes"
@@ -519,22 +519,22 @@ let readInsts (r : BinaryReader) (codeSize : uint32) =
                     failwith "repeated tail. prefixes"
                 else
                     readInst constrainedPrefix noPrefix readonlyPrefix true unalignedPrefix volatilePrefix
-            | 0x15uy -> Initobj (readMetaTok ())
+            | 0x15uy -> RawInst.Initobj (readMetaTok ())
             | 0x16uy ->
                 match constrainedPrefix with
                 | Some _ -> failwith "repeated constrained. prefixes"
                 | None ->
                     let constrainedTok = Some (readMetaTok ())
                     readInst constrainedTok noPrefix readonlyPrefix tailPrefix unalignedPrefix volatilePrefix
-            | 0x17uy -> Cpblk
-            | 0x18uy -> Initblk unalignedPrefix
+            | 0x17uy -> RawInst.Cpblk
+            | 0x18uy -> RawInst.Initblk unalignedPrefix
             | 0x19uy ->
                 // TODO is it worth doing anything with this?
                 let currNo = readByte ()
                 readInst constrainedPrefix (noPrefix ||| currNo) readonlyPrefix tailPrefix unalignedPrefix volatilePrefix
-            | 0x1Auy -> Rethrow
-            | 0x1Cuy -> Sizeof (readMetaTok ())
-            | 0x1Duy -> Refanytype
+            | 0x1Auy -> RawInst.Rethrow
+            | 0x1Cuy -> RawInst.Sizeof (readMetaTok ())
+            | 0x1Duy -> RawInst.Refanytype
             | 0x1Euy ->
                 if readonlyPrefix then
                     failwith "repeated readonly. prefixes"
