@@ -118,105 +118,56 @@ let readAlignedASCII (r : BinaryReader) (align : int) =
         r.BaseStream.Seek (int64 padding, SeekOrigin.Current) |> ignore
     sb.ToString ()
 
-type [<RequireQualifiedAccess>] ElementType =
-    | End // 0x00 Marks end of a list
-    | Void // 0x01
-    | Boolean // 0x02
-    | Char // 0x03
-    | I1 // 0x04
-    | U1 // 0x05
-    | I2 // 0x06
-    | U2 // 0x07
-    | I4 // 0x08
-    | U4 // 0x09
-    | I8 // 0x0a
-    | U8 // 0x0b
-    | R4 // 0x0c
-    | R8 // 0x0d
-    | String // 0x0e
-    | Ptr // 0x0f  Followed by type
-    | ByRef // 0x10  Followed by type
-    | ValueType // 0x11  Followed by TypeDef or TypeRef token
-    | Class // 0x12  Followed by TypeDef or TypeRef token
-    | Var // 0x13  Generic parameter in a generic type definition, represented as number (compressed unsigned integer)
-    | Array // 0x14  type rank boundsCount bound1 … loCount lo1 …
-    | GenericInst // 0x15  Generic type instantiation.  Followed by type type-arg-count  type-1 ... type-n
-    | TypedByRef // 0x16
-    | I // 0x18  System.IntPtr
-    | U // 0x19  System.UIntPtr
-    | FnPtr // 0x1b  Followed by full method signature
-    | Object // 0x1c  System.Object
-    | SzArray // 0x1d  Single-dim array with 0 lower bound
-    | MVar // 0x1e  Generic parameter in a generic method definition, represented as number (compressed unsigned integer)
-    | CmodReqd // 0x1f  Required modifier : followed by a TypeDef or TypeRef token
-    | CmodOpt // 0x20  Optional modifier : followed by a TypeDef or TypeRef token
-    | Internal // 0x21  Implemented within the CLI
-    | Modifier // 0x40  Or’d with following element types
-    | Sentinel // 0x41  Sentinel for vararg method signature
-    | Pinned // 0x45  Denotes a local variable that points at a pinned object
-    | SysType // 0x50  Indicates an argument of type System.Type.
-    | Boxed // 0x51  Used in custom attributes to specify a boxed object (§23.3).
-    | Reserved // 0x52  Reserved
-    | Field // 0x53  Used in custom attributes to indicate a FIELD (§22.10, 23.3).
-    | Property // 0x54  Used in custom attributes to indicate a PROPERTY (§22.10, 23.3).
-    | Enum // 0x55  Used in custom attributes to specify an enum (§23.3).
-    with
-        static member FromByte = function
-            | 0x00uy -> ElementType.End
-            | 0x01uy -> ElementType.Void
-            | 0x02uy -> ElementType.Boolean
-            | 0x03uy -> ElementType.Char
-            | 0x04uy -> ElementType.I1
-            | 0x05uy -> ElementType.U1
-            | 0x06uy -> ElementType.I2
-            | 0x07uy -> ElementType.U2
-            | 0x08uy -> ElementType.I4
-            | 0x09uy -> ElementType.U4
-            | 0x0auy -> ElementType.I8
-            | 0x0buy -> ElementType.U8
-            | 0x0cuy -> ElementType.R4
-            | 0x0duy -> ElementType.R8
-            | 0x0euy -> ElementType.String
-            | 0x0fuy -> ElementType.Ptr
-            | 0x10uy -> ElementType.ByRef
-            | 0x11uy -> ElementType.ValueType
-            | 0x12uy -> ElementType.Class
-            | 0x13uy -> ElementType.Var
-            | 0x14uy -> ElementType.Array
-            | 0x15uy -> ElementType.GenericInst
-            | 0x16uy -> ElementType.TypedByRef
-            | 0x18uy -> ElementType.I
-            | 0x19uy -> ElementType.U
-            | 0x1buy -> ElementType.FnPtr
-            | 0x1cuy -> ElementType.Object
-            | 0x1duy -> ElementType.SzArray
-            | 0x1euy -> ElementType.MVar
-            | 0x1fuy -> ElementType.CmodReqd
-            | 0x20uy -> ElementType.CmodOpt
-            | 0x21uy -> ElementType.Internal
-            | 0x40uy -> ElementType.Modifier
-            | 0x41uy -> ElementType.Sentinel
-            | 0x45uy -> ElementType.Pinned
-            | 0x50uy -> ElementType.SysType
-            | 0x51uy -> ElementType.Boxed
-            | 0x52uy -> ElementType.Reserved
-            | 0x53uy -> ElementType.Field
-            | 0x54uy -> ElementType.Property
-            | 0x55uy -> ElementType.Enum
-            | tyCode -> failwithf "0x%X is not a valid type code" tyCode
+type ElementType =
+    | End           = 0x00
+    | Void          = 0x01
+    | Boolean       = 0x02
+    | Char          = 0x03
+    | I1            = 0x04
+    | U1            = 0x05
+    | I2            = 0x06
+    | U2            = 0x07
+    | I4            = 0x08
+    | U4            = 0x09
+    | I8            = 0x0A
+    | U8            = 0x0B
+    | R4            = 0x0C
+    | R8            = 0x0D
+    | String        = 0x0E
+    | Ptr           = 0x0F
+    | ByRef         = 0x10
+    | ValueType     = 0x11
+    | Class         = 0x12
+    | Var           = 0x13
+    | Array         = 0x14
+    | GenericInst   = 0x15
+    | TypedByRef    = 0x16
+    | I             = 0x18
+    | U             = 0x19
+    | FnPtr         = 0x1B
+    | Object        = 0x1C
+    | SzArray       = 0x1D
+    | MVar          = 0x1E
+    | CmodReqd      = 0x1F
+    | CmodOpt       = 0x20
+    | Internal      = 0x21
+    | Modifier      = 0x40
+    | Sentinel      = 0x41
+    | Pinned        = 0x45
+    | SysType       = 0x50
+    | Boxed         = 0x51
+    | Reserved      = 0x52
+    | Field         = 0x53
+    | Property      = 0x54
+    | Enum          = 0x55
 
-        static member UntilEnd (f : byte list ref -> 'a) (bytes : byte list ref) : 'a list =
-            // TODO pretty inefficient
-            match !bytes with
-            | [] -> failwith "unexpected end of blob in UntilEnd"
-            | fstByte :: _ ->
-                match ElementType.FromByte fstByte with
-                | ElementType.End -> []
-                | _ ->
-                    let currVal = f bytes
-                    currVal :: ElementType.UntilEnd f bytes
+let rec readBlobWhile (test : byte -> bool) (f : byte list ref -> 'a) (bytes : byte list ref) : 'a list =
+    match !bytes with
+    | fstByte :: _ when test fstByte ->
+        f bytes :: readBlobWhile test f bytes
+    | _ -> []
 
-let (|ElTy|) (b : byte) = ElementType.FromByte b
+let (|ElTy|) (b : byte) = enum<ElementType> (int b)
 
 // defined in section 23.2: compressed integers are stored big-endian
 let makeReadByteFun (xs : byte list ref) : unit -> byte =
