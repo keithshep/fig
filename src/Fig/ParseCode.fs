@@ -602,7 +602,7 @@ let readFatExceptionClauses (r : BinaryReader) =
     
     // See 25.4.6 reading fat clauses
     [|for _ in 1u .. numClauses do
-        printfn "reading fat clause"
+        debugfn "reading fat clause"
         let eFlags = r.ReadUInt32 ()
         let tryOffset = r.ReadUInt32 ()
         let tryLen = r.ReadUInt32 ()
@@ -610,7 +610,7 @@ let readFatExceptionClauses (r : BinaryReader) =
         let handlerLen = r.ReadUInt32 ()
         let offsetOrClassTok = r.ReadUInt32 ()
 
-        printfn
+        debugfn
             "eFlags=0x%X, tryOffset=%i, tryLen=%i, handlerOffset=%i, handlerLen=%i, offsetOrClassTok=%i"
             eFlags
             tryOffset
@@ -632,7 +632,7 @@ let readSmallExceptionClauses (r : BinaryReader) =
     
     // See 25.4.6 reading small clauses
     [|for _ in 1uy .. numClauses do
-        printfn "reading small clause"
+        debugfn "reading small clause"
         let eFlags = r.ReadUInt16 () |> uint32
         let tryOffset = r.ReadUInt16 () |> uint32
         let tryLen = r.ReadByte () |> uint32
@@ -640,7 +640,7 @@ let readSmallExceptionClauses (r : BinaryReader) =
         let handlerLen = r.ReadByte () |> uint32
         let offsetOrClassTok = r.ReadUInt32 ()
 
-        printfn
+        debugfn
             "eFlags=0x%X, tryOffset=%i, tryLen=%i, handlerOffset=%i, handlerLen=%i, offsetOrClassTok=%i"
             eFlags
             tryOffset
@@ -654,7 +654,7 @@ let readSmallExceptionClauses (r : BinaryReader) =
 let readExceptionSections (r : BinaryReader) (moreSects : bool) (codeSize : uint32) =
     let moreSects = ref moreSects
     [|while !moreSects do
-        printfn "reading exception section"
+        debugfn "reading exception section"
         
         // the method data sits on a 4-byte boundary. Seek past
         // boundary bytes
@@ -673,7 +673,7 @@ let readExceptionSections (r : BinaryReader) (moreSects : bool) (codeSize : uint
         let isFatFormat = kindFlags &&& 0x40uy <> 0uy
         moreSects := kindFlags &&& 0x80uy <> 0uy
 
-        printfn "exception is fat: %b" isFatFormat
+        debugfn "exception is fat: %b" isFatFormat
 
         if isFatFormat then
             yield readFatExceptionClauses r
@@ -692,7 +692,7 @@ let readMethodBody (r : BinaryReader) =
 
     if isTinyFmt then
         let mbSize = fstByte >>> 2
-        printfn "tiny header: size=%i" mbSize
+        debugfn "tiny header: size=%i" mbSize
 
         readInsts r (uint32 mbSize), [||]
     else
@@ -705,7 +705,7 @@ let readMethodBody (r : BinaryReader) =
         let codeSize = r.ReadUInt32 ()
         let localVarSigTok = r.ReadUInt32 ()
 
-        printfn
+        debugfn
             "fat header: moreSects=%b, initLocals=%b, headerSize=%i, maxStack=%i, codeSize=%i, localVarSigTok=%i"
             moreSects
             initLocals

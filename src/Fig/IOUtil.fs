@@ -18,6 +18,8 @@ let ifprintfn (tr : TextWriter) (depth : uint32) fmt =
         tr.WriteLine s
     Printf.ksprintf printIndented fmt
 
+let debugfn fmt = Printf.ksprintf System.Diagnostics.Debug.WriteLine fmt
+
 // TODO make sure all of these list functions are actually used in the final versions
 let listRead (xs : 'a list ref) : 'a option =
     match !xs with
@@ -58,31 +60,27 @@ type PosStackBinaryReader(stream : Stream) =
 let readBytesEq (r : BinaryReader) (expectBytes : byte array) (name : string) =
     let inBytes = r.ReadBytes expectBytes.Length
     if inBytes <> expectBytes then
-        //failwith (sprintf "expected \"%s\" to be %A but read %A" name expectBytes inBytes)
-        printfn "expected \"%s\" to be %A but read %A" name expectBytes inBytes
+        debugfn "expected \"%s\" to be %A but read %A" name expectBytes inBytes
 
 let readByteEq (r : BinaryReader) (expectByte : byte) (name : string) =
     let inByte = r.ReadByte ()
     if inByte <> expectByte then
-        //failwith (sprintf "expected \"%s\" to be 0x%X but read 0x%X" name expectByte inByte)
-        printfn "expected \"%s\" to be 0x%X but read 0x%X" name expectByte inByte
+        debugfn "expected \"%s\" to be 0x%X but read 0x%X" name expectByte inByte
 
 let readShortEq (r : BinaryReader) (expectShort : uint16) (name : string) =
     let inShort = r.ReadUInt16 ()
     if inShort <> expectShort then
-        //failwith (sprintf "expected \"%s\" to be 0x%X but read 0x%X" name expectShort inShort)
-        printfn "expected \"%s\" to be 0x%X but read 0x%X" name expectShort inShort
+        debugfn "expected \"%s\" to be 0x%X but read 0x%X" name expectShort inShort
 
 let readIntEq (r : BinaryReader) (expectInt : uint32) (name : string) =
     let inInt = r.ReadUInt32 ()
     if inInt <> expectInt then
-        //failwith (sprintf "expected \"%s\" to be 0x%X but read 0x%X" name expectInt inInt)
-        printfn "expected \"%s\" to be 0x%X but read 0x%X" name expectInt inInt
+        debugfn "expected \"%s\" to be 0x%X but read 0x%X" name expectInt inInt
 
 let readLongEq (r : BinaryReader) (expectLong : uint64) (name : string) =
     let inLong = r.ReadUInt64 ()
     if inLong <> expectLong then
-        printfn "expected \"%s\" to be 0x%X but read 0x%X" name expectLong inLong
+        debugfn "expected \"%s\" to be 0x%X but read 0x%X" name expectLong inLong
 
 let readString (r : BinaryReader) (enc : Encoding) =
     enc.GetString [|
