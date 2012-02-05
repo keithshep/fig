@@ -1516,269 +1516,6 @@ and AssemblyRef(assem : Assembly, selfIndex : int) =
             // see 6.2.1.3 Originator’s public key
             Some (assem.ReadBlobAtIndex i)
 
-and [<RequireQualifiedAccess>] TypeVisibilityAttr =
-    | NotPublic
-    | Public
-    | NestedPublic
-    | NestedPrivate
-    | NestedFamily
-    | NestedAssembly
-    | NestedFamANDAssem
-    | NestedFamORAssem
-
-and [<RequireQualifiedAccess>] ClassLayoutAttr = Auto | Sequential | Explicit
-and [<RequireQualifiedAccess>] StringFmtAttr = Ansi | Unicode | Auto | Custom
-
-and [<RequireQualifiedAccess>] CustomModBlob =
-    | CmodOpt of TypeDefOrRef
-    | CmodReqd of TypeDefOrRef
-    with
-        static member FromBlob (assem : Assembly) (blob : byte list ref) =
-            match listRead blob with
-            | None -> failwith "unexpected end of blob while reading custom mod"
-            | Some b ->
-                match enum<ElementType>(int b) with
-                | ElementType.CmodOpt -> CmodOpt (TypeDefOrRef.FromBlob assem blob)
-                | ElementType.CmodReqd -> CmodReqd (TypeDefOrRef.FromBlob assem blob)
-                | et -> failwithf "unexpected element type while reading custom mod: %A" et
-
-        static member ManyFromBlob (assem : Assembly) (blob : byte list ref) =
-            let notEndOfCustMods (b : byte) =
-                b = byte ElementType.CmodOpt || b = byte ElementType.CmodReqd
-            readBlobWhile notEndOfCustMods (CustomModBlob.FromBlob assem) blob
-
-and [<RequireQualifiedAccess>] TypeBlob =
-    | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 | I8 | U8 | R4 | R8 | I | U
-    | Class of TypeDefOrRef
-    | MVar of uint32
-    | Object
-    | String
-    | ValueType of TypeDefOrRef
-    | Var of uint32
-
-    // the following are also in type spec
-    | Ptr of List<CustomModBlob> * Option<TypeBlob>
-    | FnPtr of MethodDefOrRefSig
-    | Array of TypeBlob * ArrayShape
-    | SzArray of List<CustomModBlob> * TypeBlob
-    // GenericInst bool isClass with false indicating valuetype
-    | GenericInst of bool * TypeDefOrRef * List<TypeBlob>
-    with
-        static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeBlob =
-            match listPeek blob with
-            | None -> failwith "unexpected end of blob while reading type"
-            | Some b ->
-                let readUInt() = readCompressedUnsignedInt (makeReadByteFun blob)
-                match enum<ElementType>(int b) with
-                | ElementType.Boolean       -> listSkip blob; Boolean
-                | ElementType.Char          -> listSkip blob; Char
-                | ElementType.I1            -> listSkip blob; I1
-                | ElementType.U1            -> listSkip blob; U1
-                | ElementType.I2            -> listSkip blob; I2
-                | ElementType.U2            -> listSkip blob; U2
-                | ElementType.I4            -> listSkip blob; I4
-                | ElementType.U4            -> listSkip blob; U4
-                | ElementType.I8            -> listSkip blob; I8
-                | ElementType.U8            -> listSkip blob; U8
-                | ElementType.R4            -> listSkip blob; R4
-                | ElementType.R8            -> listSkip blob; R8
-                | ElementType.I             -> listSkip blob; I
-                | ElementType.U             -> listSkip blob; U
-                | ElementType.Class         -> listSkip blob; Class(TypeDefOrRef.FromBlob assem blob)
-                | ElementType.MVar          -> listSkip blob; MVar(readUInt())
-                | ElementType.Object        -> listSkip blob; Object
-                | ElementType.String        -> listSkip blob; String
-                | ElementType.ValueType     -> listSkip blob; ValueType(TypeDefOrRef.FromBlob assem blob)
-                | ElementType.Var           -> listSkip blob; Var(readUInt())
-
-                // reuse the type-spec
-                | _ ->
-                    match TypeSpecBlob.FromBlob assem blob with
-                    | TypeSpecBlob.Ptr(custMods, typeOption)    -> Ptr(custMods, typeOption)
-                    | TypeSpecBlob.FnPtr methDefOrRef           -> FnPtr methDefOrRef
-                    | TypeSpecBlob.Array(ty, shape)             -> Array(ty, shape)
-                    | TypeSpecBlob.SzArray(custMods, types)     -> SzArray(custMods, types)
-                    | TypeSpecBlob.GenericInst(isClass, tyDefOrRef, types) ->
-                        GenericInst(isClass, tyDefOrRef, types)
-
-and MaybeByRefType = {isByRef : bool; ty : TypeBlob}
-with
-    static member FromBlob (assem : Assembly) (blob : byte list ref) =
-        match listPeek blob with
-        | None -> failwith "unexpected end of blob while reading MaybeByRefType"
-        | Some b ->
-            let isByRef =
-                match enum<ElementType>(int b) with
-                | ElementType.ByRef -> listSkip blob; true
-                | _ -> false
-            {MaybeByRefType.isByRef = isByRef; ty = TypeBlob.FromBlob assem blob}
-
-and ThisKind = NoThis | HasThis | ExplicitThis
-and [<RequireQualifiedAccess>] MethCallingConv = Default | Vararg | Generic of uint32
-and MethodDefOrRefSig = {
-    thisKind : ThisKind
-    callingConv : MethCallingConv
-    retType : RetType
-    methParams : Param list
-    varargParams : Param list
-}
-with
-    static member FromBlob (assem : Assembly) (blob : byte list ref) : MethodDefOrRefSig =
-        let unexpEnd() = failwith "unexpected end of blob while reading method def or ref sig"
-        match listRead blob with
-        | None -> unexpEnd()
-        | Some b ->
-            let bitsSet (mask : byte) = b &&& mask = mask
-            let thisKind =
-                let hasThis = bitsSet 0x20uy
-                if hasThis then
-                    let explicitThis = bitsSet 0x40uy
-                    if explicitThis then ThisKind.ExplicitThis else ThisKind.HasThis
-                else
-                    NoThis
-            let callingConv =
-                let isVararg = bitsSet 0x5uy
-                let isGeneric = bitsSet 0x10uy
-                if isVararg then
-                    MethCallingConv.Vararg
-                elif isGeneric then
-                    MethCallingConv.Generic(readCompressedUnsignedInt <| makeReadByteFun blob)
-                else
-                    MethCallingConv.Default
-            let retType = RetType.FromBlob assem blob
-            let paramsRemaining = ref (readCompressedUnsignedInt (makeReadByteFun blob))
-            let methParams = [
-                let hitSentinal = ref false
-                while not !hitSentinal && !paramsRemaining >= 1u do
-                    match listPeek blob with
-                    | Some (ElTy ElementType.Sentinel) ->
-                        listSkip blob
-                        hitSentinal := true
-                    | _ ->
-                        yield Param.FromBlob assem blob
-                        paramsRemaining := !paramsRemaining - 1u
-            ]
-            let varargParams = [
-                while !paramsRemaining >= 1u do
-                    yield Param.FromBlob assem blob
-                    paramsRemaining := !paramsRemaining - 1u
-            ]
-
-            {
-                MethodDefOrRefSig.thisKind = thisKind
-                callingConv = callingConv
-                retType = retType
-                methParams = methParams
-                varargParams = varargParams
-            }
-
-and [<RequireQualifiedAccess>] ParamType =
-    | MayByRefTy of MaybeByRefType
-    | TypedByRef
-and Param = {
-    customMods : CustomModBlob list
-    pType : ParamType
-}
-with
-    static member FromBlob (assem : Assembly) (blob : byte list ref) : Param =
-        let custMods = CustomModBlob.ManyFromBlob assem blob
-        match listPeek blob with
-        | None -> failwith "unexpected end of blob while reading ParamType"
-        | Some b ->
-            let pType =
-                match enum<ElementType>(int b) with
-                | ElementType.TypedByRef -> listSkip blob; ParamType.TypedByRef
-                | _ -> ParamType.MayByRefTy (MaybeByRefType.FromBlob assem blob)
-            {Param.customMods = custMods; pType = pType}
-
-and [<RequireQualifiedAccess>] RetTypeKind =
-    | MayByRefTy of MaybeByRefType
-    | TypedByRef
-    | Void
-and RetType = {
-    customMods : CustomModBlob list
-    rType : RetTypeKind
-}
-with
-    static member FromBlob (assem : Assembly) (blob : byte list ref) : RetType =
-        let custMods = CustomModBlob.ManyFromBlob assem blob
-        match listPeek blob with
-        | None -> failwith "unexpected end of blob while reading RetType"
-        | Some b ->
-            let rType =
-                match enum<ElementType>(int b) with
-                | ElementType.TypedByRef -> listSkip blob; RetTypeKind.TypedByRef
-                | ElementType.Void -> listSkip blob; RetTypeKind.Void
-                | _ -> RetTypeKind.MayByRefTy (MaybeByRefType.FromBlob assem blob)
-            {RetType.customMods = custMods; rType = rType}
-
-and ArrayShape = {rank : uint32; sizes : uint32 array; loBounds : int array}
-with
-    static member FromBlob (blob : byte list ref) =
-        let readByte = makeReadByteFun blob
-        let rank = readCompressedUnsignedInt readByte
-        let numSizes = readCompressedUnsignedInt readByte
-        let sizes = [|
-            for _ in 1u .. numSizes do
-                yield readCompressedUnsignedInt readByte
-        |]
-        let numLoBounds = readCompressedUnsignedInt readByte
-        let loBounds = [|
-            for _ in 1u .. numSizes do
-                yield readCompressedInt readByte
-        |]
-
-        {ArrayShape.rank = rank; sizes = sizes; loBounds = loBounds}
-
-and [<RequireQualifiedAccess>] TypeSpecBlob =
-    | Ptr of List<CustomModBlob> * Option<TypeBlob>
-    | FnPtr of MethodDefOrRefSig
-    | Array of TypeBlob * ArrayShape
-    | SzArray of List<CustomModBlob> * TypeBlob
-    // GenericInst bool isClass with false indicating valuetype
-    | GenericInst of bool * TypeDefOrRef * List<TypeBlob>
-    with
-        static member FromBlob (assem : Assembly) (blob : byte list ref) =
-            match listRead blob with
-            | None ->  failwith "cannot parse a type spec from an empty blob"
-            | Some b ->
-                let unexpEnd() = failwith "unexpected end of type"
-                let custModList() = CustomModBlob.ManyFromBlob assem blob
-
-                match enum<ElementType>(int b) with
-                | ElementType.Ptr ->
-                    match listPeek blob with
-                    | None -> unexpEnd()
-                    | Some(ElTy ElementType.Void) ->
-                        listSkip blob
-                        Ptr(custModList(), None)
-                    | _ ->
-                        Ptr(custModList(), Some(TypeBlob.FromBlob assem blob))
-
-                | ElementType.FnPtr -> FnPtr(MethodDefOrRefSig.FromBlob assem blob)
-                | ElementType.Array ->
-                    Array(TypeBlob.FromBlob assem blob, ArrayShape.FromBlob blob)
-                | ElementType.SzArray ->
-                    SzArray(custModList(), TypeBlob.FromBlob assem blob)
-                | ElementType.GenericInst ->
-                    match listRead blob with
-                    | None -> unexpEnd()
-                    | Some b ->
-                        let isClass =
-                            match enum<ElementType>(int b) with
-                            | ElementType.Class -> true
-                            | ElementType.ValueType -> false
-                            | et ->
-                                failwithf "unexpected element type while reading generic instruction blob: %A" et
-                        let tyDefRefSpecBlob = TypeDefOrRef.FromBlob assem blob
-                        let tys =
-                            let genArgCount = readCompressedUnsignedInt (makeReadByteFun blob)
-                            [for _ in 1u .. genArgCount -> TypeBlob.FromBlob assem blob]
-                            
-                        GenericInst(isClass, tyDefRefSpecBlob, tys)
-                | et ->
-                    failwithf "the following element type is not valid for a type spec: %A" et
-
 and [<AbstractClass>] TypeDefOrRef() =
     abstract Namespace : string
     abstract Name : string
@@ -1867,6 +1604,19 @@ and TypeRef(assem : Assembly, selfIndex : int) =
             failwith "impl type ref"
         | rsk ->
             failwith "unexpected resolution scope table kind %A" rsk
+
+and [<RequireQualifiedAccess>] TypeVisibilityAttr =
+    | NotPublic
+    | Public
+    | NestedPublic
+    | NestedPrivate
+    | NestedFamily
+    | NestedAssembly
+    | NestedFamANDAssem
+    | NestedFamORAssem
+
+and [<RequireQualifiedAccess>] ClassLayoutAttr = Auto | Sequential | Explicit
+and [<RequireQualifiedAccess>] StringFmtAttr = Ansi | Unicode | Auto | Custom
 
 and TypeDef(assem : Assembly, selfIndex : int) =
     inherit TypeDefOrRef()
@@ -1987,9 +1737,9 @@ and GenericParam(assem : Assembly, selfIndex : int) =
                         failwithf "bad constraint kind: %A" ck
     }
 
-type [<RequireQualifiedAccess>] CodeType = IL | Native | Runtime
+and [<RequireQualifiedAccess>] CodeType = IL | Native | Runtime
 
-type [<RequireQualifiedAccess>] MemberAccess =
+and [<RequireQualifiedAccess>] MemberAccess =
     | CompilerControlled
     | Private
     | FamANDAssem
@@ -1998,11 +1748,11 @@ type [<RequireQualifiedAccess>] MemberAccess =
     | FamORAssem
     | Public
 
-type Parameter (r : BinaryReader, mt : MetadataTables, selfIndex : int) =
+and Parameter (r : BinaryReader, mt : MetadataTables, selfIndex : int) =
     let pRow = mt.paramRows.[selfIndex]
     do failwith "implement me!"
 
-type MethodDef (r : BinaryReader, assem : Assembly, selfIndex : int) =
+and MethodDef (r : BinaryReader, assem : Assembly, selfIndex : int) =
     let mt = assem.MetadataTables
     let mdRow = mt.methodDefs.[selfIndex]
     let isFlagSet mask = mdRow.flags &&& mask <> 0us
@@ -2502,3 +2252,257 @@ and AbstractInstruction =
                     yield [|for instIndex in fstInstIndex .. lstInstIndex -> toAbstInst instIndex|]|]
             
             instBlocks
+
+//
+// BLOB PARSING
+//
+
+and [<RequireQualifiedAccess>] CustomModBlob =
+    | CmodOpt of TypeDefOrRef
+    | CmodReqd of TypeDefOrRef
+    with
+        static member FromBlob (assem : Assembly) (blob : byte list ref) =
+            match listRead blob with
+            | None -> failwith "unexpected end of blob while reading custom mod"
+            | Some b ->
+                match enum<ElementType>(int b) with
+                | ElementType.CmodOpt -> CmodOpt (TypeDefOrRef.FromBlob assem blob)
+                | ElementType.CmodReqd -> CmodReqd (TypeDefOrRef.FromBlob assem blob)
+                | et -> failwithf "unexpected element type while reading custom mod: %A" et
+
+        static member ManyFromBlob (assem : Assembly) (blob : byte list ref) =
+            let notEndOfCustMods (b : byte) =
+                b = byte ElementType.CmodOpt || b = byte ElementType.CmodReqd
+            readBlobWhile notEndOfCustMods (CustomModBlob.FromBlob assem) blob
+
+and [<RequireQualifiedAccess>] TypeBlob =
+    | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 | I8 | U8 | R4 | R8 | I | U
+    | Class of TypeDefOrRef
+    | MVar of uint32
+    | Object
+    | String
+    | ValueType of TypeDefOrRef
+    | Var of uint32
+
+    // the following are also in type spec
+    | Ptr of List<CustomModBlob> * Option<TypeBlob>
+    | FnPtr of MethodDefOrRefSig
+    | Array of TypeBlob * ArrayShape
+    | SzArray of List<CustomModBlob> * TypeBlob
+    // GenericInst bool isClass with false indicating valuetype
+    | GenericInst of bool * TypeDefOrRef * List<TypeBlob>
+    with
+        static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeBlob =
+            match listPeek blob with
+            | None -> failwith "unexpected end of blob while reading type"
+            | Some b ->
+                let readUInt() = readCompressedUnsignedInt (makeReadByteFun blob)
+                match enum<ElementType>(int b) with
+                | ElementType.Boolean       -> listSkip blob; Boolean
+                | ElementType.Char          -> listSkip blob; Char
+                | ElementType.I1            -> listSkip blob; I1
+                | ElementType.U1            -> listSkip blob; U1
+                | ElementType.I2            -> listSkip blob; I2
+                | ElementType.U2            -> listSkip blob; U2
+                | ElementType.I4            -> listSkip blob; I4
+                | ElementType.U4            -> listSkip blob; U4
+                | ElementType.I8            -> listSkip blob; I8
+                | ElementType.U8            -> listSkip blob; U8
+                | ElementType.R4            -> listSkip blob; R4
+                | ElementType.R8            -> listSkip blob; R8
+                | ElementType.I             -> listSkip blob; I
+                | ElementType.U             -> listSkip blob; U
+                | ElementType.Class         -> listSkip blob; Class(TypeDefOrRef.FromBlob assem blob)
+                | ElementType.MVar          -> listSkip blob; MVar(readUInt())
+                | ElementType.Object        -> listSkip blob; Object
+                | ElementType.String        -> listSkip blob; String
+                | ElementType.ValueType     -> listSkip blob; ValueType(TypeDefOrRef.FromBlob assem blob)
+                | ElementType.Var           -> listSkip blob; Var(readUInt())
+
+                // reuse the type-spec
+                | _ ->
+                    match TypeSpecBlob.FromBlob assem blob with
+                    | TypeSpecBlob.Ptr(custMods, typeOption)    -> Ptr(custMods, typeOption)
+                    | TypeSpecBlob.FnPtr methDefOrRef           -> FnPtr methDefOrRef
+                    | TypeSpecBlob.Array(ty, shape)             -> Array(ty, shape)
+                    | TypeSpecBlob.SzArray(custMods, types)     -> SzArray(custMods, types)
+                    | TypeSpecBlob.GenericInst(isClass, tyDefOrRef, types) ->
+                        GenericInst(isClass, tyDefOrRef, types)
+
+and MaybeByRefType = {isByRef : bool; ty : TypeBlob}
+with
+    static member FromBlob (assem : Assembly) (blob : byte list ref) =
+        match listPeek blob with
+        | None -> failwith "unexpected end of blob while reading MaybeByRefType"
+        | Some b ->
+            let isByRef =
+                match enum<ElementType>(int b) with
+                | ElementType.ByRef -> listSkip blob; true
+                | _ -> false
+            {MaybeByRefType.isByRef = isByRef; ty = TypeBlob.FromBlob assem blob}
+
+and ThisKind = NoThis | HasThis | ExplicitThis
+and [<RequireQualifiedAccess>] MethCallingConv = Default | Vararg | Generic of uint32
+and MethodDefOrRefSig = {
+    thisKind : ThisKind
+    callingConv : MethCallingConv
+    retType : RetType
+    methParams : Param list
+    varargParams : Param list
+}
+with
+    static member FromBlob (assem : Assembly) (blob : byte list ref) : MethodDefOrRefSig =
+        let unexpEnd() = failwith "unexpected end of blob while reading method def or ref sig"
+        match listRead blob with
+        | None -> unexpEnd()
+        | Some b ->
+            let bitsSet (mask : byte) = b &&& mask = mask
+            let thisKind =
+                let hasThis = bitsSet 0x20uy
+                if hasThis then
+                    let explicitThis = bitsSet 0x40uy
+                    if explicitThis then ThisKind.ExplicitThis else ThisKind.HasThis
+                else
+                    NoThis
+            let callingConv =
+                let isVararg = bitsSet 0x5uy
+                let isGeneric = bitsSet 0x10uy
+                if isVararg then
+                    MethCallingConv.Vararg
+                elif isGeneric then
+                    MethCallingConv.Generic(readCompressedUnsignedInt <| makeReadByteFun blob)
+                else
+                    MethCallingConv.Default
+            let retType = RetType.FromBlob assem blob
+            let paramsRemaining = ref (readCompressedUnsignedInt (makeReadByteFun blob))
+            let methParams = [
+                let hitSentinal = ref false
+                while not !hitSentinal && !paramsRemaining >= 1u do
+                    match listPeek blob with
+                    | Some (ElTy ElementType.Sentinel) ->
+                        listSkip blob
+                        hitSentinal := true
+                    | _ ->
+                        yield Param.FromBlob assem blob
+                        paramsRemaining := !paramsRemaining - 1u
+            ]
+            let varargParams = [
+                while !paramsRemaining >= 1u do
+                    yield Param.FromBlob assem blob
+                    paramsRemaining := !paramsRemaining - 1u
+            ]
+
+            {
+                MethodDefOrRefSig.thisKind = thisKind
+                callingConv = callingConv
+                retType = retType
+                methParams = methParams
+                varargParams = varargParams
+            }
+
+and [<RequireQualifiedAccess>] ParamType =
+    | MayByRefTy of MaybeByRefType
+    | TypedByRef
+and Param = {
+    customMods : CustomModBlob list
+    pType : ParamType
+}
+with
+    static member FromBlob (assem : Assembly) (blob : byte list ref) : Param =
+        let custMods = CustomModBlob.ManyFromBlob assem blob
+        match listPeek blob with
+        | None -> failwith "unexpected end of blob while reading ParamType"
+        | Some b ->
+            let pType =
+                match enum<ElementType>(int b) with
+                | ElementType.TypedByRef -> listSkip blob; ParamType.TypedByRef
+                | _ -> ParamType.MayByRefTy (MaybeByRefType.FromBlob assem blob)
+            {Param.customMods = custMods; pType = pType}
+
+and [<RequireQualifiedAccess>] RetTypeKind =
+    | MayByRefTy of MaybeByRefType
+    | TypedByRef
+    | Void
+and RetType = {
+    customMods : CustomModBlob list
+    rType : RetTypeKind
+}
+with
+    static member FromBlob (assem : Assembly) (blob : byte list ref) : RetType =
+        let custMods = CustomModBlob.ManyFromBlob assem blob
+        match listPeek blob with
+        | None -> failwith "unexpected end of blob while reading RetType"
+        | Some b ->
+            let rType =
+                match enum<ElementType>(int b) with
+                | ElementType.TypedByRef -> listSkip blob; RetTypeKind.TypedByRef
+                | ElementType.Void -> listSkip blob; RetTypeKind.Void
+                | _ -> RetTypeKind.MayByRefTy (MaybeByRefType.FromBlob assem blob)
+            {RetType.customMods = custMods; rType = rType}
+
+and ArrayShape = {rank : uint32; sizes : uint32 array; loBounds : int array}
+with
+    static member FromBlob (blob : byte list ref) =
+        let readByte = makeReadByteFun blob
+        let rank = readCompressedUnsignedInt readByte
+        let numSizes = readCompressedUnsignedInt readByte
+        let sizes = [|
+            for _ in 1u .. numSizes do
+                yield readCompressedUnsignedInt readByte
+        |]
+        let numLoBounds = readCompressedUnsignedInt readByte
+        let loBounds = [|
+            for _ in 1u .. numSizes do
+                yield readCompressedInt readByte
+        |]
+
+        {ArrayShape.rank = rank; sizes = sizes; loBounds = loBounds}
+
+and [<RequireQualifiedAccess>] TypeSpecBlob =
+    | Ptr of List<CustomModBlob> * Option<TypeBlob>
+    | FnPtr of MethodDefOrRefSig
+    | Array of TypeBlob * ArrayShape
+    | SzArray of List<CustomModBlob> * TypeBlob
+    // GenericInst bool isClass with false indicating valuetype
+    | GenericInst of bool * TypeDefOrRef * List<TypeBlob>
+    with
+        static member FromBlob (assem : Assembly) (blob : byte list ref) =
+            match listRead blob with
+            | None ->  failwith "cannot parse a type spec from an empty blob"
+            | Some b ->
+                let unexpEnd() = failwith "unexpected end of type"
+                let custModList() = CustomModBlob.ManyFromBlob assem blob
+
+                match enum<ElementType>(int b) with
+                | ElementType.Ptr ->
+                    match listPeek blob with
+                    | None -> unexpEnd()
+                    | Some(ElTy ElementType.Void) ->
+                        listSkip blob
+                        Ptr(custModList(), None)
+                    | _ ->
+                        Ptr(custModList(), Some(TypeBlob.FromBlob assem blob))
+
+                | ElementType.FnPtr -> FnPtr(MethodDefOrRefSig.FromBlob assem blob)
+                | ElementType.Array ->
+                    Array(TypeBlob.FromBlob assem blob, ArrayShape.FromBlob blob)
+                | ElementType.SzArray ->
+                    SzArray(custModList(), TypeBlob.FromBlob assem blob)
+                | ElementType.GenericInst ->
+                    match listRead blob with
+                    | None -> unexpEnd()
+                    | Some b ->
+                        let isClass =
+                            match enum<ElementType>(int b) with
+                            | ElementType.Class -> true
+                            | ElementType.ValueType -> false
+                            | et ->
+                                failwithf "unexpected element type while reading generic instruction blob: %A" et
+                        let tyDefRefSpecBlob = TypeDefOrRef.FromBlob assem blob
+                        let tys =
+                            let genArgCount = readCompressedUnsignedInt (makeReadByteFun blob)
+                            [for _ in 1u .. genArgCount -> TypeBlob.FromBlob assem blob]
+
+                        GenericInst(isClass, tyDefRefSpecBlob, tys)
+                | et ->
+                    failwithf "the following element type is not valid for a type spec: %A" et
