@@ -1467,15 +1467,15 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
         let numBytes = readCompressedUnsignedInt r.ReadByte
         r.ReadBytes(int numBytes)
 
-    member x.AssemblyRefs = seq {
-        for i in 0 .. x.MetadataTables.assemblyRefs.Length - 1 do
-            yield new AssemblyRef(x, i)
-    }
+    member x.AssemblyRefs = [|
+        for i in 0 .. x.MetadataTables.assemblyRefs.Length - 1 ->
+            new AssemblyRef(x, i)
+    |]
 
-    member x.TypeDefs = seq {
-        for i in 0 .. x.MetadataTables.typeDefs.Length - 1 do
-            yield new TypeDef(x, i)
-    }
+    member x.Modules = [|
+        for i in 0 .. x.MetadataTables.modules.Length - 1 ->
+            new Module(x, i)
+    |]
 
     member x.Name = x.AsssemblyRow.name
 
@@ -1515,6 +1515,24 @@ and AssemblyRef(assem : Assembly, selfIndex : int) =
         | i ->
             // see 6.2.1.3 Originator’s public key
             Some (assem.ReadBlobAtIndex i)
+
+and Module(assem : Assembly, selfIndex : int) =
+    let mt = assem.MetadataTables
+    let moduleRow = mt.modules.[selfIndex]
+
+    member x.TypeDefs =
+        // TODO and how does this work with
+        let allNestedIndexes =
+            seq {for ncRow in mt.nestedClasses -> int ncRow.nestedClassIndex}
+            |> Set.ofSeq
+
+        seq {
+            for i = 0 to mt.typeDefs.Length - 1 do
+                if not <| allNestedIndexes.Contains i then
+                    yield new TypeDef(assem, i)
+        }
+
+    member x.Name = moduleRow.name
 
 and [<AbstractClass>] TypeDefOrRef() =
     abstract Namespace : string
@@ -1630,6 +1648,8 @@ and TypeDef(assem : Assembly, selfIndex : int) =
     override x.Name = typeDefRow.typeName
     override x.Resolve() = x
 
+    member x.SelfIndex = selfIndex
+
     member x.TypeVisibilityAttr =
         let visibilityMask = 0x00000007u
         match typeDefRow.flags &&& visibilityMask with
@@ -1690,6 +1710,12 @@ and TypeDef(assem : Assembly, selfIndex : int) =
         for iImpl in mt.interfaceImpls do
             if int iImpl.classIndex = selfIndex then
                 yield TypeDefOrRef.FromKindAndIndex assem iImpl.ifaceKind (int iImpl.ifaceIndex)
+    |]
+
+    member x.NestedTypes = [|
+        for ncRow in mt.nestedClasses do
+            if int ncRow.enclosingClassIndex = selfIndex then
+                yield new TypeDef(assem, int ncRow.nestedClassIndex)
     |]
 
 and [<RequireQualifiedAccess>] GenericParamVariance = None | Covariant | Contravariant

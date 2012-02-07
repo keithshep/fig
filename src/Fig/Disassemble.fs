@@ -57,7 +57,7 @@ let genParToStr (genPar : GenericParam) =
 
     spaceSepStrs genParStrs
 
-let disTypeDef (tr : TextWriter) (indent : uint32) (td : TypeDef) =
+let rec disTypeDef (tw : TextWriter) (indent : uint32) (td : TypeDef) =
     // partition II 10.1
     let classHeaderStrs = [|
         yield ".class"
@@ -132,32 +132,41 @@ let disTypeDef (tr : TextWriter) (indent : uint32) (td : TypeDef) =
             yield commaSepStrs [|for imp in imps -> imp.FullName|]
     |]
 
-    ifprintfn tr indent "%s" (spaceSepStrs classHeaderStrs)
-    ifprintfn tr indent "{"
-    ifprintfn tr indent "}"
+    ifprintfn tw indent "%s" (spaceSepStrs classHeaderStrs)
+    ifprintfn tw indent "{"
 
-let disassemble (tr : TextWriter) (assem : Assembly) =
+    Array.iter (disTypeDef tw (indent + 1u)) td.NestedTypes
+
+    ifprintfn tw indent "}"
+
+let disModule (tr : TextWriter) (m : Module) =
+    fprintfn tr ".module %s" m.Name
+    tr.WriteLine()
+
+    for td in m.TypeDefs do
+        disTypeDef tr 1u td
+
+let disassemble (tw : TextWriter) (assem : Assembly) =
     for ar in assem.AssemblyRefs do
-        fprintfn tr ".assembly extern %s" ar.Name
-        fprintfn tr "{"
-        ifprintfn tr 1u ".ver %s" (versionString ar)
+        fprintfn tw ".assembly extern %s" ar.Name
+        fprintfn tw "{"
+        ifprintfn tw 1u ".ver %s" (versionString ar)
         match ar.PublicKeyOrToken with
         | None -> ()
         | Some pubKeyOrTok ->
             if not ar.IsPublicKeySet then
-                ifprintfn tr 1u ".publickeytoken = (%s)" (bytesToString pubKeyOrTok)
+                ifprintfn tw 1u ".publickeytoken = (%s)" (bytesToString pubKeyOrTok)
             else
                 failwith "implement me dude"
 
-        fprintfn tr "}"
+        fprintfn tw "}"
 
-    fprintfn tr ".assembly %s" assem.Name
-    fprintfn tr "{"
+    fprintfn tw ".assembly %s" assem.Name
+    fprintfn tw "{"
 
-    for td in assem.TypeDefs do
-        disTypeDef tr 1u td
+    fprintfn tw "}"
 
-    fprintfn tr "}"
-
-    //for assem in assem.MetadataTables.assemblies do
-    //    fprint
+    let modules = assem.Modules
+    if modules.Length <> 1 then
+        failwith "TODO deal with multi module assemblies"
+    for m in modules do disModule tw m
