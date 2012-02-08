@@ -164,40 +164,40 @@ type AssemblyRefRow = {
 type ClassLayoutRow = {
     packingSize : uint16
     classSize : uint32
-    parentIndex : uint32}
+    parentIndex : int}
 
 type ConstantRow = {
     typeVal : byte
     parentKind : MetadataTableKind
-    parentIndex : uint32
+    parentIndex : int
     valueIndex : uint32}
 
 type CustomAttributeRow = {
     parentKind : MetadataTableKind
-    parentIndex : uint32
+    parentIndex : int
     // The column called Type is slightly misleading
     // it actually indexes a constructor method
     // the owner of that constructor method is
     //the Type of the Custom Attribute.
     typeKind : MetadataTableKind
-    typeIndex : uint32
+    typeIndex : int
     valueIndex : uint32}
 
 type DeclSecurityRow = {
     action : uint16
     parentKind : MetadataTableKind
-    parentIndex : uint32
+    parentIndex : int
     permissionSetIndex : uint32}
 
 type EventMapRow = {
-    parentTypeDefIndex : uint32
-    eventStartIndex : uint32}
+    parentTypeDefIndex : int
+    eventStartIndex : int}
 
 type EventRow = {
     eventFlags : uint16
     name : string
     eventTypeKind : MetadataTableKind
-    eventTypeIndex : uint32}
+    eventTypeIndex : int}
 
 /// The rows in the ExportedType table are the result of the .class	extern directive
 type ExportedTypeRow = {
@@ -212,7 +212,7 @@ type ExportedTypeRow = {
     typeName : string
     typeNamespace : string
     implKind : MetadataTableKind
-    implIndex : uint32}
+    implIndex : int}
 
 type FieldRow = {
     fieldAttrFlags : uint16
@@ -221,52 +221,52 @@ type FieldRow = {
 
 type FieldLayoutRow = {
     offset : uint32
-    fieldIndex : uint32}
+    fieldIndex : int}
 
 type FieldMarshalRow = {
     parentKind : MetadataTableKind
-    parentIndex : uint32
+    parentIndex : int
     nativeTypeIndex : uint32}
 
 type FieldRVARow = {
     rva : uint32
-    fieldIndex : uint32}
+    fieldIndex : int}
 
 type GenericParamRow = {
     number : uint16
     flags : uint16
     ownerKind : MetadataTableKind
-    ownerIndex : uint32
+    ownerIndex : int
     name : string}
 
 type GenericParamConstraintRow = {
-    ownerIndex : uint32
+    ownerIndex : int
     constraintKind : MetadataTableKind
-    constraintIndex : uint32}
+    constraintIndex : int}
 
 type ImplMapRow = {
     mappingFlags : uint16
     //it only ever indexes the MethodDef table, since Field export is not supported
     memberForwardedKind : MetadataTableKind
-    memberForwardedIndex : uint32
+    memberForwardedIndex : int
     importName : string
-    importScopeIndex : uint32}
+    importScopeIndex : int}
 
 type InterfaceImplRow = {
-    classIndex : uint32
+    classIndex : int
     ifaceKind : MetadataTableKind
-    ifaceIndex : uint32}
+    ifaceIndex : int}
 
 type ManifestResourceRow = {
     offset : uint32
     flags : uint32
     name : string
     implKind : MetadataTableKind
-    implIndex : uint32}
+    implIndex : int}
 
 type MemberRefRow = {
     classKind : MetadataTableKind
-    classIndex : uint32
+    classIndex : int
     name : string
     signatureIndex : uint32}
 
@@ -276,24 +276,24 @@ type MethodDefRow = {
     flags : uint16
     name : string
     signatureIndex : uint32
-    paramIndex : uint32}
+    paramIndex : int}
 
 type MethodImplRow = {
-    classIndex : uint32
+    classIndex : int
     methodBodyKind : MetadataTableKind
-    methodBodyIndex : uint32
+    methodBodyIndex : int
     methodDecKind : MetadataTableKind
-    methodDecIndex : uint32}
+    methodDecIndex : int}
 
 type MethodSemanticsRow = {
     semanticsFlags : uint16
-    methodIndex : uint32
+    methodIndex : int
     assocKind : MetadataTableKind
-    assocIndex : uint32}
+    assocIndex : int}
 
 type MethodSpecRow = {
     methodKind : MetadataTableKind
-    methodIndex : uint32
+    methodIndex : int
     instIndex : uint32}
 
 type ModuleRow = {
@@ -306,8 +306,8 @@ type ModuleRefRow = {
     name : string}
 
 type NestedClassRow = {
-    nestedClassIndex : uint32
-    enclosingClassIndex : uint32}
+    nestedClassIndex : int
+    enclosingClassIndex : int}
 
 type ParamRow = {
     flags : uint16
@@ -323,8 +323,8 @@ type PropertyRow = {
     typeIndex : uint32}
 
 type PropertyMapRow = {
-    parentIndex : uint32
-    propertyListIndex : uint32}
+    parentIndex : int
+    propertyListIndex : int}
 
 type StandAloneSigRow = {
     signatureIndex : uint32}
@@ -334,13 +334,13 @@ type TypeDefRow = {
     typeName : string
     typeNamespace : string
     extendsKind : MetadataTableKind
-    extendsIndex : uint32
-    fieldsIndex : uint32
-    methodsIndex : uint32}
+    extendsIndex : int
+    fieldsIndex : int
+    methodsIndex : int}
 
 type TypeRefRow = {
     resolutionScopeKind : MetadataTableKind
-    resolutionScopeIndex : uint32
+    resolutionScopeIndex : int
     typeName : string
     typeNamespace : string}
 
@@ -788,10 +788,12 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
             | Some count -> count &&& 0xFFFF0000u <> 0u
 
         let readTableIndex mt =
-            if tableIndicesWide mt then
-                r.ReadUInt32 ()
-            else
-                r.ReadUInt16 () |> uint32
+            let oneBasedIndex =
+                if tableIndicesWide mt then
+                    r.ReadUInt32 ()
+                else
+                    r.ReadUInt16 () |> uint32
+            int oneBasedIndex - 1
 
         let tableIndexWidth mt = if tableIndicesWide mt then 4L else 2L
 
@@ -817,7 +819,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
             let tableKind = cik.ResolveTableKind tableKindIndex
             let rowIndex = rawIndex >>> cbc
             
-            tableKind, rowIndex
+            tableKind, int rowIndex - 1
 
         let mutable assemblies = ([||] : AssemblyRow array)
         let mutable assemblyRefs = ([||] : AssemblyRefRow array)
@@ -1523,7 +1525,7 @@ and Module(assem : Assembly, selfIndex : int) =
     member x.TypeDefs =
         // TODO and how does this work with
         let allNestedIndexes =
-            seq {for ncRow in mt.nestedClasses -> int ncRow.nestedClassIndex}
+            seq {for ncRow in mt.nestedClasses -> ncRow.nestedClassIndex}
             |> Set.ofSeq
 
         seq {
@@ -1553,7 +1555,7 @@ and [<AbstractClass>] TypeDefOrRef() =
 
     static member FromKindAndIndexOpt (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefOrRef option =
         // TODO assert that object class gives None for Inherits
-        if rowIndex = 0 then
+        if rowIndex = -1 then
             None
         else
             Some(TypeDefOrRef.FromKindAndIndex assem mt rowIndex)
@@ -1698,24 +1700,24 @@ and TypeDef(assem : Assembly, selfIndex : int) =
             let isMatch =
                 gpRow.ownerKind = MetadataTableKind.TypeDefKind
                 &&
-                gpRow.ownerIndex = uint32 selfIndex
+                gpRow.ownerIndex = selfIndex
             if isMatch then
                 yield new GenericParam(assem, i)
     }
 
     member x.Extends =
-        TypeDefOrRef.FromKindAndIndexOpt assem typeDefRow.extendsKind (int typeDefRow.extendsIndex)
+        TypeDefOrRef.FromKindAndIndexOpt assem typeDefRow.extendsKind typeDefRow.extendsIndex
 
     member x.Implements = [|
         for iImpl in mt.interfaceImpls do
-            if int iImpl.classIndex = selfIndex then
-                yield TypeDefOrRef.FromKindAndIndex assem iImpl.ifaceKind (int iImpl.ifaceIndex)
+            if iImpl.classIndex = selfIndex then
+                yield TypeDefOrRef.FromKindAndIndex assem iImpl.ifaceKind iImpl.ifaceIndex
     |]
 
     member x.NestedTypes = [|
         for ncRow in mt.nestedClasses do
-            if int ncRow.enclosingClassIndex = selfIndex then
-                yield new TypeDef(assem, int ncRow.nestedClassIndex)
+            if ncRow.enclosingClassIndex = selfIndex then
+                yield new TypeDef(assem, ncRow.nestedClassIndex)
     |]
 
 and [<RequireQualifiedAccess>] GenericParamVariance = None | Covariant | Contravariant
@@ -1750,15 +1752,15 @@ and GenericParam(assem : Assembly, selfIndex : int) =
 
     member x.Constraints : seq<TypeDefOrRef> = seq {
         for gpc in mt.genericParamConstraints do
-            if gpc.ownerIndex = uint32 selfIndex then
+            if gpc.ownerIndex = selfIndex then
                 yield
                     match gpc.constraintKind with
                     | MetadataTableKind.TypeDefKind ->
-                        upcast new TypeDef(assem, int gpc.ownerIndex)
+                        upcast new TypeDef(assem, gpc.ownerIndex)
                     | MetadataTableKind.TypeRefKind ->
-                        upcast new TypeRef(assem, int gpc.ownerIndex)
+                        upcast new TypeRef(assem, gpc.ownerIndex)
                     | MetadataTableKind.TypeSpecKind ->
-                        upcast new TypeSpec(assem, int gpc.ownerIndex)
+                        upcast new TypeSpec(assem, gpc.ownerIndex)
                     | ck ->
                         failwithf "bad constraint kind: %A" ck
     }
@@ -1839,7 +1841,7 @@ and MethodDef (r : BinaryReader, assem : Assembly, selfIndex : int) =
     member x.RequireSecObj  = isFlagSet 0x8000us
 
     member x.Parameters =
-        let fstParamIndex = int32 mdRow.paramIndex
+        let fstParamIndex = int32 mdRow.paramIndex - 1
         let lastParamIndex =
             let isLastMethodDef = selfIndex = mt.methodDefs.Length - 1
             if isLastMethodDef then
