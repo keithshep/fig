@@ -57,6 +57,61 @@ let genParToStr (genPar : GenericParam) =
 
     spaceSepStrs genParStrs
 
+let disMethodDef (tw : TextWriter) (indent : uint32) (md : MethodDef) =
+    
+    // .method MethodHeader '{' MethodBodyItem* '}'
+    // MethAttr* [ CallConv ] Type [marshal '(' [NativeType] ')']
+    //           MethodName [ '<' GenPars '>' ] '(' Parameters ')' ImplAttr*
+    
+    let methodHeader = [|
+        yield ".method"
+
+        // method attributes
+        if md.IsAbstract then yield "abstract"
+        
+        yield
+            match md.MemberAccess with
+            | MemberAccess.Assem -> "assembly"
+            | MemberAccess.CompilerControlled -> "compilercontrolled"
+            | MemberAccess.FamANDAssem -> "famandassem"
+            | MemberAccess.Family -> "family"
+            | MemberAccess.FamORAssem -> "famorassem"
+            | MemberAccess.Private -> "private"
+            | MemberAccess.Public -> "public"
+
+        if md.HideBySig then yield "hidebysig"
+        if md.NewVTableSlot then yield "newslot"
+
+        // TODO PINVOKE JUNK HERE
+        
+        if md.RTSpecialName then yield "rtspecialname"
+        if md.SpecialName then yield "specialname"
+        if md.IsStatic then yield "static"
+        if md.IsVirtual then yield "virtual"
+        if md.IsStrict then yield "strict"
+
+        // calling convention
+        match md.Signature.thisKind with
+        | ThisKind.NoThis -> ()
+        | ThisKind.ExplicitThis -> yield! [|"instance"; "explicit"|]
+        | ThisKind.HasThis -> yield "instance"
+
+        let methSig = md.Signature
+        yield
+            match methSig.callingConv with
+            | MethCallingConv.Default | MethCallingConv.Generic _ ->
+                // TODO are we supposed to yield "default" for generic
+                "default"
+            | MethCallingConv.Vararg ->
+                "vararg"
+
+        yield md.Name
+    |]
+
+    ifprintfn tw indent "%s ()" (spaceSepStrs methodHeader)
+    ifprintfn tw indent "{"
+    ifprintfn tw indent "}"
+
 let rec disTypeDef (tw : TextWriter) (indent : uint32) (td : TypeDef) =
     // partition II 10.1
     let classHeaderStrs = [|
@@ -135,6 +190,7 @@ let rec disTypeDef (tw : TextWriter) (indent : uint32) (td : TypeDef) =
     ifprintfn tw indent "%s" (spaceSepStrs classHeaderStrs)
     ifprintfn tw indent "{"
 
+    Array.iter (disMethodDef tw (indent + 1u)) td.Methods
     Array.iter (disTypeDef tw (indent + 1u)) td.NestedTypes
 
     ifprintfn tw indent "}"

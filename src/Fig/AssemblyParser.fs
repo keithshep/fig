@@ -1483,6 +1483,8 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
 
     member x.AssemblyResolution = assemRes
 
+    member x.Reader = r
+
 and AssemblyRef(assem : Assembly, selfIndex : int) =
     let mt = assem.MetadataTables
     let assemRefRow = mt.assemblyRefs.[selfIndex]
@@ -1720,6 +1722,16 @@ and TypeDef(assem : Assembly, selfIndex : int) =
                 yield new TypeDef(assem, ncRow.nestedClassIndex)
     |]
 
+    member x.Methods =
+        let lastMethodIndex =
+            let isLastTypeDef = selfIndex = mt.typeDefs.Length - 1
+            if isLastTypeDef then
+                mt.methodDefs.Length - 1
+            else
+                mt.typeDefs.[selfIndex + 1].methodsIndex - 1
+
+        [|for i in typeDefRow.methodsIndex .. lastMethodIndex -> new MethodDef(assem, i)|]
+
 and [<RequireQualifiedAccess>] GenericParamVariance = None | Covariant | Contravariant
 
 and [<RequireQualifiedAccess>] SpecialConstraint =
@@ -1780,7 +1792,7 @@ and Parameter (r : BinaryReader, mt : MetadataTables, selfIndex : int) =
     let pRow = mt.paramRows.[selfIndex]
     do failwith "implement me!"
 
-and MethodDef (r : BinaryReader, assem : Assembly, selfIndex : int) =
+and MethodDef (assem : Assembly, selfIndex : int) =
     let mt = assem.MetadataTables
     let mdRow = mt.methodDefs.[selfIndex]
     let isFlagSet mask = mdRow.flags &&& mask <> 0us
@@ -1789,6 +1801,7 @@ and MethodDef (r : BinaryReader, assem : Assembly, selfIndex : int) =
     member x.TableRow   = mdRow
     member x.IsCtor     = mdRow.name = ".ctor"
     member x.IsCCtor    = mdRow.name = ".cctor"
+    member x.Name       = mdRow.name
     
     member x.CodeType =
         // Section 22.26 item 34.b
@@ -1841,15 +1854,15 @@ and MethodDef (r : BinaryReader, assem : Assembly, selfIndex : int) =
     member x.RequireSecObj  = isFlagSet 0x8000us
 
     member x.Parameters =
-        let fstParamIndex = int32 mdRow.paramIndex - 1
         let lastParamIndex =
             let isLastMethodDef = selfIndex = mt.methodDefs.Length - 1
             if isLastMethodDef then
                 mt.paramRows.Length - 1
             else
-                int32 mt.methodDefs.[selfIndex + 1].paramIndex - 1
+                mt.methodDefs.[selfIndex + 1].paramIndex - 1
+        let r = assem.Reader
 
-        [|for i in fstParamIndex .. lastParamIndex -> new Parameter(r, mt, i)|]
+        [|for i in mdRow.paramIndex .. lastParamIndex -> new Parameter(r, mt, i)|]
 
     member x.MethodBody =
         if mdRow.rva = 0u then
@@ -1868,10 +1881,15 @@ and MethodDef (r : BinaryReader, assem : Assembly, selfIndex : int) =
             // c. RVA shall point into the CIL code stream in this file
             // TODO check these conditions
 
+            let r = assem.Reader
             r.BaseStream.Seek (assem.RVAToDiskPos mdRow.rva, SeekOrigin.Begin) |> ignore
 
             let insts, excepts = readMethodBody r
             Some (AbstInst.toAbstInstBlocks insts, excepts)
+
+    member x.Signature =
+        let blob = ref(assem.ReadBlobAtIndex mdRow.signatureIndex |> List.ofArray)
+        MethodDefOrRefSig.FromBlob assem blob
 
 and [<RequireQualifiedAccess>] AbstInst =
     | Add
@@ -2401,8 +2419,8 @@ with
                     MethCallingConv.Generic(readCompressedUnsignedInt <| makeReadByteFun blob)
                 else
                     MethCallingConv.Default
-            let retType = RetType.FromBlob assem blob
             let paramsRemaining = ref (readCompressedUnsignedInt (makeReadByteFun blob))
+            let retType = RetType.FromBlob assem blob
             let methParams = [
                 let hitSentinal = ref false
                 while not !hitSentinal && !paramsRemaining >= 1u do
