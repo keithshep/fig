@@ -1744,6 +1744,8 @@ and GenericParam(assem : Assembly, selfIndex : int) =
     let mt = assem.MetadataTables
     let gpRow = mt.genericParams.[selfIndex]
 
+    let isFlagSet mask = gpRow.flags &&& mask <> 0us
+
     member x.Number = gpRow.number
     member x.Name = gpRow.name
 
@@ -1754,13 +1756,9 @@ and GenericParam(assem : Assembly, selfIndex : int) =
         | 0x0002us -> GenericParamVariance.Contravariant
         | gpv -> failwithf "bad generic param variance value: %X" gpv
 
-    member x.SpecialConstraint =
-        match gpRow.flags &&& 0x001Cus with
-        | 0x0000us -> SpecialConstraint.None
-        | 0x0004us -> SpecialConstraint.ReferenceType
-        | 0x0008us -> SpecialConstraint.NotNullableValueType
-        | 0x0010us -> SpecialConstraint.DefaultConstructor
-        | sc -> failwithf "bad special constraint value: %X" sc
+    member x.ReferenceTypeConstrained = isFlagSet 0x0004us
+    member x.NotNullableValueTypeConstrained = isFlagSet 0x0008us
+    member x.DefaultConstructorConstrained = isFlagSet 0x0010us
 
     member x.Constraints : seq<TypeDefOrRef> = seq {
         for gpc in mt.genericParamConstraints do
@@ -2287,15 +2285,20 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.Sizeof typeTok -> AbstInst.Sizeof typeTok
                 | RawInst.Refanytype -> AbstInst.Refanytype
 
-            let instBlocks =
-                [|for blkIndex = 0 to blockStarts.Length - 1 do
-                    let fstInstIndex = blockStarts.[blkIndex]
-                    let lstInstIndex =
+            let instBlocks = [|
+                for blkIndex = 0 to blockStarts.Length - 1 do
+                    let firstInstIndex = blockStarts.[blkIndex]
+                    let lastInstIndex =
                         if blkIndex = blockStarts.Length - 1 then
                             numInsts - 1
                         else
                             blockStarts.[blkIndex + 1] - 1
-                    yield [|for instIndex in fstInstIndex .. lstInstIndex -> toAbstInst instIndex|]|]
+
+                    yield [|
+                        for instIndex in firstInstIndex .. lastInstIndex ->
+                            toAbstInst instIndex, sizes.[instIndex]
+                    |]
+            |]
             
             instBlocks
 
@@ -2303,23 +2306,30 @@ and [<RequireQualifiedAccess>] AbstInst =
 // BLOB PARSING
 //
 
-and [<RequireQualifiedAccess>] CustomModBlob =
-    | CmodOpt of TypeDefOrRef
-    | CmodReqd of TypeDefOrRef
-    with
-        static member FromBlob (assem : Assembly) (blob : byte list ref) =
-            match listRead blob with
-            | None -> failwith "unexpected end of blob while reading custom mod"
-            | Some b ->
+and [<RequireQualifiedAccess>] CustomModBlob = {
+    isRequired : bool
+    theType : TypeDefOrRef
+}
+with
+    static member FromBlob (assem : Assembly) (blob : byte list ref) =
+        match listRead blob with
+        | None -> failwith "unexpected end of blob while reading custom mod"
+        | Some b ->
+            let isReq =
                 match enum<ElementType>(int b) with
-                | ElementType.CmodOpt -> CmodOpt (TypeDefOrRef.FromBlob assem blob)
-                | ElementType.CmodReqd -> CmodReqd (TypeDefOrRef.FromBlob assem blob)
+                | ElementType.CmodOpt -> false //CmodOpt (TypeDefOrRef.FromBlob assem blob)
+                | ElementType.CmodReqd -> true //CmodReqd (TypeDefOrRef.FromBlob assem blob)
                 | et -> failwithf "unexpected element type while reading custom mod: %A" et
 
-        static member ManyFromBlob (assem : Assembly) (blob : byte list ref) =
-            let notEndOfCustMods (b : byte) =
-                b = byte ElementType.CmodOpt || b = byte ElementType.CmodReqd
-            readBlobWhile notEndOfCustMods (CustomModBlob.FromBlob assem) blob
+            {
+                CustomModBlob.isRequired = isReq
+                theType = TypeDefOrRef.FromBlob assem blob
+            }
+
+    static member ManyFromBlob (assem : Assembly) (blob : byte list ref) =
+        let notEndOfCustMods (b : byte) =
+            b = byte ElementType.CmodOpt || b = byte ElementType.CmodReqd
+        readBlobWhile notEndOfCustMods (CustomModBlob.FromBlob assem) blob
 
 and [<RequireQualifiedAccess>] TypeBlob =
     | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 | I8 | U8 | R4 | R8 | I | U

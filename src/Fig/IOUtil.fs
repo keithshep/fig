@@ -3,18 +3,20 @@ module Fig.IOUtil
 open System.IO
 open System.Text
 
+let private indentStr = "  "
+
 // an indented version of the fprintfn function
 let ifprintf (tr : TextWriter) (depth : uint32) fmt =
     let printIndented (s : string) =
         for _ in 1u .. depth do
-            tr.Write "    "
+            tr.Write indentStr
         tr.Write s
     Printf.ksprintf printIndented fmt
 
 let ifprintfn (tr : TextWriter) (depth : uint32) fmt =
     let printIndented (s : string) =
         for _ in 1u .. depth do
-            tr.Write "    "
+            tr.Write indentStr
         tr.WriteLine s
     Printf.ksprintf printIndented fmt
 
