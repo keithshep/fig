@@ -29,10 +29,6 @@ let listRead (xs : 'a list ref) : 'a option =
     | x :: xt ->
         xs := xt
         Some x
-let listPeek (xs : 'a list ref) : 'a option =
-    match !xs with
-    | [] -> None
-    | x :: _ -> Some x
 let listSkip (xs : 'a list ref) : unit =
     match !xs with
     | [] -> failwith "cannot skip an empty list"

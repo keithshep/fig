@@ -1565,7 +1565,7 @@ and [<AbstractClass>] TypeDefOrRef() =
     static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeDefOrRef =
         // see partition II 23.2.8 TypeDefOrRefOrSpecEncoded
         let encoding = readCompressedUnsignedInt (makeReadByteFun blob)
-        let rowIndex = int (encoding >>> 2)
+        let rowIndex = int (encoding >>> 2) - 1
         let tableKind =
             match encoding &&& 0b11u with
             | 0u -> MetadataTableKind.TypeDefKind
@@ -1683,7 +1683,6 @@ and TypeDef(assem : Assembly, selfIndex : int) =
     member x.IsSerializable = isFlagSet 0x00002000u
 
     member x.StringFormattingAttr =
-        let stringFormatMask = 0x00030000u
         match typeDefRow.flags &&& 0x00030000u with
         | 0x00000000u -> StringFmtAttr.Ansi
         | 0x00010000u -> StringFmtAttr.Unicode
@@ -1796,6 +1795,74 @@ and MethodDef (assem : Assembly, selfIndex : int) =
     let isFlagSet mask = mdRow.flags &&& mask <> 0us
     let isImplFlagSet mask = mdRow.implFlags &&& mask <> 0us
 
+    let readLocalVars (localVarSigTok : uint32) : LocalVarSig array =
+        // A LocalVarSig is indexed by the StandAloneSig.Signature column.
+        // It captures the type of all the local variables in a method.
+        if localVarSigTok = 0u then
+            [||]
+        else
+            match toMetadataToken localVarSigTok with
+            | Some MetadataTableKind.StandAloneSigKind, row ->
+                let sigRow = mt.standAloneSigs.[row]
+                let blob = ref(assem.ReadBlobAtIndex sigRow.signatureIndex |> List.ofArray)
+                LocalVarSig.FromBlob assem blob
+            | tblKind, _ ->
+                failwithf "Unexpected table kind for localVarSigTok: %A" tblKind
+
+    let readMethodBody (r : BinaryReader) =
+        let fstByte = r.ReadByte ()
+
+        let isTinyFmt =
+            match fstByte &&& 0x03uy with
+            | 0x02uy -> true
+            | 0x03uy -> false
+            | n -> failwithf "bad method body format 0x%X" n
+
+        if isTinyFmt then
+            let mbSize = fstByte >>> 2
+            debugfn "tiny header: size=%i" mbSize
+
+            {
+                MethodBody.maxStack = 8us
+                initLocals = false
+                locals = [||]
+                blocks = AbstInst.toAbstInstBlocks <| readInsts r (uint32 mbSize)
+                exceptionClauses = [||]
+            }
+        else
+            let moreSects = fstByte &&& 0x08uy <> 0uy
+            let initLocals = fstByte &&& 0x10uy <> 0uy
+            let headerSize = r.ReadByte () >>> 4
+            if headerSize <> 3uy then
+                failwith "expected method body header size to be 3 but it's %i" headerSize
+            let maxStack = r.ReadUInt16 ()
+            let codeSize = r.ReadUInt32 ()
+            let localVarSigTok = r.ReadUInt32 ()
+
+            debugfn
+                "fat header: moreSects=%b, initLocals=%b, headerSize=%i, maxStack=%i, codeSize=%i, localVarSigTok=%i"
+                moreSects
+                initLocals
+                headerSize
+                maxStack
+                codeSize
+                localVarSigTok
+
+            let insts = readInsts r codeSize
+            let exceptionSecs = ExceptionClause.ReadExceptionSections r moreSects codeSize
+            let locals = readLocalVars localVarSigTok
+
+            {
+                MethodBody.maxStack = maxStack
+                initLocals = initLocals
+                locals = locals
+                blocks = AbstInst.toAbstInstBlocks insts
+                exceptionClauses = exceptionSecs
+            }
+
+    member x.Assembly   = assem
+    member x.RowIndex   = selfIndex
+
     member x.TableRow   = mdRow
     member x.IsCtor     = mdRow.name = ".ctor"
     member x.IsCCtor    = mdRow.name = ".cctor"
@@ -1882,12 +1949,19 @@ and MethodDef (assem : Assembly, selfIndex : int) =
             let r = assem.Reader
             r.BaseStream.Seek (assem.RVAToDiskPos mdRow.rva, SeekOrigin.Begin) |> ignore
 
-            let insts, excepts = readMethodBody r
-            Some (AbstInst.toAbstInstBlocks insts, excepts)
+            Some (readMethodBody r)
 
     member x.Signature =
         let blob = ref(assem.ReadBlobAtIndex mdRow.signatureIndex |> List.ofArray)
         MethodDefOrRefSig.FromBlob assem blob
+
+and MethodBody = {
+    maxStack : uint16
+    initLocals : bool
+    locals : LocalVarSig array
+    blocks : (AbstInst * uint32) array array
+    exceptionClauses : ExceptionClause array array
+}
 
 and [<RequireQualifiedAccess>] AbstInst =
     | Add
@@ -2060,11 +2134,10 @@ and [<RequireQualifiedAccess>] AbstInst =
     | Sizeof of MetadataToken
     | Refanytype
     with
-        static member toAbstInstBlocks (instsWithSizes : array<RawInst * uint32>) =
+        static member toAbstInstBlocks (instsWithSizes : array<RawInst * uint32>) : (AbstInst * uint32) array array =
             let numInsts = instsWithSizes.Length
             let insts, sizes = Array.unzip instsWithSizes
             let instPositions = Array.scan (+) 0u sizes
-            let codeSize = instPositions.[numInsts]
             let instPositions = instPositions.[0 .. numInsts - 1]
 
             let tgtToInstIndex (srcInstIndex : int) (relTgt : int) =
@@ -2306,6 +2379,197 @@ and [<RequireQualifiedAccess>] AbstInst =
 // BLOB PARSING
 //
 
+and SpecifiedLocalVar = {
+    pinned : bool
+    custMods : CustomModBlob array
+    mayByRefType : MaybeByRefType
+}
+and LocalVarSig =
+    | SpecifiedType of SpecifiedLocalVar
+    | TypedByRef
+    with
+        static member FromBlob (assem : Assembly) (blob : byte list ref) =
+            let unexpEnd() = failwith "unexpected end of blob while reading LocalVarSig"
+            match listRead blob with
+            | Some 0x07uy ->
+                let readByteFun = makeReadByteFun blob
+                let count = readCompressedUnsignedInt readByteFun
+                
+                [|for _ in 1u .. count do
+                    yield
+                        match !blob with
+                        | [] -> unexpEnd()
+                        | ElTy ElementType.TypedByRef :: _ ->
+                            listSkip blob
+                            LocalVarSig.TypedByRef
+                        | _ ->
+                            let isPinned = ref false
+                            let custMods = [|
+                                let notDone = ref true
+                                while !notDone do
+                                    match !blob with
+                                    | [] -> unexpEnd()
+                                    | ElTy ElementType.Pinned :: _ ->
+                                        if !isPinned then failwith "field set to pinned twice"
+                                        listSkip blob
+                                        isPinned := true
+                                    | ElTy (ElementType.CmodOpt | ElementType.CmodReqd) :: _ ->
+                                        yield CustomModBlob.FromBlob assem blob
+                                    | _ -> notDone := false
+                            |]
+                            let maybeByRefTy = MaybeByRefType.FromBlob assem blob
+                            let specTy = {
+                                SpecifiedLocalVar.pinned = !isPinned
+                                custMods = custMods
+                                mayByRefType = maybeByRefTy
+                            }
+                            LocalVarSig.SpecifiedType specTy|]
+
+            | Some b -> failwithf "expected LocalVarSig to start with 0x07 but observed 0x%X" b
+            | None -> unexpEnd()
+
+and TryAndHandler = {
+    tryOffsetLen : uint32 * uint32
+    handlerOffsetLen : uint32 * uint32}
+
+and ExceptionClause =
+    | TypedException of TryAndHandler * MetadataToken
+    | Finally of TryAndHandler * MetadataToken // TODO do we really need MetadataToken here?
+    | Fault of TryAndHandler * MetadataToken // TODO do we really need MetadataToken here?
+
+    // Section 12.4.2.7: If an exception entry contains a filterstart, then
+    // filterstart strictly precedes handlerstart. The filter starts at the
+    // instruction specified by filterstart and contains all instructions up to
+    // (but not including) that specified by handlerstart. The lexically last
+    // instruction in the filter must be endfilter. If there is no filterstart
+    // then the filter is empty (hence it does not overlap with any region).
+    | Filter of TryAndHandler * uint32
+    with
+        static member private ToExceptionClause
+                (eFlags : uint32)
+                (tryOffset : uint32)
+                (tryLen : uint32)
+                (handlerOffset : uint32)
+                (handlerLen : uint32)
+                (offsetOrClassTok : uint32) =
+
+            let tryAndHdlr = {
+                tryOffsetLen = tryOffset, tryLen
+                handlerOffsetLen = handlerOffset, handlerLen}
+            match eFlags with
+            | 0x0000u -> TypedException (tryAndHdlr, toMetadataToken offsetOrClassTok)
+            | 0x0001u -> Filter (tryAndHdlr, offsetOrClassTok)
+            | 0x0002u -> Finally (tryAndHdlr, toMetadataToken offsetOrClassTok)
+            | 0x0004u -> Fault (tryAndHdlr, toMetadataToken offsetOrClassTok)
+            | _ -> failwithf "bad exception clause kind 0x%X" eFlags
+
+        static member private ReadFatExceptionClauses (r : BinaryReader) =
+            // Section 25.4.3
+            let dataSize =
+                match r.ReadBytes 3 with
+                | [|b1; b2; b3|] ->
+                    // these are little-endian, so little bytes first
+                    uint32 b1 ||| (uint32 b2 <<< 8) ||| (uint32 b3 <<< 16)
+                | _ ->
+                    failwith "unexpected end of file while reading data section"
+            let numClauses = (dataSize - 4u) / 24u
+
+            if (numClauses * 24u) + 4u <> dataSize then
+                failwithf "bad dataSize in fat section: %i" dataSize
+    
+            // See 25.4.6 reading fat clauses
+            [|for _ in 1u .. numClauses ->
+                debugfn "reading fat clause"
+                let eFlags = r.ReadUInt32 ()
+                let tryOffset = r.ReadUInt32 ()
+                let tryLen = r.ReadUInt32 ()
+                let handlerOffset = r.ReadUInt32 ()
+                let handlerLen = r.ReadUInt32 ()
+                let offsetOrClassTok = r.ReadUInt32 ()
+
+                debugfn
+                    "eFlags=0x%X, tryOffset=%i, tryLen=%i, handlerOffset=%i, handlerLen=%i, offsetOrClassTok=%i"
+                    eFlags
+                    tryOffset
+                    tryLen
+                    handlerOffset
+                    handlerLen
+                    offsetOrClassTok
+
+                ExceptionClause.ToExceptionClause
+                    eFlags
+                    tryOffset
+                    tryLen
+                    handlerOffset
+                    handlerLen
+                    offsetOrClassTok|]
+
+        static member private ReadSmallExceptionClauses (r : BinaryReader) =
+            // Section 25.4.2
+            let dataSize = r.ReadByte ()
+            let numClauses = (dataSize - 4uy) / 12uy
+            readShortEq r 0us "small method header reserved"
+    
+            if (numClauses * 12uy) + 4uy <> dataSize then
+                failwithf "bad dataSize in small section: %i" dataSize
+    
+            // See 25.4.6 reading small clauses
+            [|for _ in 1uy .. numClauses ->
+                debugfn "reading small clause"
+                let eFlags = r.ReadUInt16 () |> uint32
+                let tryOffset = r.ReadUInt16 () |> uint32
+                let tryLen = r.ReadByte () |> uint32
+                let handlerOffset = r.ReadUInt16 () |> uint32
+                let handlerLen = r.ReadByte () |> uint32
+                let offsetOrClassTok = r.ReadUInt32 ()
+
+                debugfn
+                    "eFlags=0x%X, tryOffset=%i, tryLen=%i, handlerOffset=%i, handlerLen=%i, offsetOrClassTok=%i"
+                    eFlags
+                    tryOffset
+                    tryLen
+                    handlerOffset
+                    handlerLen
+                    offsetOrClassTok
+
+                ExceptionClause.ToExceptionClause
+                    eFlags
+                    tryOffset
+                    tryLen
+                    handlerOffset
+                    handlerLen
+                    offsetOrClassTok|]
+
+        static member ReadExceptionSections (r : BinaryReader) (moreSects : bool) (codeSize : uint32) =
+            let moreSects = ref moreSects
+            [|while !moreSects do
+                debugfn "reading exception section"
+        
+                // the method data sits on a 4-byte boundary. Seek past
+                // boundary bytes
+                let codeRem = codeSize % 4u
+                if codeRem <> 0u then
+                    let seekDist = 4L - int64 codeRem
+                    r.BaseStream.Seek (seekDist, SeekOrigin.Current) |> ignore
+
+                let kindFlags = r.ReadByte ()
+                let isException = kindFlags &&& 0x01uy <> 0uy
+                if not isException then
+                    failwith "expected exception flag to be set"
+                let optILTable = kindFlags &&& 0x02uy <> 0uy
+                if optILTable then
+                    failwith "expected optILTable flag to be unset"
+                let isFatFormat = kindFlags &&& 0x40uy <> 0uy
+                moreSects := kindFlags &&& 0x80uy <> 0uy
+
+                debugfn "exception is fat: %b" isFatFormat
+
+                yield
+                    if isFatFormat then
+                        ExceptionClause.ReadFatExceptionClauses r
+                    else
+                        ExceptionClause.ReadSmallExceptionClauses r|]
+
 and [<RequireQualifiedAccess>] CustomModBlob = {
     isRequired : bool
     theType : TypeDefOrRef
@@ -2317,8 +2581,8 @@ with
         | Some b ->
             let isReq =
                 match enum<ElementType>(int b) with
-                | ElementType.CmodOpt -> false //CmodOpt (TypeDefOrRef.FromBlob assem blob)
-                | ElementType.CmodReqd -> true //CmodReqd (TypeDefOrRef.FromBlob assem blob)
+                | ElementType.CmodOpt -> false
+                | ElementType.CmodReqd -> true
                 | et -> failwithf "unexpected element type while reading custom mod: %A" et
 
             {
@@ -2349,9 +2613,9 @@ and [<RequireQualifiedAccess>] TypeBlob =
     | GenericInst of bool * TypeDefOrRef * List<TypeBlob>
     with
         static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeBlob =
-            match listPeek blob with
-            | None -> failwith "unexpected end of blob while reading type"
-            | Some b ->
+            match !blob with
+            | [] -> failwith "unexpected end of blob while reading type"
+            | b :: _ ->
                 let readUInt() = readCompressedUnsignedInt (makeReadByteFun blob)
                 match enum<ElementType>(int b) with
                 | ElementType.Boolean       -> listSkip blob; Boolean
@@ -2388,9 +2652,9 @@ and [<RequireQualifiedAccess>] TypeBlob =
 and MaybeByRefType = {isByRef : bool; ty : TypeBlob}
 with
     static member FromBlob (assem : Assembly) (blob : byte list ref) =
-        match listPeek blob with
-        | None -> failwith "unexpected end of blob while reading MaybeByRefType"
-        | Some b ->
+        match !blob with
+        | [] -> failwith "unexpected end of blob while reading MaybeByRefType"
+        | b :: _ ->
             let isByRef =
                 match enum<ElementType>(int b) with
                 | ElementType.ByRef -> listSkip blob; true
@@ -2434,8 +2698,8 @@ with
             let methParams = [
                 let hitSentinal = ref false
                 while not !hitSentinal && !paramsRemaining >= 1u do
-                    match listPeek blob with
-                    | Some (ElTy ElementType.Sentinel) ->
+                    match !blob with
+                    | ElTy ElementType.Sentinel :: _ ->
                         listSkip blob
                         hitSentinal := true
                     | _ ->
@@ -2466,9 +2730,9 @@ and Param = {
 with
     static member FromBlob (assem : Assembly) (blob : byte list ref) : Param =
         let custMods = CustomModBlob.ManyFromBlob assem blob
-        match listPeek blob with
-        | None -> failwith "unexpected end of blob while reading ParamType"
-        | Some b ->
+        match !blob with
+        | [] -> failwith "unexpected end of blob while reading ParamType"
+        | b :: _ ->
             let pType =
                 match enum<ElementType>(int b) with
                 | ElementType.TypedByRef -> listSkip blob; ParamType.TypedByRef
@@ -2486,9 +2750,9 @@ and RetType = {
 with
     static member FromBlob (assem : Assembly) (blob : byte list ref) : RetType =
         let custMods = CustomModBlob.ManyFromBlob assem blob
-        match listPeek blob with
-        | None -> failwith "unexpected end of blob while reading RetType"
-        | Some b ->
+        match !blob with
+        | [] -> failwith "unexpected end of blob while reading RetType"
+        | b :: _ ->
             let rType =
                 match enum<ElementType>(int b) with
                 | ElementType.TypedByRef -> listSkip blob; RetTypeKind.TypedByRef
@@ -2531,9 +2795,9 @@ and [<RequireQualifiedAccess>] TypeSpecBlob =
 
                 match enum<ElementType>(int b) with
                 | ElementType.Ptr ->
-                    match listPeek blob with
-                    | None -> unexpEnd()
-                    | Some(ElTy ElementType.Void) ->
+                    match !blob with
+                    | [] -> unexpEnd()
+                    | ElTy ElementType.Void :: _ ->
                         listSkip blob
                         Ptr(custModList(), None)
                     | _ ->

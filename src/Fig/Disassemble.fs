@@ -419,19 +419,45 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (md : MethodDef) =
     
     match md.MethodBody with
     | None -> ()
-    | Some (blocks, execpts) ->
+    | Some mb ->
+        let indent = indent + 1u
+        ifprintfn tw indent ".maxstack %i" mb.maxStack
+
+        if mb.locals.Length >= 1 then
+            let localToStr (i : int) =
+                match mb.locals.[i] with
+                | LocalVarSig.TypedByRef -> failwith "TODO yeah how do I represent this"
+                | LocalVarSig.SpecifiedType specLocalVar ->
+                    if specLocalVar.custMods.Length >= 1 then
+                        failwith "TODO yup custMods"
+                    if specLocalVar.pinned then
+                        failwith "TODO what do i do with a pinned local"
+                    if specLocalVar.mayByRefType.isByRef then
+                        failwith "TODO what do i do with this byref?"
+                    let tyStr = typeBlobToStr specLocalVar.mayByRefType.ty
+                    sprintf "%s V_%i" tyStr i
+
+            if mb.initLocals then
+                ifprintfn tw indent ".locals init ("
+            else
+                ifprintfn tw indent ".locals ("
+
+            for i = 0 to mb.locals.Length - 2 do
+                ifprintfn tw (indent + 1u) "%s," (localToStr i)
+            ifprintfn tw (indent + 1u) "%s)" (localToStr (mb.locals.Length - 1))
+        
         let currAddr = ref 0u
         let blockLabels = [|
-            for block in blocks do
+            for block in mb.blocks do
                 yield labelAt !currAddr
                 for _, instSize in block do
                     currAddr := !currAddr + instSize
         |]
 
         let mutable currAddr = 0u
-        for block in blocks do
+        for block in mb.blocks do
             for inst, instSize in block do
-                disInst tw (indent + 1u) blockLabels currAddr inst
+                disInst tw indent blockLabels currAddr inst
                 currAddr <- currAddr + instSize
 
     ifprintfn tw indent "}"
