@@ -30,6 +30,123 @@ let versionString (assemRef : AssemblyRef) =
     string assemRef.RevisionNumber + ":" +
     string assemRef.BuildNumber
 
+let custModString (cm : CustomModBlob) =
+    let reqStr =
+        if cm.isRequired then
+            "modreq"
+        else
+            "modopt"
+    sprintf "%s (%s)" reqStr cm.theType.FullName
+
+let methSigToString (methSig : MethodDefOrRefSig) =
+    "TODO_METH_SIG"
+
+let shapeString (arrShape : ArrayShape) =
+    commaSepStrs [|
+        for i = 0 to int arrShape.rank - 1 do
+            let hasLoBound = i < arrShape.loBounds.Length
+            let loBound() = int arrShape.loBounds.[i]
+            let hasSize = i < arrShape.sizes.Length
+            let size() = int arrShape.sizes.[i]
+
+            if hasLoBound then
+                yield string <| loBound()
+                yield "..."
+                if hasSize then
+                    yield string <| loBound() + size() - 1
+            elif hasSize then
+                yield string <| size()
+            else
+                yield ""
+    |]
+
+let rec typeBlobToStr (ty : TypeBlob) =
+    match ty with
+    | TypeBlob.Boolean -> "bool"
+    | TypeBlob.Char -> "char"
+    | TypeBlob.I1 -> "int8"
+    | TypeBlob.U1 -> "unsigned int8"
+    | TypeBlob.I2 -> "int16"
+    | TypeBlob.U2 -> "unsigned int16"
+    | TypeBlob.I4 -> "int32"
+    | TypeBlob.U4 -> "unsigned int32"
+    | TypeBlob.I8 -> "int64"
+    | TypeBlob.U8 -> "unsigned int64"
+    | TypeBlob.R4 -> "float32"
+    | TypeBlob.R8 -> "float64"
+    | TypeBlob.I -> "native int"
+    | TypeBlob.U -> "native unsigned int"
+    | TypeBlob.Class tyDefOrRef -> "class " + tyDefOrRef.FullName
+    | TypeBlob.MVar i -> "!!" + string i
+    | TypeBlob.Object -> "object"
+    | TypeBlob.String -> "string"
+    | TypeBlob.ValueType tyDefOrRef -> "valuetype " + tyDefOrRef.FullName
+    | TypeBlob.Var i -> "!" + string i
+
+    // the following are also in type spec
+    | TypeBlob.Ptr (custMods, tyOpt) ->
+        spaceSepStrs [|
+            match tyOpt with
+            | None      -> yield "void*"
+            | Some ty   -> yield typeBlobToStr ty + "*"
+
+            yield! List.map custModString custMods
+        |]
+
+    | TypeBlob.FnPtr methDefOrRef ->
+        spaceSepStrs [|
+            yield "method"
+
+            match methDefOrRef.thisKind with
+            | ThisKind.NoThis -> ()
+            | ThisKind.ExplicitThis -> yield! [|"instance"; "explicit"|]
+            | ThisKind.HasThis -> yield "instance"
+
+            yield "*"
+            yield "(TODO_PARAMS_GO_HERE)"
+        |]
+    | TypeBlob.Array (tyBlob, arrShape) ->
+        typeBlobToStr tyBlob + "[" + shapeString arrShape + "]"
+    | TypeBlob.SzArray (custMods, tyBlob) -> //of List<CustomModBlob> * TypeBlob
+        spaceSepStrs [|
+            yield typeBlobToStr tyBlob
+            yield! List.map custModString custMods
+        |]
+    // GenericInst bool isClass with false indicating valuetype
+    | TypeBlob.GenericInst (isClass, tyDefOrRef, tyBlobs) -> //of bool * TypeDefOrRef * List<TypeBlob>
+        spaceSepStrs [|
+            "TODO_GENERIC_INST"
+        |]
+
+let paramTypeToStr (paramTy : ParamType) =
+    match paramTy with
+    | ParamType.MayByRefTy mayByTyRef ->
+        if mayByTyRef.isByRef then
+            typeBlobToStr mayByTyRef.ty + "&"
+        else
+            typeBlobToStr mayByTyRef.ty
+    | ParamType.TypedByRef ->
+        failwith "TODO no can do for typedbyref"
+
+let typeDefToStr (td : TypeDef) =
+    let tkStr =
+        match td.TypeKind with
+        | TypeKind.Class -> "class"
+        | TypeKind.Valuetype -> "valuetype"
+        | tk -> failwithf "TODO woah don't know how to deal with %A" tk
+    tkStr + " " + td.FullName
+
+let returnTypeToStr (retTy : RetType) =
+    if retTy.customMods.Length >= 1 then
+        failwith "TODO need to deal with custmods in return type"
+    match retTy.rType with
+    | RetTypeKind.Void -> "void"
+    | RetTypeKind.TypedByRef -> failwith "TODO deal with typed by ref return type"
+    | RetTypeKind.MayByRefTy mayByRefTy ->
+        if mayByRefTy.isByRef then
+            failwith "TODO not yet dealing with by ref return type"
+        typeBlobToStr mayByRefTy.ty
+
 let disInst
         (tw : TextWriter)
         (indent : uint32)
@@ -57,8 +174,32 @@ let disInst
     | AbstInst.Break -> "break" |> pr
     | AbstInst.Brfalse tgt -> "brfalse " + blockLabels.[tgt] |> pr
     | AbstInst.Brtrue tgt -> "brtrue " + blockLabels.[tgt] |> pr
+    | AbstInst.Call call ->
+        let instStr =
+            spaceSepStrs [|
+                yield "call"
+
+                // TODO change the following to call.Method.Resolve
+                match call.Method with
+                | :? MethodDef as meth ->
+                    //yield if meth.IsStatic then "class" else "instance"
+                    if not meth.IsStatic then yield "instance"
+                    yield returnTypeToStr meth.Signature.retType
+                    yield sprintf "%s::%s(" (typeDefToStr meth.DeclaringType) meth.Name
+                    //yield "TODO PARAMS"
+                    yield commaSepStrs [|
+                        for p in meth.Signature.methParams do
+                            yield spaceSepStrs [|
+                                yield! List.map custModString p.customMods
+                                yield paramTypeToStr p.pType
+                            |]
+                    |]
+                    yield ")"
+                | _ ->
+                    yield "TODO impl call for non-MethodDef"
+            |]
+        pr instStr
     (*
-    | AbstInst.Call of bool * MetadataToken
     | AbstInst.Calli of bool * MetadataToken
     | AbstInst.Callvirt of MetadataToken option * bool * MetadataToken
     *)
@@ -247,94 +388,6 @@ let disInst
     | _ ->
         //sprintf "TODO %A" inst |> pr
         "TODO" |> pr
-
-let custModString (cm : CustomModBlob) =
-    let reqStr =
-        if cm.isRequired then
-            "modreq"
-        else
-            "modopt"
-    sprintf "%s (%s)" reqStr cm.theType.FullName
-
-let methSigToString (methSig : MethodDefOrRefSig) =
-    "TODO_METH_SIG"
-
-let shapeString (arrShape : ArrayShape) =
-    commaSepStrs [|
-        for i = 0 to int arrShape.rank - 1 do
-            let hasLoBound = i < arrShape.loBounds.Length
-            let loBound() = int arrShape.loBounds.[i]
-            let hasSize = i < arrShape.sizes.Length
-            let size() = int arrShape.sizes.[i]
-
-            if hasLoBound then
-                yield string <| loBound()
-                yield "..."
-                if hasSize then
-                    yield string <| loBound() + size() - 1
-            elif hasSize then
-                yield string <| size()
-            else
-                yield ""
-    |]
-
-let rec typeBlobToStr (ty : TypeBlob) =
-    match ty with
-    | TypeBlob.Boolean -> "bool"
-    | TypeBlob.Char -> "char"
-    | TypeBlob.I1 -> "int8"
-    | TypeBlob.U1 -> "unsigned int8"
-    | TypeBlob.I2 -> "int16"
-    | TypeBlob.U2 -> "unsigned int16"
-    | TypeBlob.I4 -> "int32"
-    | TypeBlob.U4 -> "unsigned int32"
-    | TypeBlob.I8 -> "int64"
-    | TypeBlob.U8 -> "unsigned int64"
-    | TypeBlob.R4 -> "float32"
-    | TypeBlob.R8 -> "float64"
-    | TypeBlob.I -> "native int"
-    | TypeBlob.U -> "native unsigned int"
-    | TypeBlob.Class tyDefOrRef -> "class " + tyDefOrRef.FullName
-    | TypeBlob.MVar i -> "!!" + string i
-    | TypeBlob.Object -> "object"
-    | TypeBlob.String -> "string"
-    | TypeBlob.ValueType tyDefOrRef -> "valuetype " + tyDefOrRef.FullName
-    | TypeBlob.Var i -> "!" + string i
-
-    // the following are also in type spec
-    | TypeBlob.Ptr (custMods, tyOpt) -> //of List<CustomModBlob> * Option<TypeBlob>
-        spaceSepStrs [|
-            match tyOpt with
-            | None      -> yield "void*"
-            | Some ty   -> yield typeBlobToStr ty + "*"
-
-            yield! List.map custModString custMods
-        |]
-
-    | TypeBlob.FnPtr methDefOrRef -> // of MethodDefOrRefSig
-        spaceSepStrs [|
-            yield "method"
-
-            match methDefOrRef.thisKind with
-            | ThisKind.NoThis -> ()
-            | ThisKind.ExplicitThis -> yield! [|"instance"; "explicit"|]
-            | ThisKind.HasThis -> yield "instance"
-
-            yield "*"
-            yield "(TODO_PARAMS_GO_HERE)"
-        |]
-    | TypeBlob.Array (tyBlob, arrShape) ->
-        typeBlobToStr tyBlob + "[" + shapeString arrShape + "]"
-    | TypeBlob.SzArray (custMods, tyBlob) -> //of List<CustomModBlob> * TypeBlob
-        spaceSepStrs [|
-            yield typeBlobToStr tyBlob
-            yield! List.map custModString custMods
-        |]
-    // GenericInst bool isClass with false indicating valuetype
-    | TypeBlob.GenericInst (isClass, tyDefOrRef, tyBlobs) -> //of bool * TypeDefOrRef * List<TypeBlob>
-        spaceSepStrs [|
-            "TODO_GENERIC_INST"
-        |]
 
 let genConstrToStr (genConstr : TypeDefOrRef) =
     // Partition II 10.1.7 Generic parameters (GenPars)

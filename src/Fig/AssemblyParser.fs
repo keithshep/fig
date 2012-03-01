@@ -1562,6 +1562,11 @@ and [<AbstractClass>] TypeDefOrRef() =
         else
             Some(TypeDefOrRef.FromKindAndIndex assem mt rowIndex)
 
+    static member FromMetadataToken (assem : Assembly) (mt : MetadataToken) : TypeDefOrRef =
+        match mt with
+        | Some tableKind, i -> TypeDefOrRef.FromKindAndIndex assem tableKind i
+        | None, _ -> failwith "failed to convert token into a type"
+
     static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeDefOrRef =
         // see partition II 23.2.8 TypeDefOrRefOrSpecEncoded
         let encoding = readCompressedUnsignedInt (makeReadByteFun blob)
@@ -1639,6 +1644,7 @@ and [<RequireQualifiedAccess>] TypeVisibilityAttr =
 
 and [<RequireQualifiedAccess>] ClassLayoutAttr = Auto | Sequential | Explicit
 and [<RequireQualifiedAccess>] StringFmtAttr = Ansi | Unicode | Auto | Custom
+and [<RequireQualifiedAccess>] TypeKind = Interface | Class | Valuetype | Enum | Delegate
 
 and TypeDef(assem : Assembly, selfIndex : int) =
     inherit TypeDefOrRef()
@@ -1731,6 +1737,48 @@ and TypeDef(assem : Assembly, selfIndex : int) =
 
         [|for i in typeDefRow.methodsIndex .. lastMethodIndex -> new MethodDef(assem, i)|]
 
+    member x.TypeKind : TypeKind =
+
+        // From partition II section 22.37
+        // There is one system-defined root, System.Object. All Classes and ValueTypes shall
+        // derive, ultimately, from System.Object; Classes can derive from other Classes
+        // (through a single, non-looping chain) to any depth required.
+        //
+        // Interfaces do not inherit from one another; however, they can have zero or more
+        // required interfaces, which shall be implemented. The Interface requirement chain
+        // is shown as light, dashed arrows. This includes links between Interfaces and
+        // Classes/ValueTypes – where the latter are said to implement that interface or
+        // interfaces.
+        //
+        // Regular ValueTypes (i.e., excluding Enums – see later) are defined as deriving
+        // directly from System.ValueType. Regular ValueTypes cannot be derived to a depth
+        // of more than one. (Another way to state this is that user-defined ValueTypes
+        // shall be sealed.) User-defined Enums shall derive directly from System.Enum. Enums
+        // cannot be derived to a depth of more than one below System.Enum. (Another way to
+        // state this is that user-defined Enums shall be sealed.) System.Enum derives
+        // directly from System.ValueType.
+        //
+        // User-defined delegates derive from System.Delegate. Delegates cannot be derived
+        // to a depth of more than one.
+        
+        if x.IsInterface then
+            TypeKind.Interface
+        else
+            // TODO is this approach robust?
+            let immediateKindOf (t : TypeDefOrRef) =
+                match t.Namespace, t.Name with
+                | "System", "Object" -> Some TypeKind.Class
+                | "System", "ValueType" -> Some TypeKind.Valuetype
+                | "System", "Delegate" -> Some TypeKind.Delegate
+                | "System", "Enum" -> Some TypeKind.Enum
+                | _ -> None
+            match immediateKindOf x with
+            | Some tk -> tk
+            | None ->
+                match immediateKindOf (Option.get x.Extends) with
+                | Some tk -> tk
+                | None -> TypeKind.Class
+
 and [<RequireQualifiedAccess>] GenericParamVariance = None | Covariant | Contravariant
 
 and [<RequireQualifiedAccess>] SpecialConstraint =
@@ -1787,9 +1835,53 @@ and [<RequireQualifiedAccess>] MemberAccess =
 
 and Parameter (r : BinaryReader, mt : MetadataTables, selfIndex : int) =
     let pRow = mt.paramRows.[selfIndex]
-    do failwith "implement me!"
+    
+    member x.Name = pRow.name
+    member x.Sequence = pRow.sequence
+
+and [<AbstractClass>] Method() =
+    abstract Name : string with get
+    abstract Resolve : MethodDef with get
+    abstract Signature : MethodDefOrRefSig with get
+
+    static member FromKindAndIndex (assem : Assembly) (kind : MetadataTableKind) (i : int) : Method =
+        match kind with
+        | MetadataTableKind.MethodDefKind -> upcast new MethodDef(assem, i)
+        | MetadataTableKind.MethodSpecKind -> upcast new MethodSpec(assem, i)
+        | MetadataTableKind.MemberRefKind -> upcast new MethodRef(assem, i)
+        | _ -> failwith "failed to convert token into a method"
+
+    static member FromMetadataToken (assem : Assembly) (mt : MetadataToken) : Method =
+        match mt with
+        | Some tableKind, i -> Method.FromKindAndIndex assem tableKind i
+        | None, _ -> failwith "failed to convert token into a method"
+
+and MethodSpec (assem : Assembly, selfIndex : int) =
+    inherit Method()
+
+    let mt = assem.MetadataTables
+    let msRow = mt.methodSpecs.[selfIndex]
+    let meth = Method.FromKindAndIndex assem msRow.methodKind msRow.methodIndex
+
+    override x.Name = meth.Name
+    override x.Resolve = meth.Resolve
+    override x.Signature = meth.Signature
+
+and MethodRef (assem : Assembly, selfIndex : int) =
+    inherit Method()
+
+    let mt = assem.MetadataTables
+    let mrRow = mt.memberRefs.[selfIndex]
+
+    override x.Name = mrRow.name
+    override x.Resolve = failwith "I don't yet know how to resolve method refs"
+    override x.Signature =
+        let blob = ref(assem.ReadBlobAtIndex mrRow.signatureIndex |> List.ofArray)
+        MethodDefOrRefSig.FromBlob assem blob
 
 and MethodDef (assem : Assembly, selfIndex : int) =
+    inherit Method()
+
     let mt = assem.MetadataTables
     let mdRow = mt.methodDefs.[selfIndex]
     let isFlagSet mask = mdRow.flags &&& mask <> 0us
@@ -1826,7 +1918,7 @@ and MethodDef (assem : Assembly, selfIndex : int) =
                 MethodBody.maxStack = 8us
                 initLocals = false
                 locals = [||]
-                blocks = AbstInst.toAbstInstBlocks <| readInsts r (uint32 mbSize)
+                blocks = AbstInst.toAbstInstBlocks assem (readInsts r (uint32 mbSize))
                 exceptionClauses = [||]
             }
         else
@@ -1856,9 +1948,15 @@ and MethodDef (assem : Assembly, selfIndex : int) =
                 MethodBody.maxStack = maxStack
                 initLocals = initLocals
                 locals = locals
-                blocks = AbstInst.toAbstInstBlocks insts
+                blocks = AbstInst.toAbstInstBlocks assem insts
                 exceptionClauses = exceptionSecs
             }
+
+    override x.Name = mdRow.name
+    override x.Resolve = x
+    override x.Signature =
+        let blob = ref(assem.ReadBlobAtIndex mdRow.signatureIndex |> List.ofArray)
+        MethodDefOrRefSig.FromBlob assem blob
 
     member x.Assembly   = assem
     member x.RowIndex   = selfIndex
@@ -1866,7 +1964,6 @@ and MethodDef (assem : Assembly, selfIndex : int) =
     member x.TableRow   = mdRow
     member x.IsCtor     = mdRow.name = ".ctor"
     member x.IsCCtor    = mdRow.name = ".cctor"
-    member x.Name       = mdRow.name
     
     member x.CodeType =
         // Section 22.26 item 34.b
@@ -1951,9 +2048,17 @@ and MethodDef (assem : Assembly, selfIndex : int) =
 
             Some (readMethodBody r)
 
-    member x.Signature =
-        let blob = ref(assem.ReadBlobAtIndex mdRow.signatureIndex |> List.ofArray)
-        MethodDefOrRefSig.FromBlob assem blob
+    member x.DeclaringType =
+        let tdRows = mt.typeDefs
+        let rec findDecTy (currIndex : int) =
+            let foundType =
+                currIndex = tdRows.Length - 1
+                || selfIndex < tdRows.[currIndex + 1].methodsIndex
+            if foundType then
+                new TypeDef(assem, currIndex)
+            else
+                findDecTy (currIndex + 1)
+        findDecTy 0
 
 and MethodBody = {
     maxStack : uint16
@@ -1962,6 +2067,13 @@ and MethodBody = {
     blocks : (AbstInst * uint32) array array
     exceptionClauses : ExceptionClause array array
 }
+
+and Call(tail : bool, meth : Method) =
+    member x.Tail = tail
+    member x.Method = meth
+and VirtCall(thisType : TypeDefOrRef option, tail : bool, meth : Method) =
+    inherit Call(tail, meth)
+    member x.ThisType = thisType
 
 and [<RequireQualifiedAccess>] AbstInst =
     | Add
@@ -1980,9 +2092,9 @@ and [<RequireQualifiedAccess>] AbstInst =
     | Break
     | Brfalse of int
     | Brtrue of int
-    | Call of bool * MetadataToken
-    | Calli of bool * MetadataToken
-    | Callvirt of MetadataToken option * bool * MetadataToken
+    | Call of Call
+    | Calli of Call
+    | Callvirt of VirtCall
     | ConvI1
     | ConvI2
     | ConvI4
@@ -2134,7 +2246,11 @@ and [<RequireQualifiedAccess>] AbstInst =
     | Sizeof of MetadataToken
     | Refanytype
     with
-        static member toAbstInstBlocks (instsWithSizes : array<RawInst * uint32>) : (AbstInst * uint32) array array =
+        static member toAbstInstBlocks
+                (assem : Assembly)
+                (instsWithSizes : array<RawInst * uint32>)
+                : (AbstInst * uint32) array array =
+
             let numInsts = instsWithSizes.Length
             let insts, sizes = Array.unzip instsWithSizes
             let instPositions = Array.scan (+) 0u sizes
@@ -2204,9 +2320,17 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.Break -> AbstInst.Break
                 | RawInst.Brfalse tgt -> AbstInst.Brfalse (tgtToBlkIndex instIndex tgt)
                 | RawInst.Brtrue tgt -> AbstInst.Brtrue (tgtToBlkIndex instIndex tgt)
-                | RawInst.Call (isTail, metaTok) -> AbstInst.Call (isTail, metaTok)
-                | RawInst.Calli (isTail, metaTok) -> AbstInst.Calli (isTail, metaTok)
-                | RawInst.Callvirt (constrainedOpt, isTail, metaTok) -> AbstInst.Callvirt (constrainedOpt, isTail, metaTok)
+                | RawInst.Call (isTail, metaTok) ->
+                    let call = new Call(isTail, Method.FromMetadataToken assem metaTok)
+                    AbstInst.Call call
+                | RawInst.Calli (isTail, metaTok) ->
+                    let call = new Call(isTail, Method.FromMetadataToken assem metaTok)
+                    AbstInst.Calli call
+                | RawInst.Callvirt (constrainedOpt, isTail, metaTok) ->
+                    let meth = Method.FromMetadataToken assem metaTok
+                    let constrTy = Option.map (TypeDefOrRef.FromMetadataToken assem) constrainedOpt
+                    let virtCall = new VirtCall(constrTy, isTail, meth)
+                    AbstInst.Callvirt virtCall
                 | RawInst.ConvI1 -> AbstInst.ConvI1
                 | RawInst.ConvI2 -> AbstInst.ConvI2
                 | RawInst.ConvI4 -> AbstInst.ConvI4
@@ -2616,7 +2740,7 @@ and [<RequireQualifiedAccess>] TypeBlob =
             match !blob with
             | [] -> failwith "unexpected end of blob while reading type"
             | b :: _ ->
-                let readUInt() = readCompressedUnsignedInt (makeReadByteFun blob)
+                //let readUInt() = readCompressedUnsignedInt (makeReadByteFun blob)
                 match enum<ElementType>(int b) with
                 | ElementType.Boolean       -> listSkip blob; Boolean
                 | ElementType.Char          -> listSkip blob; Char
@@ -2633,11 +2757,11 @@ and [<RequireQualifiedAccess>] TypeBlob =
                 | ElementType.I             -> listSkip blob; I
                 | ElementType.U             -> listSkip blob; U
                 | ElementType.Class         -> listSkip blob; Class(TypeDefOrRef.FromBlob assem blob)
-                | ElementType.MVar          -> listSkip blob; MVar(readUInt())
+                //| ElementType.MVar          -> listSkip blob; MVar(readUInt())
                 | ElementType.Object        -> listSkip blob; Object
                 | ElementType.String        -> listSkip blob; String
                 | ElementType.ValueType     -> listSkip blob; ValueType(TypeDefOrRef.FromBlob assem blob)
-                | ElementType.Var           -> listSkip blob; Var(readUInt())
+                //| ElementType.Var           -> listSkip blob; Var(readUInt())
 
                 // reuse the type-spec
                 | _ ->
@@ -2646,6 +2770,8 @@ and [<RequireQualifiedAccess>] TypeBlob =
                     | TypeSpecBlob.FnPtr methDefOrRef           -> FnPtr methDefOrRef
                     | TypeSpecBlob.Array(ty, shape)             -> Array(ty, shape)
                     | TypeSpecBlob.SzArray(custMods, types)     -> SzArray(custMods, types)
+                    | TypeSpecBlob.MVar i                       -> MVar i
+                    | TypeSpecBlob.Var i                        -> Var i
                     | TypeSpecBlob.GenericInst(isClass, tyDefOrRef, types) ->
                         GenericInst(isClass, tyDefOrRef, types)
 
@@ -2766,15 +2892,9 @@ with
         let readByte = makeReadByteFun blob
         let rank = readCompressedUnsignedInt readByte
         let numSizes = readCompressedUnsignedInt readByte
-        let sizes = [|
-            for _ in 1u .. numSizes do
-                yield readCompressedUnsignedInt readByte
-        |]
+        let sizes = [|for _ in 1u .. numSizes -> readCompressedUnsignedInt readByte|]
         let numLoBounds = readCompressedUnsignedInt readByte
-        let loBounds = [|
-            for _ in 1u .. numSizes do
-                yield readCompressedInt readByte
-        |]
+        let loBounds = [|for _ in 1u .. numLoBounds -> readCompressedInt readByte|]
 
         {ArrayShape.rank = rank; sizes = sizes; loBounds = loBounds}
 
@@ -2785,6 +2905,11 @@ and [<RequireQualifiedAccess>] TypeSpecBlob =
     | SzArray of List<CustomModBlob> * TypeBlob
     // GenericInst bool isClass with false indicating valuetype
     | GenericInst of bool * TypeDefOrRef * List<TypeBlob>
+
+    // TODO VAR and MVAR are not in the spec but they do seem to show up in assemblies (well
+    // at least MVAR does. I haven't yet confirmed that VAR does)
+    | MVar of uint32
+    | Var of uint32
     with
         static member FromBlob (assem : Assembly) (blob : byte list ref) =
             match listRead blob with
@@ -2792,6 +2917,7 @@ and [<RequireQualifiedAccess>] TypeSpecBlob =
             | Some b ->
                 let unexpEnd() = failwith "unexpected end of type"
                 let custModList() = CustomModBlob.ManyFromBlob assem blob
+                let readUInt() = readCompressedUnsignedInt (makeReadByteFun blob)
 
                 match enum<ElementType>(int b) with
                 | ElementType.Ptr ->
@@ -2824,5 +2950,7 @@ and [<RequireQualifiedAccess>] TypeSpecBlob =
                             [for _ in 1u .. genArgCount -> TypeBlob.FromBlob assem blob]
 
                         GenericInst(isClass, tyDefRefSpecBlob, tys)
+                | ElementType.MVar -> MVar(readUInt())
+                | ElementType.Var -> Var(readUInt())
                 | et ->
                     failwithf "the following element type is not valid for a type spec: %A" et
