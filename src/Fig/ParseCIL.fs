@@ -11,33 +11,10 @@ let main args =
     | [|inFile|] ->
 
         use r = new PosStackBinaryReader(new FileStream(inFile, FileMode.Open))
-        let assem = new Assembly(r, new MonoAssemblyResolution([||]))
+        let assem =
+            let gacPaths = [|"/Library/Frameworks/Mono.framework/Versions/2.10.5/lib/mono/gac/"|]
+            new Assembly(r, new MonoAssemblyResolution(gacPaths))
         disassemble System.Console.Out assem
-        (*let mt = assem.MetadataTables
-
-        printfn "assemref count %i" mt.assemblyRefs.Length
-        for ar in assem.AssemblyReferences do
-            printfn "IsPublicKeySet: %b" ar.IsPublicKeySet
-            printfn "PublicKeyOrToken: %A" ar.PublicKeyOrToken*)
-
-        (*for i in 0 .. mt.methodDefs.Length - 1 do
-            let md = new MethodDef(r, assem, i)
-            printfn ""
-            printfn "METHOD BODY"
-            match md.MethodBody with
-            | None -> printfn "    EMPTY"
-            | Some (instBlks, exceptionSecs) ->
-
-                printfn "    ABST INSTRUCTIONS"
-                for blkIndex in 0 .. instBlks.Length - 1 do
-                    printfn "        BLOCK #%i" blkIndex
-                    for inst in instBlks.[blkIndex] do
-                        printfn "            %A" inst
-
-                if not (Array.isEmpty exceptionSecs) then
-                    printfn "    EXCEPTION SECTION:"
-                    for exSec in exceptionSecs do
-                        printfn "        %A" exSec*)
 
     | _ -> failwith (sprintf "bad options %A" args)
 
