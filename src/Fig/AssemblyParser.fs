@@ -384,8 +384,10 @@ type MetadataTables = {
 
 type IAssemblyResolution =
     abstract ResolveAssembly : AssemblyRef -> Assembly
+    abstract RegisterAssembly : Assembly -> unit
 
 and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
+    inherit AssemblyBase()
     
     // see EMCA-335 25.2.1
     let readMSDOSHeader () : uint32 =
@@ -1448,13 +1450,9 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
             typeSpecs = typeSpecs
         }
 
-    interface IAssemblyResolution with
-        member x.ResolveAssembly(assemRef : AssemblyRef) =
-            assemRes.ResolveAssembly assemRef
-    
     member x.SectionHeaders = sectionHeaders
     member x.MetadataTables = metadataTables
-    member x.AsssemblyRow =
+    member x.AssemblyRow =
         match x.MetadataTables.assemblies with
         | [|assemRow|] -> assemRow
         | _ -> failwith "Expected a single assembly"
@@ -1479,33 +1477,39 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
             new Module(x, i)
     |]
 
-    member x.Name = x.AsssemblyRow.name
+    override x.Name = x.AssemblyRow.name
+    override x.Culture = x.AssemblyRow.culture
+
+    override x.MajorVersion = x.AssemblyRow.majorVersion
+    override x.MinorVersion = x.AssemblyRow.minorVersion
+    override x.RevisionNumber = x.AssemblyRow.revisionNumber
+    override x.BuildNumber = x.AssemblyRow.buildNumber
+
+    override x.AssemblyFlags = x.AssemblyRow.flags
 
     member x.AssemblyResolution = assemRes
 
     member x.Reader = r
 
 and AssemblyRef(assem : Assembly, selfIndex : int) =
+    inherit AssemblyBase()
     let mt = assem.MetadataTables
     let assemRefRow = mt.assemblyRefs.[selfIndex]
 
     let isFlagSet mask = assemRefRow.flags &&& mask <> 0u
 
-    member x.Name = assemRefRow.name
-    member x.Culture = assemRefRow.culture
+    override x.Name = assemRefRow.name
+    override x.Culture = assemRefRow.culture
     member x.HashValueIndex =
         // TODO give actual hash value
         assemRefRow.hashValueIndex
 
-    member x.MajorVersion = assemRefRow.majorVersion
-    member x.MinorVersion = assemRefRow.minorVersion
-    member x.RevisionNumber = assemRefRow.revisionNumber
-    member x.BuildNumber = assemRefRow.buildNumber
-    member x.Version =
-        string x.MajorVersion + "." +
-        string x.MinorVersion + "." +
-        string x.RevisionNumber + "." +
-        string x.BuildNumber
+    override x.MajorVersion = assemRefRow.majorVersion
+    override x.MinorVersion = assemRefRow.minorVersion
+    override x.RevisionNumber = assemRefRow.revisionNumber
+    override x.BuildNumber = assemRefRow.buildNumber
+
+    override x.AssemblyFlags = assemRefRow.flags
 
     member x.IsPublicKeySet = isFlagSet 0x0001u
 
@@ -1519,6 +1523,22 @@ and AssemblyRef(assem : Assembly, selfIndex : int) =
         | i ->
             // see 6.2.1.3 Originator’s public key
             Some (assem.ReadBlobAtIndex i)
+
+and [<AbstractClass>] AssemblyBase() =
+    abstract Name : string with get
+    abstract Culture : string with get
+
+    abstract MajorVersion : uint16 with get
+    abstract MinorVersion : uint16 with get
+    abstract RevisionNumber : uint16 with get
+    abstract BuildNumber : uint16 with get
+    member x.Version =
+        string x.MajorVersion + "." +
+        string x.MinorVersion + "." +
+        string x.RevisionNumber + "." +
+        string x.BuildNumber
+
+    abstract AssemblyFlags : uint32 with get
 
 and Module(assem : Assembly, selfIndex : int) =
     let mt = assem.MetadataTables
