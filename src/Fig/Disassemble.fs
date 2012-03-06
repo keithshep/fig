@@ -36,7 +36,11 @@ let custModString (cm : CustomModBlob) =
             "modreq"
         else
             "modopt"
-    sprintf "%s (%s)" reqStr cm.theType.FullName
+    match cm.theType with
+    | :? TypeDefOrRef as ty ->
+        sprintf "%s (%s)" reqStr ty.FullName
+    | ty ->
+        failwith "TODO: custom mod of %A" ty
 
 let methSigToString (methSig : MethodDefOrRefSig) =
     "TODO_METH_SIG"
@@ -76,11 +80,13 @@ let rec typeBlobToStr (ty : TypeBlob) =
     | TypeBlob.R8 -> "float64"
     | TypeBlob.I -> "native int"
     | TypeBlob.U -> "native unsigned int"
-    | TypeBlob.Class tyDefOrRef -> "class " + tyDefOrRef.FullName
+    | TypeBlob.Class (:? TypeDefOrRef as tyDefOrRef) -> "class " + tyDefOrRef.FullName
+    | TypeBlob.Class _ -> failwithf "TODO can't turn %A into string" ty
     | TypeBlob.MVar i -> "!!" + string i
     | TypeBlob.Object -> "object"
     | TypeBlob.String -> "string"
-    | TypeBlob.ValueType tyDefOrRef -> "valuetype " + tyDefOrRef.FullName
+    | TypeBlob.ValueType (:? TypeDefOrRef as tyDefOrRef) -> "valuetype " + tyDefOrRef.FullName
+    | TypeBlob.ValueType _ -> failwithf "TODO can't turn %A into string" ty
     | TypeBlob.Var i -> "!" + string i
 
     // the following are also in type spec
@@ -128,13 +134,16 @@ let paramTypeToStr (paramTy : ParamType) =
     | ParamType.TypedByRef ->
         failwith "TODO no can do for typedbyref"
 
-let typeDefToStr (td : TypeDef) =
-    let tkStr =
-        match td.TypeKind with
-        | TypeKind.Class -> "class"
-        | TypeKind.Valuetype -> "valuetype"
-        | tk -> failwithf "TODO woah don't know how to deal with %A" tk
-    tkStr + " " + td.FullName
+let typeDefRefOrSpecToStr (ty : TypeDefRefOrSpec) =
+    match ty with
+    | :? TypeDef as ty ->
+        let tkStr =
+            match ty.TypeKind with
+            | TypeKind.Class | TypeKind.Interface -> "class"
+            | TypeKind.Valuetype -> "valuetype"
+            | tk -> failwithf "TODO woah don't know how to deal with %A" tk
+        tkStr + " " + ty.FullName
+    | _ -> sprintf "TODO_DONT_YET_DEAL_WITH %A" ty
 
 let returnTypeToStr (retTy : RetType) =
     if retTy.customMods.Length >= 1 then
@@ -157,6 +166,38 @@ let disInst
     let lbl = labelAt addr
     let pr (s : string) = ifprintfn tw indent "%s: %s" lbl s
 
+    let prCall (instStr : string) (thisTyConst : TypeDefRefOrSpec option) (isTail : bool) (meth : Method) =
+        let instStr =
+            spaceSepStrs [|
+                match thisTyConst with
+                | None -> ()
+                | Some ty ->
+                    yield ".constrained"
+                    yield typeDefRefOrSpecToStr ty
+
+                if isTail then yield ".tail"
+
+                yield instStr
+
+                // TODO change the following to call.Method.Resolve
+                match meth with
+                | :? MethodDef as meth ->
+                    if not meth.IsStatic then yield "instance"
+                    yield returnTypeToStr meth.Signature.retType
+                    yield sprintf "%s::%s(" (typeDefRefOrSpecToStr meth.DeclaringType) meth.Name
+                    yield commaSepStrs [|
+                        for p in meth.Signature.methParams do
+                            yield spaceSepStrs [|
+                                yield! List.map custModString p.customMods
+                                yield paramTypeToStr p.pType
+                            |]
+                    |]
+                    yield ")"
+                | _ ->
+                    yield "TODO impl call for non-MethodDef"
+            |]
+        pr instStr
+
     match inst with
     | AbstInst.Add -> "add" |> pr
     | AbstInst.And -> "and" |> pr
@@ -174,35 +215,9 @@ let disInst
     | AbstInst.Break -> "break" |> pr
     | AbstInst.Brfalse tgt -> "brfalse " + blockLabels.[tgt] |> pr
     | AbstInst.Brtrue tgt -> "brtrue " + blockLabels.[tgt] |> pr
-    | AbstInst.Call call ->
-        let instStr =
-            spaceSepStrs [|
-                yield "call"
-
-                // TODO change the following to call.Method.Resolve
-                match call.Method with
-                | :? MethodDef as meth ->
-                    //yield if meth.IsStatic then "class" else "instance"
-                    if not meth.IsStatic then yield "instance"
-                    yield returnTypeToStr meth.Signature.retType
-                    yield sprintf "%s::%s(" (typeDefToStr meth.DeclaringType) meth.Name
-                    //yield "TODO PARAMS"
-                    yield commaSepStrs [|
-                        for p in meth.Signature.methParams do
-                            yield spaceSepStrs [|
-                                yield! List.map custModString p.customMods
-                                yield paramTypeToStr p.pType
-                            |]
-                    |]
-                    yield ")"
-                | _ ->
-                    yield "TODO impl call for non-MethodDef"
-            |]
-        pr instStr
-    (*
-    | AbstInst.Calli of bool * MetadataToken
-    | AbstInst.Callvirt of MetadataToken option * bool * MetadataToken
-    *)
+    | AbstInst.Call call -> prCall "call" None call.Tail call.Method
+    | AbstInst.Calli call -> prCall "calli" None call.Tail call.Method
+    | AbstInst.Callvirt virtcall -> prCall "callvirt" virtcall.ThisType virtcall.Tail virtcall.Method
     | AbstInst.ConvI1 -> "conv.i1" |> pr
     | AbstInst.ConvI2 -> "conv.i2" |> pr
     | AbstInst.ConvI4 -> "conv.i4" |> pr
@@ -389,11 +404,13 @@ let disInst
         //sprintf "TODO %A" inst |> pr
         "TODO" |> pr
 
-let genConstrToStr (genConstr : TypeDefOrRef) =
+let genConstrToStr (genConstr : TypeDefRefOrSpec) =
     // Partition II 10.1.7 Generic parameters (GenPars)
 
     // TODO I know this is wrong
-    genConstr.FullName
+    match genConstr with
+    | :? TypeDefOrRef as genConstr -> genConstr.FullName
+    | _ -> "YEAH_NO_CAN_DO"
 
 let genParToStr (genPar : GenericParam) =
     // Partition II 10.1.7 Generic parameters (GenPars)
@@ -576,18 +593,26 @@ let rec disTypeDef (tw : TextWriter) (indent : uint32) (td : TypeDef) =
         // base type
         match td.Extends with
         | None -> ()
-        | Some ty ->
+        | Some (:? TypeDefOrRef as ty) ->
             yield "extends"
 
             // TODO need to add something along the lines of "[assembly name]" to this
             yield ty.FullName
+        | Some _ ->
+            yield "extends"
+            yield "TODO_TYPE_SPEC"
 
         // an optional list of interfaces
         let imps = td.Implements
         if not (Array.isEmpty imps) then
             yield "implements"
             // TODO need to add something along the lines of "[assembly name]" to this
-            yield commaSepStrs [|for imp in imps -> imp.FullName|]
+            yield commaSepStrs [|
+                for imp in imps ->
+                    match imp with
+                    | :? TypeDefOrRef as imp -> imp.FullName
+                    | _ -> "TODO_IMPLEMENTS_TYPE_SPEC"
+            |]
     |]
 
     ifprintfn tw indent "%s" (spaceSepStrs classHeaderStrs)

@@ -386,7 +386,7 @@ type IAssemblyResolution =
     abstract ResolveAssembly : AssemblyRef -> Assembly
     abstract RegisterAssembly : Assembly -> unit
 
-and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
+and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
     inherit AssemblyBase()
     
     // see EMCA-335 25.2.1
@@ -1450,6 +1450,10 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) =
             typeSpecs = typeSpecs
         }
 
+    do
+        // TODO think about if it's really smart to register self in constructor
+        assemRes.RegisterAssembly x
+
     member x.SectionHeaders = sectionHeaders
     member x.MetadataTables = metadataTables
     member x.AssemblyRow =
@@ -1558,36 +1562,27 @@ and Module(assem : Assembly, selfIndex : int) =
 
     member x.Name = moduleRow.name
 
-and [<AbstractClass>] TypeDefOrRef() =
-    abstract Namespace : string
-    abstract Name : string
-    abstract Resolve : unit -> TypeDef
-
-    member x.FullName =
-        match x.Namespace with
-        | null | "" -> x.Name
-        | ns        -> ns + "." + x.Name
-
-    static member FromKindAndIndex(assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefOrRef =
+and [<AbstractClass>] TypeDefRefOrSpec() =
+    static member FromKindAndIndex(assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefRefOrSpec =
         match mt with
         | MetadataTableKind.TypeDefKind -> upcast new TypeDef(assem, rowIndex)
         | MetadataTableKind.TypeRefKind -> upcast new TypeRef(assem, rowIndex)
         | MetadataTableKind.TypeSpecKind -> upcast new TypeSpec(assem, rowIndex)
         | _ -> failwithf "cannot create a TypeDefOrRef from a %A" mt
 
-    static member FromKindAndIndexOpt (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefOrRef option =
+    static member FromKindAndIndexOpt (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefRefOrSpec option =
         // TODO assert that object class gives None for Inherits
         if rowIndex = -1 then
             None
         else
-            Some(TypeDefOrRef.FromKindAndIndex assem mt rowIndex)
+            Some(TypeDefRefOrSpec.FromKindAndIndex assem mt rowIndex)
 
-    static member FromMetadataToken (assem : Assembly) (mt : MetadataToken) : TypeDefOrRef =
+    static member FromMetadataToken (assem : Assembly) (mt : MetadataToken) : TypeDefRefOrSpec =
         match mt with
-        | Some tableKind, i -> TypeDefOrRef.FromKindAndIndex assem tableKind i
+        | Some tableKind, i -> TypeDefRefOrSpec.FromKindAndIndex assem tableKind i
         | None, _ -> failwith "failed to convert token into a type"
 
-    static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeDefOrRef =
+    static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeDefRefOrSpec =
         // see partition II 23.2.8 TypeDefOrRefOrSpecEncoded
         let encoding = readCompressedUnsignedInt (makeReadByteFun blob)
         let rowIndex = int (encoding >>> 2) - 1
@@ -1597,10 +1592,21 @@ and [<AbstractClass>] TypeDefOrRef() =
             | 1u -> MetadataTableKind.TypeRefKind
             | 2u -> MetadataTableKind.TypeSpecKind
             | _ -> failwith "this is impossible"
-        TypeDefOrRef.FromKindAndIndex assem tableKind rowIndex
+        TypeDefRefOrSpec.FromKindAndIndex assem tableKind rowIndex
+
+and [<AbstractClass>] TypeDefOrRef() =
+    inherit TypeDefRefOrSpec()
+    abstract Resolve : unit -> TypeDef
+    abstract Namespace : string
+    abstract Name : string
+
+    member x.FullName =
+        match x.Namespace with
+        | null | "" -> x.Name
+        | ns -> ns + "." + x.Name
 
 and TypeSpec(assem : Assembly, selfIndex : int) =
-    inherit TypeDefOrRef()
+    inherit TypeDefRefOrSpec()
 
     let mt = assem.MetadataTables
     let typeSpecRow = mt.typeSpecs.[selfIndex]
@@ -1609,15 +1615,18 @@ and TypeSpec(assem : Assembly, selfIndex : int) =
         let blob = ref(assem.ReadBlobAtIndex typeSpecRow.sigIndex |> List.ofArray)
         TypeSpecBlob.FromBlob assem blob
 
+    (*
     override x.Namespace =
         match typeSpecBlob with
         | TypeSpecBlob.Array _
         | TypeSpecBlob.FnPtr _
         | TypeSpecBlob.Ptr _
         | TypeSpecBlob.SzArray _ ->
-            "System"
+            Some "System"
         | TypeSpecBlob.GenericInst _ ->
-            "TODO_generic_inst_namespace_here"
+            Some "TODO_generic_inst_namespace_here"
+        | TypeSpecBlob.MVar _ | TypeSpecBlob.Var _ ->
+            None
     override x.Name =
         match typeSpecBlob with
         | TypeSpecBlob.Array _
@@ -1628,7 +1637,9 @@ and TypeSpec(assem : Assembly, selfIndex : int) =
             failwith "what the heck to i do with these pointers"
         | TypeSpecBlob.GenericInst _ ->
             "TODO_generic_inst_name_here"
-    override x.Resolve() = failwith "TODO implement me!!"
+        | TypeSpecBlob.MVar _ | TypeSpecBlob.Var _ ->
+            "TODO deal with var types"
+    *)
 
 and TypeRef(assem : Assembly, selfIndex : int) =
     inherit TypeDefOrRef()
@@ -1732,13 +1743,13 @@ and TypeDef(assem : Assembly, selfIndex : int) =
                 yield new GenericParam(assem, i)
     }
 
-    member x.Extends =
-        TypeDefOrRef.FromKindAndIndexOpt assem typeDefRow.extendsKind typeDefRow.extendsIndex
+    member x.Extends : TypeDefRefOrSpec option =
+        TypeDefRefOrSpec.FromKindAndIndexOpt assem typeDefRow.extendsKind typeDefRow.extendsIndex
 
     member x.Implements = [|
         for iImpl in mt.interfaceImpls do
             if iImpl.classIndex = selfIndex then
-                yield TypeDefOrRef.FromKindAndIndex assem iImpl.ifaceKind iImpl.ifaceIndex
+                yield TypeDefRefOrSpec.FromKindAndIndex assem iImpl.ifaceKind iImpl.ifaceIndex
     |]
 
     member x.NestedTypes = [|
@@ -1795,9 +1806,16 @@ and TypeDef(assem : Assembly, selfIndex : int) =
             match immediateKindOf x with
             | Some tk -> tk
             | None ->
-                match immediateKindOf (Option.get x.Extends) with
-                | Some tk -> tk
-                | None -> TypeKind.Class
+                match x.Extends with
+                | Some (:? TypeDefOrRef as ext) ->
+                    match immediateKindOf ext with
+                    | Some tk -> tk
+                    | None -> TypeKind.Class
+                | Some ext ->
+                    //failwithf "Don't know how to deal with extention type %A" ext
+                    printfn "TODO figure out the type kind of %A" ext
+                    TypeKind.Class
+                | None -> failwith "we should never reach this error"
 
 and [<RequireQualifiedAccess>] GenericParamVariance = None | Covariant | Contravariant
 
@@ -1827,7 +1845,7 @@ and GenericParam(assem : Assembly, selfIndex : int) =
     member x.NotNullableValueTypeConstrained = isFlagSet 0x0008us
     member x.DefaultConstructorConstrained = isFlagSet 0x0010us
 
-    member x.Constraints : seq<TypeDefOrRef> = seq {
+    member x.Constraints : seq<TypeDefRefOrSpec> = seq {
         for gpc in mt.genericParamConstraints do
             if gpc.ownerIndex = selfIndex then
                 yield
@@ -2091,7 +2109,7 @@ and MethodBody = {
 and Call(tail : bool, meth : Method) =
     member x.Tail = tail
     member x.Method = meth
-and VirtCall(thisType : TypeDefOrRef option, tail : bool, meth : Method) =
+and VirtCall(thisType : TypeDefRefOrSpec option, tail : bool, meth : Method) =
     inherit Call(tail, meth)
     member x.ThisType = thisType
 
@@ -2348,7 +2366,7 @@ and [<RequireQualifiedAccess>] AbstInst =
                     AbstInst.Calli call
                 | RawInst.Callvirt (constrainedOpt, isTail, metaTok) ->
                     let meth = Method.FromMetadataToken assem metaTok
-                    let constrTy = Option.map (TypeDefOrRef.FromMetadataToken assem) constrainedOpt
+                    let constrTy = Option.map (TypeDefRefOrSpec.FromMetadataToken assem) constrainedOpt
                     let virtCall = new VirtCall(constrTy, isTail, meth)
                     AbstInst.Callvirt virtCall
                 | RawInst.ConvI1 -> AbstInst.ConvI1
@@ -2716,7 +2734,7 @@ and ExceptionClause =
 
 and [<RequireQualifiedAccess>] CustomModBlob = {
     isRequired : bool
-    theType : TypeDefOrRef
+    theType : TypeDefRefOrSpec
 }
 with
     static member FromBlob (assem : Assembly) (blob : byte list ref) =
@@ -2731,7 +2749,7 @@ with
 
             {
                 CustomModBlob.isRequired = isReq
-                theType = TypeDefOrRef.FromBlob assem blob
+                theType = TypeDefRefOrSpec.FromBlob assem blob
             }
 
     static member ManyFromBlob (assem : Assembly) (blob : byte list ref) =
@@ -2741,11 +2759,11 @@ with
 
 and [<RequireQualifiedAccess>] TypeBlob =
     | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 | I8 | U8 | R4 | R8 | I | U
-    | Class of TypeDefOrRef
+    | Class of TypeDefRefOrSpec
     | MVar of uint32
     | Object
     | String
-    | ValueType of TypeDefOrRef
+    | ValueType of TypeDefRefOrSpec
     | Var of uint32
 
     // the following are also in type spec
@@ -2754,7 +2772,7 @@ and [<RequireQualifiedAccess>] TypeBlob =
     | Array of TypeBlob * ArrayShape
     | SzArray of List<CustomModBlob> * TypeBlob
     // GenericInst bool isClass with false indicating valuetype
-    | GenericInst of bool * TypeDefOrRef * List<TypeBlob>
+    | GenericInst of bool * TypeDefRefOrSpec * List<TypeBlob>
     with
         static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeBlob =
             match !blob with
@@ -2776,11 +2794,11 @@ and [<RequireQualifiedAccess>] TypeBlob =
                 | ElementType.R8            -> listSkip blob; R8
                 | ElementType.I             -> listSkip blob; I
                 | ElementType.U             -> listSkip blob; U
-                | ElementType.Class         -> listSkip blob; Class(TypeDefOrRef.FromBlob assem blob)
+                | ElementType.Class         -> listSkip blob; Class(TypeDefRefOrSpec.FromBlob assem blob)
                 //| ElementType.MVar          -> listSkip blob; MVar(readUInt())
                 | ElementType.Object        -> listSkip blob; Object
                 | ElementType.String        -> listSkip blob; String
-                | ElementType.ValueType     -> listSkip blob; ValueType(TypeDefOrRef.FromBlob assem blob)
+                | ElementType.ValueType     -> listSkip blob; ValueType(TypeDefRefOrSpec.FromBlob assem blob)
                 //| ElementType.Var           -> listSkip blob; Var(readUInt())
 
                 // reuse the type-spec
@@ -2924,7 +2942,7 @@ and [<RequireQualifiedAccess>] TypeSpecBlob =
     | Array of TypeBlob * ArrayShape
     | SzArray of List<CustomModBlob> * TypeBlob
     // GenericInst bool isClass with false indicating valuetype
-    | GenericInst of bool * TypeDefOrRef * List<TypeBlob>
+    | GenericInst of bool * TypeDefRefOrSpec * List<TypeBlob>
 
     // TODO VAR and MVAR are not in the spec but they do seem to show up in assemblies (well
     // at least MVAR does. I haven't yet confirmed that VAR does)
@@ -2964,7 +2982,7 @@ and [<RequireQualifiedAccess>] TypeSpecBlob =
                             | ElementType.ValueType -> false
                             | et ->
                                 failwithf "unexpected element type while reading generic instruction blob: %A" et
-                        let tyDefRefSpecBlob = TypeDefOrRef.FromBlob assem blob
+                        let tyDefRefSpecBlob = TypeDefRefOrSpec.FromBlob assem blob
                         let tys =
                             let genArgCount = readCompressedUnsignedInt (makeReadByteFun blob)
                             [for _ in 1u .. genArgCount -> TypeBlob.FromBlob assem blob]
