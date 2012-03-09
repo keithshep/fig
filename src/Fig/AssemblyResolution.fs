@@ -7,7 +7,7 @@ open System.Collections.Generic
 open System.IO
 
 type MonoAssemblyResolution(gacPaths : string array) =
-    let assemKey (ar : AssemblyBase) = ar.Name, ar.Version
+    let assemKey (assemBase : AssemblyBase) = assemBase.Name, assemBase.Version
     let assemCache = new Dictionary<string * string, Assembly>()
 
     interface IAssemblyResolution with
@@ -23,6 +23,10 @@ type MonoAssemblyResolution(gacPaths : string array) =
                 let gacSubFolder = assemRef.Version + "__" + tokStr
 
                 let rec go (i : int) =
+                    let notFound() = failwithf "Failed to find gac for %s" assemRef.Name
+                    let assemFromPath (path : string) =
+                        let r = new PosStackBinaryReader(new FileStream(path, FileMode.Open))
+                        new Assembly(r, x)
                     if i < gacPaths.Length then
                         let fullPath =
                             Path.Combine(
@@ -30,16 +34,29 @@ type MonoAssemblyResolution(gacPaths : string array) =
                                 assemRef.Name,
                                 gacSubFolder,
                                 assemRef.Name + ".dll")
-                        printfn "checking for assembly at: %s" fullPath
+                        debugfn "checking for assembly %s at: %s" assemRef.Name fullPath
                         if File.Exists fullPath then
-                            use r = new PosStackBinaryReader(new FileStream(fullPath, FileMode.Open))
-                            let assem = new Assembly(r, x)
-                            assemCache.[key] <- assem
-                            assem
+                            assemFromPath fullPath
+                        elif assemRef.Name = "mscorlib" then
+                            // TODO this is different on windows
+                            let monoVersionDir =
+                                match assemRef.MajorVersion, assemRef.RevisionNumber with
+                                | 1us, _ -> "1.0"
+                                | 2us, 5us -> "2.1"
+                                | 2us, _ -> "2.0"
+                                | 4us, _ -> "4.0"
+                                | maj, rev -> failwithf "unsupported mscorlib major-version=%i, revision-number=%i" maj rev
+                            let fullPath = Path.Combine(gacPaths.[i], "..", monoVersionDir, assemRef.Name + ".dll")
+                            debugfn "checking for assembly %s at: %s" assemRef.Name fullPath
+                            if File.Exists fullPath then
+                                assemFromPath fullPath
+                            else
+                                go (i + 1)
                         else
                             go (i + 1)
                     else
-                        failwith "Failed to find gac for %s" assemRef.Name
+                        notFound()
+
                 go 0
 
         member x.RegisterAssembly (assem : Assembly) =

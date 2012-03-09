@@ -1481,6 +1481,17 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
             new Module(x, i)
     |]
 
+    member x.TypeDefNamed (tyNamespace : string) (tyName : string) =
+        let rec go i =
+            if i < metadataTables.typeDefs.Length then
+                let currTyDef = metadataTables.typeDefs.[i]
+                if currTyDef.typeNamespace = tyNamespace && currTyDef.typeName = tyName then
+                    Some (new TypeDef(x, i))
+                else
+                    go (i + 1)
+            else
+                None
+        go 0
     override x.Name = x.AssemblyRow.name
     override x.Culture = x.AssemblyRow.culture
 
@@ -1594,6 +1605,14 @@ and [<AbstractClass>] TypeDefRefOrSpec() =
             | _ -> failwith "this is impossible"
         TypeDefRefOrSpec.FromKindAndIndex assem tableKind rowIndex
 
+    static member SameType (ty1 : TypeDefRefOrSpec) (ty2 : TypeDefRefOrSpec) =
+        match ty1, ty2 with
+        | (:? TypeDefOrRef as ty1), (:? TypeDefOrRef as ty2) ->
+            ty1.Namespace = ty2.Namespace && ty1.Name = ty2.Name
+        | _ ->
+            // TODO what should we really be doing for typespec here?
+            false
+
 and [<AbstractClass>] TypeDefOrRef() =
     inherit TypeDefRefOrSpec()
     abstract Resolve : unit -> TypeDef
@@ -1614,6 +1633,8 @@ and TypeSpec(assem : Assembly, selfIndex : int) =
     let typeSpecBlob =
         let blob = ref(assem.ReadBlobAtIndex typeSpecRow.sigIndex |> List.ofArray)
         TypeSpecBlob.FromBlob assem blob
+
+    member x.TypeSpecBlob = typeSpecBlob
 
     (*
     override x.Namespace =
@@ -1657,11 +1678,17 @@ and TypeRef(assem : Assembly, selfIndex : int) =
         | MetadataTableKind.ModuleRefKind ->
             failwith "impl mod ref"
         | MetadataTableKind.AssemblyRefKind ->
-            failwith "impl assem ref"
+            let assemRef = new AssemblyRef(assem, typeRefRow.resolutionScopeIndex)
+            let resolvedAssem = assemRes.ResolveAssembly assemRef
+            match resolvedAssem.TypeDefNamed typeRefRow.typeNamespace typeRefRow.typeName with
+            | Some tyDef -> tyDef
+            | None -> failwithf "failed to find type %s.%s" typeRefRow.typeNamespace typeRefRow.typeName
         | MetadataTableKind.TypeRefKind ->
             failwith "impl type ref"
         | rsk ->
             failwith "unexpected resolution scope table kind %A" rsk
+
+    override x.ToString() = x.Resolve().ToString()
 
 and [<RequireQualifiedAccess>] TypeVisibilityAttr =
     | NotPublic
@@ -1688,6 +1715,14 @@ and TypeDef(assem : Assembly, selfIndex : int) =
     override x.Namespace = typeDefRow.typeNamespace
     override x.Name = typeDefRow.typeName
     override x.Resolve() = x
+
+    override x.ToString() =
+        let tkStr =
+            match x.TypeKind with
+            | TypeKind.Class | TypeKind.Interface | TypeKind.Delegate -> "class"
+            | TypeKind.Valuetype -> "valuetype"
+            | tk -> failwithf "TODO woah don't know how to deal with %A" tk
+        tkStr + " " + x.FullName
 
     member x.SelfIndex = selfIndex
 
@@ -1879,7 +1914,7 @@ and Parameter (r : BinaryReader, mt : MetadataTables, selfIndex : int) =
 
 and [<AbstractClass>] Method() =
     abstract Name : string with get
-    abstract Resolve : MethodDef with get
+    abstract Resolve : unit -> MethodDef
     abstract Signature : MethodDefOrRefSig with get
 
     static member FromKindAndIndex (assem : Assembly) (kind : MetadataTableKind) (i : int) : Method =
@@ -1894,6 +1929,23 @@ and [<AbstractClass>] Method() =
         | Some tableKind, i -> Method.FromKindAndIndex assem tableKind i
         | None, _ -> failwith "failed to convert token into a method"
 
+    /// determines if method signatures match assuming
+    /// that the type is owning type is the same
+    static member SignaturesMatch (meth1 : Method) (meth2 : Method) =
+        if meth1.Name <> meth2.Name then
+            false
+        else
+            let sig1 = meth1.Signature
+            let sig2 = meth2.Signature
+
+            let rec paramsMatch (params1 : Param list) (params2 : Param list) =
+                match params1, params2 with
+                | [], [] -> true
+                | p1 :: p1Tail, p2 :: p2Tail -> Param.ParamsMatch p1 p2 && paramsMatch p1Tail p2Tail
+                | _ -> false
+
+            paramsMatch sig1.methParams sig2.methParams
+
 and MethodSpec (assem : Assembly, selfIndex : int) =
     inherit Method()
 
@@ -1902,7 +1954,7 @@ and MethodSpec (assem : Assembly, selfIndex : int) =
     let meth = Method.FromKindAndIndex assem msRow.methodKind msRow.methodIndex
 
     override x.Name = meth.Name
-    override x.Resolve = meth.Resolve
+    override x.Resolve() = meth.Resolve()
     override x.Signature = meth.Signature
 
 and MethodRef (assem : Assembly, selfIndex : int) =
@@ -1912,10 +1964,32 @@ and MethodRef (assem : Assembly, selfIndex : int) =
     let mrRow = mt.memberRefs.[selfIndex]
 
     override x.Name = mrRow.name
-    override x.Resolve = failwith "I don't yet know how to resolve method refs"
+    override x.Resolve() =
+        let matchingMethodIn (ty : TypeDefOrRef) =
+            let ty = ty.Resolve()
+            match Array.filter (Method.SignaturesMatch x) ty.Methods with
+            | [|matchingMeth|] -> matchingMeth
+            | matches -> failwithf "expected a single method match for %s but got %i" x.Name matches.Length
+
+        match mrRow.classKind with
+        | MetadataTableKind.MethodDefKind -> failwithf "TODO implement %A for method ref" mrRow.classKind
+        | MetadataTableKind.ModuleRefKind -> failwithf "TODO implement %A for method ref" mrRow.classKind
+        | MetadataTableKind.TypeDefKind -> failwithf "TODO implement %A for method ref" mrRow.classKind
+        | MetadataTableKind.TypeRefKind -> matchingMethodIn <| new TypeRef(assem, mrRow.classIndex)
+        | MetadataTableKind.TypeSpecKind ->
+            let tySpec = new TypeSpec(assem, mrRow.classIndex)
+            match tySpec.TypeSpecBlob with
+            | TypeSpecBlob.GenericInst genTyInst ->
+                match genTyInst.genericType with
+                | :? TypeDefOrRef as ty -> matchingMethodIn ty
+                | ty -> failwithf "TODO sorry I don't do %A yet" ty
+            | _ ->
+                failwithf "TODO implement %A (%A) for method ref" mrRow.classKind tySpec.TypeSpecBlob
+        | kind -> failwithf "invalid class kind for method ref: %A" kind
     override x.Signature =
         let blob = ref(assem.ReadBlobAtIndex mrRow.signatureIndex |> List.ofArray)
         MethodDefOrRefSig.FromBlob assem blob
+    override x.ToString() = x.Resolve().ToString()
 
 and MethodDef (assem : Assembly, selfIndex : int) =
     inherit Method()
@@ -1991,10 +2065,25 @@ and MethodDef (assem : Assembly, selfIndex : int) =
             }
 
     override x.Name = mdRow.name
-    override x.Resolve = x
+    override x.Resolve() = x
     override x.Signature =
         let blob = ref(assem.ReadBlobAtIndex mdRow.signatureIndex |> List.ofArray)
         MethodDefOrRefSig.FromBlob assem blob
+    override x.ToString() =
+        spaceSepStrs [|
+            if not x.IsStatic then yield "instance"
+            yield x.Signature.retType.ToString()
+            yield sprintf "%s::%s(" (x.DeclaringType.ToString()) x.Name
+            yield commaSepStrs [|
+                for p in x.Signature.methParams do
+                    yield spaceSepStrs [|
+                        for cm in p.customMods do
+                            yield cm.ToString()
+                        yield p.pType.ToString()
+                    |]
+            |]
+            yield ")"
+        |]
 
     member x.Assembly   = assem
     member x.RowIndex   = selfIndex
@@ -2737,6 +2826,18 @@ and [<RequireQualifiedAccess>] CustomModBlob = {
     theType : TypeDefRefOrSpec
 }
 with
+    override x.ToString() =
+        let reqStr =
+            if x.isRequired then
+                "modreq"
+            else
+                "modopt"
+        match x.theType with
+        | :? TypeDefOrRef as ty ->
+            sprintf "%s (%s)" reqStr ty.FullName
+        | ty ->
+            failwith "TODO: custom mod of %A" ty
+
     static member FromBlob (assem : Assembly) (blob : byte list ref) =
         match listRead blob with
         | None -> failwith "unexpected end of blob while reading custom mod"
@@ -2772,8 +2873,79 @@ and [<RequireQualifiedAccess>] TypeBlob =
     | Array of TypeBlob * ArrayShape
     | SzArray of List<CustomModBlob> * TypeBlob
     // GenericInst bool isClass with false indicating valuetype
-    | GenericInst of bool * TypeDefRefOrSpec * List<TypeBlob>
+    | GenericInst of GenericTypeInst
     with
+        static member TypesMatch (ty1 : TypeBlob) (ty2 : TypeBlob) =
+            match ty1, ty2 with
+            | TypeBlob.Class ty1, TypeBlob.Class ty2
+            | TypeBlob.ValueType ty1, TypeBlob.ValueType ty2 ->
+                TypeDefRefOrSpec.SameType ty1 ty2
+                // TODO we still need to deal with some of the other types here
+            | _ ->
+                // we can fall back on structural equality
+                ty1 = ty2
+
+        override x.ToString() =
+            match x with
+            | TypeBlob.Boolean -> "bool"
+            | TypeBlob.Char -> "char"
+            | TypeBlob.I1 -> "int8"
+            | TypeBlob.U1 -> "unsigned int8"
+            | TypeBlob.I2 -> "int16"
+            | TypeBlob.U2 -> "unsigned int16"
+            | TypeBlob.I4 -> "int32"
+            | TypeBlob.U4 -> "unsigned int32"
+            | TypeBlob.I8 -> "int64"
+            | TypeBlob.U8 -> "unsigned int64"
+            | TypeBlob.R4 -> "float32"
+            | TypeBlob.R8 -> "float64"
+            | TypeBlob.I -> "native int"
+            | TypeBlob.U -> "native unsigned int"
+            | TypeBlob.Class (:? TypeDefOrRef as tyDefOrRef) -> "class " + tyDefOrRef.FullName
+            | TypeBlob.Class _ -> failwithf "TODO can't turn %A into string" x
+            | TypeBlob.MVar i -> "!!" + string i
+            | TypeBlob.Object -> "object"
+            | TypeBlob.String -> "string"
+            | TypeBlob.ValueType (:? TypeDefOrRef as tyDefOrRef) -> "valuetype " + tyDefOrRef.FullName
+            | TypeBlob.ValueType _ -> failwithf "TODO can't turn %A into string" x
+            | TypeBlob.Var i -> "!" + string i
+
+            // the following are also in type spec
+            | TypeBlob.Ptr (custMods, tyOpt) ->
+                spaceSepStrs [|
+                    match tyOpt with
+                    | None      -> yield "void*"
+                    | Some ty   -> yield ty.ToString() + "*"
+
+                    for cm in custMods do
+                        yield cm.ToString()
+                |]
+
+            | TypeBlob.FnPtr methDefOrRef ->
+                spaceSepStrs [|
+                    yield "method"
+
+                    match methDefOrRef.thisKind with
+                    | ThisKind.NoThis -> ()
+                    | ThisKind.ExplicitThis -> yield! [|"instance"; "explicit"|]
+                    | ThisKind.HasThis -> yield "instance"
+
+                    yield "*"
+                    yield "(TODO_PARAMS_GO_HERE)"
+                |]
+            | TypeBlob.Array (tyBlob, arrShape) ->
+                tyBlob.ToString() + "[" + arrShape.ToString() + "]"
+            | TypeBlob.SzArray (custMods, tyBlob) -> //of List<CustomModBlob> * TypeBlob
+                spaceSepStrs [|
+                    yield tyBlob.ToString()
+                    for cm in custMods do
+                        yield cm.ToString()
+                |]
+            // GenericInst bool isClass with false indicating valuetype
+            | TypeBlob.GenericInst genTyInst ->
+                spaceSepStrs [|
+                    "TODO_GENERIC_INST"
+                |]
         static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeBlob =
             match !blob with
             | [] -> failwith "unexpected end of blob while reading type"
@@ -2810,8 +2982,7 @@ and [<RequireQualifiedAccess>] TypeBlob =
                     | TypeSpecBlob.SzArray(custMods, types)     -> SzArray(custMods, types)
                     | TypeSpecBlob.MVar i                       -> MVar i
                     | TypeSpecBlob.Var i                        -> Var i
-                    | TypeSpecBlob.GenericInst(isClass, tyDefOrRef, types) ->
-                        GenericInst(isClass, tyDefOrRef, types)
+                    | TypeSpecBlob.GenericInst genTyInst        -> GenericInst genTyInst
 
 and MaybeByRefType = {isByRef : bool; ty : TypeBlob}
 with
@@ -2887,6 +3058,17 @@ with
 and [<RequireQualifiedAccess>] ParamType =
     | MayByRefTy of MaybeByRefType
     | TypedByRef
+    with
+        override x.ToString() =
+            match x with
+            | ParamType.MayByRefTy mayByTyRef ->
+                if mayByTyRef.isByRef then
+                    mayByTyRef.ty.ToString() + "&"
+                else
+                    mayByTyRef.ty.ToString()
+            | ParamType.TypedByRef ->
+                failwith "TODO no can do for typedbyref"
+
 and Param = {
     customMods : CustomModBlob list
     pType : ParamType
@@ -2903,6 +3085,14 @@ with
                 | _ -> ParamType.MayByRefTy (MaybeByRefType.FromBlob assem blob)
             {Param.customMods = custMods; pType = pType}
 
+    static member ParamsMatch (p1 : Param) (p2 : Param) =
+        // TODO do the customMods matter?
+        match p1.pType, p2.pType with
+        | ParamType.TypedByRef, ParamType.TypedByRef -> true
+        | ParamType.MayByRefTy mayByRefTy1, ParamType.MayByRefTy mayByRefTy2 ->
+            TypeBlob.TypesMatch mayByRefTy1.ty mayByRefTy2.ty
+        | _ -> false
+
 and [<RequireQualifiedAccess>] RetTypeKind =
     | MayByRefTy of MaybeByRefType
     | TypedByRef
@@ -2912,6 +3102,17 @@ and RetType = {
     rType : RetTypeKind
 }
 with
+    override x.ToString() =
+        if x.customMods.Length >= 1 then
+            failwith "TODO need to deal with custmods in return type"
+        match x.rType with
+        | RetTypeKind.Void -> "void"
+        | RetTypeKind.TypedByRef -> failwith "TODO deal with typed by ref return type"
+        | RetTypeKind.MayByRefTy mayByRefTy ->
+            if mayByRefTy.isByRef then
+                failwith "TODO not yet dealing with by ref return type"
+            mayByRefTy.ty.ToString()
+
     static member FromBlob (assem : Assembly) (blob : byte list ref) : RetType =
         let custMods = CustomModBlob.ManyFromBlob assem blob
         match !blob with
@@ -2926,6 +3127,25 @@ with
 
 and ArrayShape = {rank : uint32; sizes : uint32 array; loBounds : int array}
 with
+    override x.ToString() =
+        commaSepStrs [|
+            for i = 0 to int x.rank - 1 do
+                let hasLoBound = i < x.loBounds.Length
+                let loBound() = int x.loBounds.[i]
+                let hasSize = i < x.sizes.Length
+                let size() = int x.sizes.[i]
+
+                if hasLoBound then
+                    yield string <| loBound()
+                    yield "..."
+                    if hasSize then
+                        yield string <| loBound() + size() - 1
+                elif hasSize then
+                    yield string <| size()
+                else
+                    yield ""
+        |]
+
     static member FromBlob (blob : byte list ref) =
         let readByte = makeReadByteFun blob
         let rank = readCompressedUnsignedInt readByte
@@ -2936,13 +3156,19 @@ with
 
         {ArrayShape.rank = rank; sizes = sizes; loBounds = loBounds}
 
+and GenericTypeInst = {
+    // if isClass is false then it is a valuetype
+    isClass : bool
+    genericType : TypeDefRefOrSpec
+    typeParams : TypeBlob list
+}
+
 and [<RequireQualifiedAccess>] TypeSpecBlob =
     | Ptr of List<CustomModBlob> * Option<TypeBlob>
     | FnPtr of MethodDefOrRefSig
     | Array of TypeBlob * ArrayShape
     | SzArray of List<CustomModBlob> * TypeBlob
-    // GenericInst bool isClass with false indicating valuetype
-    | GenericInst of bool * TypeDefRefOrSpec * List<TypeBlob>
+    | GenericInst of GenericTypeInst
 
     // TODO VAR and MVAR are not in the spec but they do seem to show up in assemblies (well
     // at least MVAR does. I haven't yet confirmed that VAR does)
@@ -2987,7 +3213,13 @@ and [<RequireQualifiedAccess>] TypeSpecBlob =
                             let genArgCount = readCompressedUnsignedInt (makeReadByteFun blob)
                             [for _ in 1u .. genArgCount -> TypeBlob.FromBlob assem blob]
 
-                        GenericInst(isClass, tyDefRefSpecBlob, tys)
+                        //GenericInst(isClass, tyDefRefSpecBlob, tys)
+                        let genTyInst = {
+                            GenericTypeInst.isClass = isClass
+                            genericType = tyDefRefSpecBlob
+                            typeParams = tys
+                        }
+                        GenericInst genTyInst
                 | ElementType.MVar -> MVar(readUInt())
                 | ElementType.Var -> Var(readUInt())
                 | et ->

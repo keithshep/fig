@@ -8,19 +8,6 @@ open System.Text
 
 let private labelAt addr = sprintf "IL_%04x" addr
 
-let private sepStrsWith (sep : string) (strings : string array) =
-    if Array.isEmpty strings then
-        ""
-    else
-        let sb = new StringBuilder()
-        sb.Append strings.[0] |> ignore
-        for i in 1 .. strings.Length - 1 do
-            sb.Append sep |> ignore
-            sb.Append strings.[i] |> ignore
-        sb.ToString()
-let private spaceSepStrs = sepStrsWith " "
-let private commaSepStrs = sepStrsWith ", "
-
 let private bytesToString (bytes : byte array) =
     spaceSepStrs <| Array.map (sprintf "%02X") bytes
 
@@ -29,132 +16,6 @@ let versionString (assemRef : AssemblyRef) =
     string assemRef.MinorVersion + ":" +
     string assemRef.RevisionNumber + ":" +
     string assemRef.BuildNumber
-
-let custModString (cm : CustomModBlob) =
-    let reqStr =
-        if cm.isRequired then
-            "modreq"
-        else
-            "modopt"
-    match cm.theType with
-    | :? TypeDefOrRef as ty ->
-        sprintf "%s (%s)" reqStr ty.FullName
-    | ty ->
-        failwith "TODO: custom mod of %A" ty
-
-let methSigToString (methSig : MethodDefOrRefSig) =
-    "TODO_METH_SIG"
-
-let shapeString (arrShape : ArrayShape) =
-    commaSepStrs [|
-        for i = 0 to int arrShape.rank - 1 do
-            let hasLoBound = i < arrShape.loBounds.Length
-            let loBound() = int arrShape.loBounds.[i]
-            let hasSize = i < arrShape.sizes.Length
-            let size() = int arrShape.sizes.[i]
-
-            if hasLoBound then
-                yield string <| loBound()
-                yield "..."
-                if hasSize then
-                    yield string <| loBound() + size() - 1
-            elif hasSize then
-                yield string <| size()
-            else
-                yield ""
-    |]
-
-let rec typeBlobToStr (ty : TypeBlob) =
-    match ty with
-    | TypeBlob.Boolean -> "bool"
-    | TypeBlob.Char -> "char"
-    | TypeBlob.I1 -> "int8"
-    | TypeBlob.U1 -> "unsigned int8"
-    | TypeBlob.I2 -> "int16"
-    | TypeBlob.U2 -> "unsigned int16"
-    | TypeBlob.I4 -> "int32"
-    | TypeBlob.U4 -> "unsigned int32"
-    | TypeBlob.I8 -> "int64"
-    | TypeBlob.U8 -> "unsigned int64"
-    | TypeBlob.R4 -> "float32"
-    | TypeBlob.R8 -> "float64"
-    | TypeBlob.I -> "native int"
-    | TypeBlob.U -> "native unsigned int"
-    | TypeBlob.Class (:? TypeDefOrRef as tyDefOrRef) -> "class " + tyDefOrRef.FullName
-    | TypeBlob.Class _ -> failwithf "TODO can't turn %A into string" ty
-    | TypeBlob.MVar i -> "!!" + string i
-    | TypeBlob.Object -> "object"
-    | TypeBlob.String -> "string"
-    | TypeBlob.ValueType (:? TypeDefOrRef as tyDefOrRef) -> "valuetype " + tyDefOrRef.FullName
-    | TypeBlob.ValueType _ -> failwithf "TODO can't turn %A into string" ty
-    | TypeBlob.Var i -> "!" + string i
-
-    // the following are also in type spec
-    | TypeBlob.Ptr (custMods, tyOpt) ->
-        spaceSepStrs [|
-            match tyOpt with
-            | None      -> yield "void*"
-            | Some ty   -> yield typeBlobToStr ty + "*"
-
-            yield! List.map custModString custMods
-        |]
-
-    | TypeBlob.FnPtr methDefOrRef ->
-        spaceSepStrs [|
-            yield "method"
-
-            match methDefOrRef.thisKind with
-            | ThisKind.NoThis -> ()
-            | ThisKind.ExplicitThis -> yield! [|"instance"; "explicit"|]
-            | ThisKind.HasThis -> yield "instance"
-
-            yield "*"
-            yield "(TODO_PARAMS_GO_HERE)"
-        |]
-    | TypeBlob.Array (tyBlob, arrShape) ->
-        typeBlobToStr tyBlob + "[" + shapeString arrShape + "]"
-    | TypeBlob.SzArray (custMods, tyBlob) -> //of List<CustomModBlob> * TypeBlob
-        spaceSepStrs [|
-            yield typeBlobToStr tyBlob
-            yield! List.map custModString custMods
-        |]
-    // GenericInst bool isClass with false indicating valuetype
-    | TypeBlob.GenericInst (isClass, tyDefOrRef, tyBlobs) -> //of bool * TypeDefOrRef * List<TypeBlob>
-        spaceSepStrs [|
-            "TODO_GENERIC_INST"
-        |]
-
-let paramTypeToStr (paramTy : ParamType) =
-    match paramTy with
-    | ParamType.MayByRefTy mayByTyRef ->
-        if mayByTyRef.isByRef then
-            typeBlobToStr mayByTyRef.ty + "&"
-        else
-            typeBlobToStr mayByTyRef.ty
-    | ParamType.TypedByRef ->
-        failwith "TODO no can do for typedbyref"
-
-let typeDefRefOrSpecToStr (ty : TypeDefRefOrSpec) =
-    match ty with
-    | :? TypeDef as ty ->
-        let tkStr =
-            match ty.TypeKind with
-            | TypeKind.Class | TypeKind.Interface -> "class"
-            | TypeKind.Valuetype -> "valuetype"
-            | tk -> failwithf "TODO woah don't know how to deal with %A" tk
-        tkStr + " " + ty.FullName
-    | _ -> sprintf "TODO_DONT_YET_DEAL_WITH %A" ty
-
-let returnTypeToStr (retTy : RetType) =
-    if retTy.customMods.Length >= 1 then
-        failwith "TODO need to deal with custmods in return type"
-    match retTy.rType with
-    | RetTypeKind.Void -> "void"
-    | RetTypeKind.TypedByRef -> failwith "TODO deal with typed by ref return type"
-    | RetTypeKind.MayByRefTy mayByRefTy ->
-        if mayByRefTy.isByRef then
-            failwith "TODO not yet dealing with by ref return type"
-        typeBlobToStr mayByRefTy.ty
 
 let disInst
         (tw : TextWriter)
@@ -173,28 +34,14 @@ let disInst
                 | None -> ()
                 | Some ty ->
                     yield ".constrained"
-                    yield typeDefRefOrSpecToStr ty
+                    yield ty.ToString()
 
                 if isTail then yield ".tail"
 
                 yield instStr
 
                 // TODO change the following to call.Method.Resolve
-                match meth with
-                | :? MethodDef as meth ->
-                    if not meth.IsStatic then yield "instance"
-                    yield returnTypeToStr meth.Signature.retType
-                    yield sprintf "%s::%s(" (typeDefRefOrSpecToStr meth.DeclaringType) meth.Name
-                    yield commaSepStrs [|
-                        for p in meth.Signature.methParams do
-                            yield spaceSepStrs [|
-                                yield! List.map custModString p.customMods
-                                yield paramTypeToStr p.pType
-                            |]
-                    |]
-                    yield ")"
-                | _ ->
-                    yield "TODO impl call for non-MethodDef"
+                yield meth.ToString()
             |]
         pr instStr
 
@@ -479,7 +326,8 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (md : MethodDef) =
             | MethCallingConv.Vararg ->
                 "vararg"
         
-        yield! List.map custModString methSig.retType.customMods
+        for cm in methSig.retType.customMods do
+            yield cm.ToString()
 
         yield md.Name
     |]
@@ -504,7 +352,7 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (md : MethodDef) =
                         failwith "TODO what do i do with a pinned local"
                     if specLocalVar.mayByRefType.isByRef then
                         failwith "TODO what do i do with this byref?"
-                    let tyStr = typeBlobToStr specLocalVar.mayByRefType.ty
+                    let tyStr = specLocalVar.mayByRefType.ty.ToString()
                     sprintf "%s V_%i" tyStr i
 
             if mb.initLocals then

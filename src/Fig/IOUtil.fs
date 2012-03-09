@@ -22,6 +22,19 @@ let ifprintfn (tr : TextWriter) (depth : uint32) fmt =
 
 let debugfn fmt = Printf.ksprintf System.Diagnostics.Debug.WriteLine fmt
 
+let sepStrsWith (sep : string) (strings : string array) =
+    if Array.isEmpty strings then
+        ""
+    else
+        let sb = new StringBuilder()
+        sb.Append strings.[0] |> ignore
+        for i in 1 .. strings.Length - 1 do
+            sb.Append sep |> ignore
+            sb.Append strings.[i] |> ignore
+        sb.ToString()
+let spaceSepStrs = sepStrsWith " "
+let commaSepStrs = sepStrsWith ", "
+
 // TODO make sure all of these list functions are actually used in the final versions
 let listRead (xs : 'a list ref) : 'a option =
     match !xs with
