@@ -1470,6 +1470,14 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
         x.SeekToBlobIndex blobIndex
         let numBytes = readCompressedUnsignedInt r.ReadByte
         r.ReadBytes(int numBytes)
+    member x.SeekToUSIndex (usIndex : uint32) =
+        let diskPos = rraToDiskPos usHeapOffset + int64 usIndex
+        r.BaseStream.Seek (diskPos, SeekOrigin.Begin) |> ignore
+    member x.ReadUSAtIndex (usIndex : uint32) =
+        x.SeekToUSIndex usIndex
+        let numBytes = readCompressedUnsignedInt r.ReadByte
+        let bytes = r.ReadBytes(int numBytes)
+        System.Text.Encoding.Unicode.GetString bytes
 
     member x.AssemblyRefs = [|
         for i in 0 .. x.MetadataTables.assemblyRefs.Length - 1 ->
@@ -1573,8 +1581,92 @@ and Module(assem : Assembly, selfIndex : int) =
 
     member x.Name = moduleRow.name
 
+and [<AbstractClass>] FieldDefOrRef() =
+    abstract Name : string with get
+    abstract Resolve : unit -> FieldDef
+    abstract Signature : FieldSig with get
+
+    static member FromKindAndIndex (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : FieldDefOrRef =
+        match mt with
+        | MetadataTableKind.FieldKind -> upcast new FieldDef(assem, rowIndex)
+        | MetadataTableKind.MemberRefKind -> upcast new FieldRef(assem, rowIndex)
+        | _ -> failwithf "cannot create a FieldDefOrRef from a %A" mt
+
+    static member FromMetadataToken (assem : Assembly) (mt : MetadataToken) : FieldDefOrRef =
+        match mt with
+        | Some tableKind, i -> FieldDefOrRef.FromKindAndIndex assem tableKind i
+        | None, _ -> failwith "failed to convert token into a field"
+
+and FieldRef(assem : Assembly, selfIndex : int) =
+    inherit FieldDefOrRef()
+
+    let mt = assem.MetadataTables
+    let frRow = mt.memberRefs.[selfIndex]
+
+    override x.Name = frRow.name
+    override x.Resolve() =
+        let matchingFieldIn (ty : TypeDefOrRef) =
+            let ty = ty.Resolve()
+            match Array.filter (fun (field : FieldDef) -> field.Name = x.Name) ty.Fields with
+            | [|matchingField|] -> matchingField
+            | matches -> failwithf "expected a single field match for %s but got %i" x.Name matches.Length
+
+        match frRow.classKind with
+        | MetadataTableKind.MethodDefKind -> failwithf "TODO implement %A for field ref" frRow.classKind
+        | MetadataTableKind.ModuleRefKind -> failwithf "TODO implement %A for field ref" frRow.classKind
+        | MetadataTableKind.TypeDefKind -> failwithf "TODO implement %A for field ref" frRow.classKind
+        | MetadataTableKind.TypeRefKind -> matchingFieldIn <| new TypeRef(assem, frRow.classIndex)
+        | MetadataTableKind.TypeSpecKind ->
+            let tySpec = new TypeSpec(assem, frRow.classIndex)
+            match tySpec.TypeSpecBlob with
+            | TypeSpecBlob.GenericInst genTyInst ->
+                match genTyInst.genericType with
+                | :? TypeDefOrRef as ty -> matchingFieldIn ty
+                | ty -> failwithf "TODO sorry I don't do %A yet" ty
+            | _ ->
+                failwithf "TODO implement %A (%A) for field ref" frRow.classKind tySpec.TypeSpecBlob
+        | kind -> failwithf "invalid class kind for field ref: %A" kind
+    override x.Signature =
+        let blob = ref(assem.ReadBlobAtIndex frRow.signatureIndex |> List.ofArray)
+        FieldSig.FromBlob assem blob
+    override x.ToString() = x.Resolve().ToString()
+
+and FieldDef(assem : Assembly, selfIndex : int) =
+    inherit FieldDefOrRef()
+
+    let mt = assem.MetadataTables
+    let fRow = mt.fields.[selfIndex]
+
+    override x.Name = fRow.name
+    override x.Resolve() = x
+    override x.Signature =
+        let blob = ref(assem.ReadBlobAtIndex fRow.signatureIndex |> List.ofArray)
+        FieldSig.FromBlob assem blob
+    override x.ToString() =
+        let mySig = x.Signature
+        spaceSepStrs [|
+            for cm in mySig.customMods do
+                yield cm.ToString()
+            yield mySig.fType.ToString()
+            yield x.DeclaringType.FullName + "::" + x.Name
+        |]
+
+    member x.DeclaringType : TypeDef =
+        let tdRows = mt.typeDefs
+        let rec findDecTy (currIndex : int) =
+            let foundType =
+                currIndex = tdRows.Length - 1
+                || selfIndex < tdRows.[currIndex + 1].fieldsIndex
+            if foundType then
+                new TypeDef(assem, currIndex)
+            else
+                findDecTy (currIndex + 1)
+        findDecTy 0
+
 and [<AbstractClass>] TypeDefRefOrSpec() =
-    static member FromKindAndIndex(assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefRefOrSpec =
+    abstract ToString : bool -> string
+
+    static member FromKindAndIndex (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefRefOrSpec =
         match mt with
         | MetadataTableKind.TypeDefKind -> upcast new TypeDef(assem, rowIndex)
         | MetadataTableKind.TypeRefKind -> upcast new TypeRef(assem, rowIndex)
@@ -1636,6 +1728,8 @@ and TypeSpec(assem : Assembly, selfIndex : int) =
 
     member x.TypeSpecBlob = typeSpecBlob
 
+    override x.ToString(showTypeKind : bool) = "TODO impl tostring for TypeSpec"
+    override x.ToString() = "TODO impl tostring for TypeSpec"
     (*
     override x.Namespace =
         match typeSpecBlob with
@@ -1688,6 +1782,7 @@ and TypeRef(assem : Assembly, selfIndex : int) =
         | rsk ->
             failwith "unexpected resolution scope table kind %A" rsk
 
+    override x.ToString(showTypeKind : bool) = x.Resolve().ToString(showTypeKind)
     override x.ToString() = x.Resolve().ToString()
 
 and [<RequireQualifiedAccess>] TypeVisibilityAttr =
@@ -1715,6 +1810,17 @@ and TypeDef(assem : Assembly, selfIndex : int) =
     override x.Namespace = typeDefRow.typeNamespace
     override x.Name = typeDefRow.typeName
     override x.Resolve() = x
+
+    override x.ToString(showTypeKind : bool) =
+        if showTypeKind then
+            let tkStr =
+                match x.TypeKind with
+                | TypeKind.Class | TypeKind.Interface | TypeKind.Delegate -> "class"
+                | TypeKind.Valuetype -> "valuetype"
+                | tk -> failwithf "TODO woah don't know how to deal with %A" tk
+            tkStr + " " + x.FullName
+        else
+            x.FullName
 
     override x.ToString() =
         let tkStr =
@@ -1792,6 +1898,16 @@ and TypeDef(assem : Assembly, selfIndex : int) =
             if ncRow.enclosingClassIndex = selfIndex then
                 yield new TypeDef(assem, ncRow.nestedClassIndex)
     |]
+
+    member x.Fields : FieldDef array =
+        let lastFieldIndex =
+            let isLastTypeDef = selfIndex = mt.typeDefs.Length - 1
+            if isLastTypeDef then
+                mt.fields.Length - 1
+            else
+                mt.typeDefs.[selfIndex + 1].fieldsIndex - 1
+
+        [|for i in typeDefRow.fieldsIndex .. lastFieldIndex -> new FieldDef(assem, i)|]
 
     member x.Methods =
         let lastMethodIndex =
@@ -2073,7 +2189,7 @@ and MethodDef (assem : Assembly, selfIndex : int) =
         spaceSepStrs [|
             if not x.IsStatic then yield "instance"
             yield x.Signature.retType.ToString()
-            yield sprintf "%s::%s(" (x.DeclaringType.ToString()) x.Name
+            yield x.DeclaringType.ToString()  + "::" + x.Name + "("
             yield commaSepStrs [|
                 for p in x.Signature.methParams do
                     yield spaceSepStrs [|
@@ -2175,7 +2291,7 @@ and MethodDef (assem : Assembly, selfIndex : int) =
 
             Some (readMethodBody r)
 
-    member x.DeclaringType =
+    member x.DeclaringType : TypeDef =
         let tdRows = mt.typeDefs
         let rec findDecTy (currIndex : int) =
             let foundType =
@@ -2230,7 +2346,7 @@ and [<RequireQualifiedAccess>] AbstInst =
     | ConvR8
     | ConvU4
     | ConvU8
-    | Cpobj of MetadataToken
+    | Cpobj of TypeDefRefOrSpec
     | Div
     | DivUn
     | Dup
@@ -2254,13 +2370,13 @@ and [<RequireQualifiedAccess>] AbstInst =
     | Ldloc of uint16
     | Ldloca of uint16
     | Ldnull
-    | Ldobj of byte option * MetadataToken
-    | Ldstr of MetadataToken
+    | Ldobj of byte option * TypeDefRefOrSpec
+    | Ldstr of string
     | Mul
     | Neg
     | Nop
     | Not
-    | Newobj of MetadataToken
+    | Newobj of Method
     | Or
     | Pop
     | Rem
@@ -2281,18 +2397,18 @@ and [<RequireQualifiedAccess>] AbstInst =
     | Sub
     | Switch of int array
     | Xor
-    | Castclass of MetadataToken
-    | Isinst of MetadataToken
+    | Castclass of TypeDefRefOrSpec
+    | Isinst of TypeDefRefOrSpec
     | ConvRUn
-    | Unbox of MetadataToken
+    | Unbox of TypeDefRefOrSpec
     | Throw
-    | Ldfld of byte option * MetadataToken
-    | Ldflda of byte option * MetadataToken
-    | Stfld of byte option * MetadataToken
-    | Ldsfld of MetadataToken
-    | Ldsflda of MetadataToken
-    | Stsfld of MetadataToken
-    | Stobj of byte option * MetadataToken
+    | Ldfld of byte option * FieldDefOrRef
+    | Ldflda of byte option * FieldDefOrRef
+    | Stfld of byte option * FieldDefOrRef
+    | Ldsfld of FieldDefOrRef
+    | Ldsflda of FieldDefOrRef
+    | Stsfld of FieldDefOrRef
+    | Stobj of byte option * TypeDefRefOrSpec
     | ConvOvfI1Un
     | ConvOvfI2Un
     | ConvOvfI4Un
@@ -2303,10 +2419,10 @@ and [<RequireQualifiedAccess>] AbstInst =
     | ConvOvfU8Un
     | ConvOvfIUn
     | ConvOvfUUn
-    | Box of MetadataToken
-    | Newarr of MetadataToken
+    | Box of TypeDefRefOrSpec
+    | Newarr of TypeDefRefOrSpec
     | Ldlen
-    | Ldelema of MetadataToken
+    | Ldelema of TypeDefRefOrSpec
     | LdelemI1
     | LdelemU1
     | LdelemI2
@@ -2326,9 +2442,9 @@ and [<RequireQualifiedAccess>] AbstInst =
     | StelemR4
     | StelemR8
     | StelemRef
-    | Ldelem of MetadataToken
-    | Stelem of MetadataToken
-    | UnboxAny of MetadataToken
+    | Ldelem of TypeDefRefOrSpec
+    | Stelem of TypeDefRefOrSpec
+    | UnboxAny of TypeDefRefOrSpec
     | ConvOvfI1
     | ConvOvfU1
     | ConvOvfI2
@@ -2362,15 +2478,15 @@ and [<RequireQualifiedAccess>] AbstInst =
     | CgtUn
     | Clt
     | CltUn
-    | Ldftn of MetadataToken
+    | Ldftn of Method
     | Ldvirtftn of MetadataToken
     | Localloc
     | Endfilter
-    | Initobj of MetadataToken
+    | Initobj of TypeDefRefOrSpec
     | Cpblk
     | Initblk of byte option
     | Rethrow
-    | Sizeof of MetadataToken
+    | Sizeof of TypeDefRefOrSpec
     | Refanytype
     with
         static member toAbstInstBlocks
@@ -2466,7 +2582,8 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.ConvR8 -> AbstInst.ConvR8
                 | RawInst.ConvU4 -> AbstInst.ConvU4
                 | RawInst.ConvU8 -> AbstInst.ConvU8
-                | RawInst.Cpobj typeMetaTok -> AbstInst.Cpobj typeMetaTok
+                | RawInst.Cpobj typeMetaTok ->
+                    AbstInst.Cpobj (TypeDefRefOrSpec.FromMetadataToken assem typeMetaTok)
                 | RawInst.Div -> AbstInst.Div
                 | RawInst.DivUn -> AbstInst.DivUn
                 | RawInst.Dup -> AbstInst.Dup
@@ -2490,13 +2607,19 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.Ldloc varIndex -> AbstInst.Ldloc varIndex
                 | RawInst.Ldloca varIndex -> AbstInst.Ldloca varIndex
                 | RawInst.Ldnull -> AbstInst.Ldnull
-                | RawInst.Ldobj (unalignedOpt, typeTok) -> AbstInst.Ldobj (unalignedOpt, typeTok)
-                | RawInst.Ldstr strTok -> AbstInst.Ldstr strTok
+                | RawInst.Ldobj (unalignedOpt, typeTok) ->
+                    let ty = TypeDefRefOrSpec.FromMetadataToken assem typeTok
+                    AbstInst.Ldobj (unalignedOpt, ty)
+                | RawInst.Ldstr strTok ->
+                    match strTok with
+                    | None, strIndex -> AbstInst.Ldstr (assem.ReadUSAtIndex (uint32 strIndex))
+                    | Some mtKind, _ ->
+                        failwithf "expected string token metadata table kind to be 'None' but got '%A'" mtKind
                 | RawInst.Mul -> AbstInst.Mul
                 | RawInst.Neg -> AbstInst.Neg
                 | RawInst.Nop -> AbstInst.Nop
                 | RawInst.Not -> AbstInst.Not
-                | RawInst.Newobj ctorTok -> AbstInst.Newobj ctorTok
+                | RawInst.Newobj ctorTok -> AbstInst.Newobj (Method.FromMetadataToken assem ctorTok)
                 | RawInst.Or -> AbstInst.Or
                 | RawInst.Pop -> AbstInst.Pop
                 | RawInst.Rem -> AbstInst.Rem
@@ -2517,18 +2640,35 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.Sub -> AbstInst.Sub
                 | RawInst.Switch tgtArray -> AbstInst.Switch (Array.map (tgtToBlkIndex instIndex) tgtArray)
                 | RawInst.Xor -> AbstInst.Xor
-                | RawInst.Castclass typeTok -> AbstInst.Castclass typeTok
-                | RawInst.Isinst typeTok -> AbstInst.Isinst typeTok
+                | RawInst.Castclass typeTok ->
+                    AbstInst.Castclass (TypeDefRefOrSpec.FromMetadataToken assem typeTok)
+                | RawInst.Isinst typeTok ->
+                    AbstInst.Isinst (TypeDefRefOrSpec.FromMetadataToken assem typeTok)
                 | RawInst.ConvRUn -> AbstInst.ConvRUn
-                | RawInst.Unbox valTypeTok -> AbstInst.Unbox valTypeTok
+                | RawInst.Unbox valTypeTok ->
+                    AbstInst.Unbox (TypeDefRefOrSpec.FromMetadataToken assem valTypeTok)
                 | RawInst.Throw -> AbstInst.Throw
-                | RawInst.Ldfld (unalignedOpt, fieldTok) -> AbstInst.Ldfld (unalignedOpt, fieldTok)
-                | RawInst.Ldflda (unalignedOpt, fieldTok) -> AbstInst.Ldflda (unalignedOpt, fieldTok)
-                | RawInst.Stfld (unalignedOpt, fieldTok) -> AbstInst.Stfld (unalignedOpt, fieldTok)
-                | RawInst.Ldsfld fieldTok -> AbstInst.Ldsfld fieldTok
-                | RawInst.Ldsflda fieldTok -> AbstInst.Ldsflda fieldTok
-                | RawInst.Stsfld fieldTok -> AbstInst.Stsfld fieldTok
-                | RawInst.Stobj (unalignedOpt, typeTok) -> AbstInst.Stobj (unalignedOpt, typeTok)
+                | RawInst.Ldfld (unalignedOpt, fieldTok) ->
+                    let field = FieldDefOrRef.FromMetadataToken assem fieldTok
+                    AbstInst.Ldfld (unalignedOpt, field)
+                | RawInst.Ldflda (unalignedOpt, fieldTok) ->
+                    let field = FieldDefOrRef.FromMetadataToken assem fieldTok
+                    AbstInst.Ldflda (unalignedOpt, field)
+                | RawInst.Stfld (unalignedOpt, fieldTok) ->
+                    let field = FieldDefOrRef.FromMetadataToken assem fieldTok
+                    AbstInst.Stfld (unalignedOpt, field)
+                | RawInst.Ldsfld fieldTok ->
+                    let field = FieldDefOrRef.FromMetadataToken assem fieldTok
+                    AbstInst.Ldsfld field
+                | RawInst.Ldsflda fieldTok ->
+                    let field = FieldDefOrRef.FromMetadataToken assem fieldTok
+                    AbstInst.Ldsflda field
+                | RawInst.Stsfld fieldTok ->
+                    let field = FieldDefOrRef.FromMetadataToken assem fieldTok
+                    AbstInst.Stsfld field
+                | RawInst.Stobj (unalignedOpt, typeTok) ->
+                    let ty = TypeDefRefOrSpec.FromMetadataToken assem typeTok
+                    AbstInst.Stobj (unalignedOpt, ty)
                 | RawInst.ConvOvfI1Un -> AbstInst.ConvOvfI1Un
                 | RawInst.ConvOvfI2Un -> AbstInst.ConvOvfI2Un
                 | RawInst.ConvOvfI4Un -> AbstInst.ConvOvfI4Un
@@ -2539,10 +2679,13 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.ConvOvfU8Un -> AbstInst.ConvOvfU8Un
                 | RawInst.ConvOvfIUn -> AbstInst.ConvOvfIUn
                 | RawInst.ConvOvfUUn -> AbstInst.ConvOvfUUn
-                | RawInst.Box typeTok -> AbstInst.Box typeTok
-                | RawInst.Newarr elemTypeTok -> AbstInst.Newarr elemTypeTok
+                | RawInst.Box typeTok ->
+                    AbstInst.Box (TypeDefRefOrSpec.FromMetadataToken assem typeTok)
+                | RawInst.Newarr elemTypeTok ->
+                    AbstInst.Newarr (TypeDefRefOrSpec.FromMetadataToken assem elemTypeTok)
                 | RawInst.Ldlen -> AbstInst.Ldlen
-                | RawInst.Ldelema elemTypeTok -> AbstInst.Ldelema elemTypeTok
+                | RawInst.Ldelema elemTypeTok ->
+                    AbstInst.Ldelema (TypeDefRefOrSpec.FromMetadataToken assem elemTypeTok)
                 | RawInst.LdelemI1 -> AbstInst.LdelemI1
                 | RawInst.LdelemU1 -> AbstInst.LdelemU1
                 | RawInst.LdelemI2 -> AbstInst.LdelemI2
@@ -2562,9 +2705,12 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.StelemR4 -> AbstInst.StelemR4
                 | RawInst.StelemR8 -> AbstInst.StelemR8
                 | RawInst.StelemRef -> AbstInst.StelemRef
-                | RawInst.Ldelem elemTypeTok -> AbstInst.Ldelem elemTypeTok
-                | RawInst.Stelem elemTypeTok -> AbstInst.Stelem elemTypeTok
-                | RawInst.UnboxAny typeTok -> AbstInst.UnboxAny typeTok
+                | RawInst.Ldelem elemTypeTok ->
+                    AbstInst.Ldelem (TypeDefRefOrSpec.FromMetadataToken assem elemTypeTok)
+                | RawInst.Stelem elemTypeTok ->
+                    AbstInst.Stelem (TypeDefRefOrSpec.FromMetadataToken assem elemTypeTok)
+                | RawInst.UnboxAny typeTok ->
+                    AbstInst.UnboxAny (TypeDefRefOrSpec.FromMetadataToken assem typeTok)
                 | RawInst.ConvOvfI1 -> AbstInst.ConvOvfI1
                 | RawInst.ConvOvfU1 -> AbstInst.ConvOvfU1
                 | RawInst.ConvOvfI2 -> AbstInst.ConvOvfI2
@@ -2598,15 +2744,17 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.CgtUn -> AbstInst.CgtUn
                 | RawInst.Clt -> AbstInst.Clt
                 | RawInst.CltUn -> AbstInst.CltUn
-                | RawInst.Ldftn methodTok -> AbstInst.Ldftn methodTok
+                | RawInst.Ldftn methodTok -> AbstInst.Ldftn (Method.FromMetadataToken assem methodTok)
                 | RawInst.Ldvirtftn methodTok -> AbstInst.Ldvirtftn methodTok
                 | RawInst.Localloc -> AbstInst.Localloc
                 | RawInst.Endfilter -> AbstInst.Endfilter
-                | RawInst.Initobj typeTok -> AbstInst.Initobj typeTok
+                | RawInst.Initobj typeTok ->
+                    AbstInst.Initobj (TypeDefRefOrSpec.FromMetadataToken assem typeTok)
                 | RawInst.Cpblk -> AbstInst.Cpblk
                 | RawInst.Initblk unalignedOpt -> AbstInst.Initblk unalignedOpt
                 | RawInst.Rethrow -> AbstInst.Rethrow
-                | RawInst.Sizeof typeTok -> AbstInst.Sizeof typeTok
+                | RawInst.Sizeof typeTok ->
+                    AbstInst.Sizeof (TypeDefRefOrSpec.FromMetadataToken assem typeTok)
                 | RawInst.Refanytype -> AbstInst.Refanytype
 
             let instBlocks = [|
@@ -2880,9 +3028,20 @@ and [<RequireQualifiedAccess>] TypeBlob =
             | TypeBlob.Class ty1, TypeBlob.Class ty2
             | TypeBlob.ValueType ty1, TypeBlob.ValueType ty2 ->
                 TypeDefRefOrSpec.SameType ty1 ty2
-                // TODO we still need to deal with some of the other types here
+
+            | TypeBlob.Array (ty1, _), TypeBlob.Array (ty2, _)
+            | TypeBlob.SzArray (_, ty1), TypeBlob.SzArray (_, ty2) ->
+                // TODO do we need to worry about array shapes or custom mods here?
+                TypeBlob.TypesMatch ty1 ty2
+
+            | TypeBlob.GenericInst gt1, TypeBlob.GenericInst gt2 ->
+                GenericTypeInst.TypesMatch gt1 gt2
+
+            | TypeBlob.Ptr _, TypeBlob.Ptr _
+            | TypeBlob.FnPtr _, TypeBlob.FnPtr _ ->
+                failwithf "TODO implement TypesMatch for %A %A" ty1 ty2
             | _ ->
-                // we can fall back on structural equality
+                // we can fall back on structural equality for everything else
                 ty1 = ty2
 
         override x.ToString() =
@@ -3055,6 +3214,23 @@ with
                 varargParams = varargParams
             }
 
+and FieldSig = {
+    customMods : CustomModBlob list
+    fType : TypeBlob
+}
+with
+    static member FromBlob (assem : Assembly) (blob : byte list ref) : FieldSig =
+        match listRead blob with
+        | Some 0x6uy ->
+            let custMods = CustomModBlob.ManyFromBlob assem blob
+            let ty = TypeBlob.FromBlob assem blob
+            {
+                FieldSig.customMods = custMods
+                fType = ty
+            }
+        | Some et -> failwithf "the following element type is not valid for a field sig: %A" et
+        | None -> failwith "unexpected end of blob while reading method def or ref sig"
+
 and [<RequireQualifiedAccess>] ParamType =
     | MayByRefTy of MaybeByRefType
     | TypedByRef
@@ -3162,6 +3338,18 @@ and GenericTypeInst = {
     genericType : TypeDefRefOrSpec
     typeParams : TypeBlob list
 }
+with
+    static member TypesMatch (gt1 : GenericTypeInst) (gt2 : GenericTypeInst) : bool =
+        let rec tyParamsMatch (tyParams1 : TypeBlob list) (tyParams2 : TypeBlob list) =
+            match tyParams1, tyParams2 with
+            | ty1 :: tyTail1, ty2 :: tyTail2 ->
+                TypeBlob.TypesMatch ty1 ty2 && tyParamsMatch tyTail1 tyTail2
+            | [], [] -> true
+            | _ -> false
+
+        gt1.isClass = gt2.isClass
+        && TypeDefRefOrSpec.SameType gt1.genericType gt2.genericType
+        && tyParamsMatch gt1.typeParams gt2.typeParams
 
 and [<RequireQualifiedAccess>] TypeSpecBlob =
     | Ptr of List<CustomModBlob> * Option<TypeBlob>

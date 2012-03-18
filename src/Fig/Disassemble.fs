@@ -17,6 +17,16 @@ let versionString (assemRef : AssemblyRef) =
     string assemRef.RevisionNumber + ":" +
     string assemRef.BuildNumber
 
+let asStringLitteral (s : string) =
+    let s = s.Replace(@"\", @"\\")
+    let s = s.Replace("\n", @"\n")
+    let s = s.Replace("\b", @"\b")
+    let s = s.Replace("\r", @"\r")
+    let s = s.Replace("\t", @"\t")
+    let s = s.Replace("\"", "\\\"")
+
+    "\"" + s + "\""
+
 let disInst
         (tw : TextWriter)
         (indent : uint32)
@@ -27,7 +37,7 @@ let disInst
     let lbl = labelAt addr
     let pr (s : string) = ifprintfn tw indent "%s: %s" lbl s
 
-    let prCall (instStr : string) (thisTyConst : TypeDefRefOrSpec option) (isTail : bool) (meth : Method) =
+    let prMeth (instStr : string) (thisTyConst : TypeDefRefOrSpec option) (isTail : bool) (meth : Method) =
         let instStr =
             spaceSepStrs [|
                 match thisTyConst with
@@ -44,6 +54,11 @@ let disInst
                 yield meth.ToString()
             |]
         pr instStr
+
+    let maybePrependUnaligned (unalignedOpt : byte option) (s : string) =
+        match unalignedOpt with
+        | None -> s
+        | Some unaligned -> "unaligned. " + string unaligned + " " + s
 
     match inst with
     | AbstInst.Add -> "add" |> pr
@@ -62,9 +77,9 @@ let disInst
     | AbstInst.Break -> "break" |> pr
     | AbstInst.Brfalse tgt -> "brfalse " + blockLabels.[tgt] |> pr
     | AbstInst.Brtrue tgt -> "brtrue " + blockLabels.[tgt] |> pr
-    | AbstInst.Call call -> prCall "call" None call.Tail call.Method
-    | AbstInst.Calli call -> prCall "calli" None call.Tail call.Method
-    | AbstInst.Callvirt virtcall -> prCall "callvirt" virtcall.ThisType virtcall.Tail virtcall.Method
+    | AbstInst.Call call -> prMeth "call" None call.Tail call.Method
+    | AbstInst.Calli call -> prMeth "calli" None call.Tail call.Method
+    | AbstInst.Callvirt virtcall -> prMeth "callvirt" virtcall.ThisType virtcall.Tail virtcall.Method
     | AbstInst.ConvI1 -> "conv.i1" |> pr
     | AbstInst.ConvI2 -> "conv.i2" |> pr
     | AbstInst.ConvI4 -> "conv.i4" |> pr
@@ -73,9 +88,7 @@ let disInst
     | AbstInst.ConvR8 -> "conv.r8" |> pr
     | AbstInst.ConvU4 -> "conv.u4" |> pr
     | AbstInst.ConvU8 -> "conv.u8" |> pr
-    (*
-    | AbstInst.Cpobj of MetadataToken
-    *)
+    | AbstInst.Cpobj ty -> "cpobj " + ty.ToString() |> pr
     | AbstInst.Div -> "div" |> pr
     | AbstInst.DivUn -> "div.un" |> pr
     | AbstInst.Dup -> "dup" |> pr
@@ -88,32 +101,28 @@ let disInst
     | AbstInst.LdcI8 i -> "ldc.i8 " + string i |> pr
     | AbstInst.LdcR4 r -> "ldc.r4 " + string r |> pr
     | AbstInst.LdcR8 r -> "ldc.r8 " + string r |> pr
-    (*
-    | AbstInst.LdindU1 of byte option
-    | AbstInst.LdindI2 of byte option
-    | AbstInst.LdindU2 of byte option
-    | AbstInst.LdindI4 of byte option
-    | AbstInst.LdindU4 of byte option
-    | AbstInst.LdindI8 of byte option
-    | AbstInst.LdindI of byte option
-    | AbstInst.LdindR4 of byte option
-    | AbstInst.LdindR8 of byte option
-    | AbstInst.LdindRef of byte option
-    *)
+    | AbstInst.LdindU1 alignOpt -> maybePrependUnaligned alignOpt "ldind.u1" |> pr
+    | AbstInst.LdindI2 alignOpt -> maybePrependUnaligned alignOpt "ldind.i2" |> pr
+    | AbstInst.LdindU2 alignOpt -> maybePrependUnaligned alignOpt "ldind.u2" |> pr
+    | AbstInst.LdindI4 alignOpt -> maybePrependUnaligned alignOpt "ldind.i4" |> pr
+    | AbstInst.LdindU4 alignOpt -> maybePrependUnaligned alignOpt "ldind.u4" |> pr
+    | AbstInst.LdindI8 alignOpt -> maybePrependUnaligned alignOpt "ldind.i8" |> pr
+    | AbstInst.LdindI alignOpt -> maybePrependUnaligned alignOpt "ldind.i" |> pr
+    | AbstInst.LdindR4 alignOpt -> maybePrependUnaligned alignOpt "ldind.r4" |> pr
+    | AbstInst.LdindR8 alignOpt -> maybePrependUnaligned alignOpt "ldind.r8" |> pr
+    | AbstInst.LdindRef alignOpt -> maybePrependUnaligned alignOpt "ldind.ref" |> pr
     | AbstInst.Ldloc i -> "ldloc " + string i |> pr
     | AbstInst.Ldloca i -> "ldloca " + string i |> pr
     | AbstInst.Ldnull -> "ldnull" |> pr
-    (*
-    | AbstInst.Ldobj of byte option * MetadataToken
-    | AbstInst.Ldstr of MetadataToken
-    *)
+    | AbstInst.Ldobj (alignOpt, ty) ->
+        let instStr = "ldobj " + ty.ToString(false)
+        maybePrependUnaligned alignOpt instStr |> pr
+    | AbstInst.Ldstr s -> "ldstr " + asStringLitteral s |> pr
     | AbstInst.Mul -> "mul" |> pr
     | AbstInst.Neg -> "neg" |> pr
     | AbstInst.Nop -> "nop" |> pr
     | AbstInst.Not -> "not" |> pr
-    (*
-    | AbstInst.Newobj of MetadataToken
-    *)
+    | AbstInst.Newobj meth -> prMeth "newobj" None false meth
     | AbstInst.Or -> "or" |> pr
     | AbstInst.Pop -> "pop" |> pr
     | AbstInst.Rem -> "rem" |> pr
@@ -123,15 +132,13 @@ let disInst
     | AbstInst.Shr -> "shr" |> pr
     | AbstInst.ShrUn -> "shr.un" |> pr
     | AbstInst.Starg i -> "starg " + string i |> pr
-    (*
-    | AbstInst.StindRef of byte option
-    | AbstInst.StindI1 of byte option
-    | AbstInst.StindI2 of byte option
-    | AbstInst.StindI4 of byte option
-    | AbstInst.StindI8 of byte option
-    | AbstInst.StindR4 of byte option
-    | AbstInst.StindR8 of byte option
-    *)
+    | AbstInst.StindRef alignOpt -> maybePrependUnaligned alignOpt "stind.ref" |> pr
+    | AbstInst.StindI1 alignOpt -> maybePrependUnaligned alignOpt "stind.i1" |> pr
+    | AbstInst.StindI2 alignOpt -> maybePrependUnaligned alignOpt "stind.i2" |> pr
+    | AbstInst.StindI4 alignOpt -> maybePrependUnaligned alignOpt "stind.i4" |> pr
+    | AbstInst.StindI8 alignOpt -> maybePrependUnaligned alignOpt "stind.i8" |> pr
+    | AbstInst.StindR4 alignOpt -> maybePrependUnaligned alignOpt "stind.r4" |> pr
+    | AbstInst.StindR8 alignOpt -> maybePrependUnaligned alignOpt "stind.r8" |> pr
     | AbstInst.Stloc i -> "stloc " + string i |> pr
     | AbstInst.Sub -> "sub" |> pr
     | AbstInst.Switch tgts ->
@@ -140,24 +147,23 @@ let disInst
             ifprintfn tw (indent + 1u) "%s," blockLabels.[tgts.[i]]
         ifprintfn tw (indent + 1u) "%s)" blockLabels.[tgts.[tgts.Length - 1]]
     | AbstInst.Xor -> "xor" |> pr
-    (*
-    | AbstInst.Castclass of MetadataToken
-    | AbstInst.Isinst of MetadataToken
-    *)
+    | AbstInst.Castclass ty -> "castclass " + ty.ToString(false) |> pr
+    | AbstInst.Isinst ty -> "isinst " + ty.ToString(false) |> pr
     | AbstInst.ConvRUn -> "conv.r.un" |> pr
-    (*
-    | AbstInst.Unbox of MetadataToken
-    *)
+    | AbstInst.Unbox ty -> "unbox " + ty.ToString(false) |> pr
     | AbstInst.Throw -> "throw" |> pr
-    (*
-    | AbstInst.Ldfld of byte option * MetadataToken
-    | AbstInst.Ldflda of byte option * MetadataToken
-    | AbstInst.Stfld of byte option * MetadataToken
-    | AbstInst.Ldsfld of MetadataToken
-    | AbstInst.Ldsflda of MetadataToken
-    | AbstInst.Stsfld of MetadataToken
-    | AbstInst.Stobj of byte option * MetadataToken
-    *)
+    | AbstInst.Ldfld (alignOpt, fld) ->
+        maybePrependUnaligned alignOpt ("ldfld " + fld.ToString()) |> pr
+    | AbstInst.Ldflda (alignOpt, fld) ->
+        maybePrependUnaligned alignOpt ("ldflda " + fld.ToString()) |> pr
+    | AbstInst.Stfld (alignOpt, fld) ->
+        maybePrependUnaligned alignOpt ("stfld " + fld.ToString()) |> pr
+    | AbstInst.Ldsfld fld -> "ldsfld " + fld.ToString() |> pr
+    | AbstInst.Ldsflda fld -> "ldsflda " + fld.ToString() |> pr
+    | AbstInst.Stsfld fld -> "stsfld " + fld.ToString() |> pr
+    | AbstInst.Stobj (alignOpt, ty) ->
+        let instStr = "stobj " + ty.ToString(false)
+        maybePrependUnaligned alignOpt instStr |> pr
     | AbstInst.ConvOvfI1Un -> "conv.ovf.i1.un" |> pr
     | AbstInst.ConvOvfI2Un -> "conv.ovf.i2.un" |> pr
     | AbstInst.ConvOvfI4Un -> "conv.ovf.i4.un" |> pr
@@ -168,14 +174,10 @@ let disInst
     | AbstInst.ConvOvfU8Un -> "conv.ovf.u8.un" |> pr
     | AbstInst.ConvOvfIUn -> "conv.ovf.i.un" |> pr
     | AbstInst.ConvOvfUUn -> "conv.ovf.u.un" |> pr
-    (*
-    | AbstInst.Box of MetadataToken
-    | AbstInst.Newarr of MetadataToken
-    *)
+    | AbstInst.Box ty -> "box " + ty.ToString(false) |> pr
+    | AbstInst.Newarr ty -> "newarr " + ty.ToString(false) |> pr
     | AbstInst.Ldlen -> "ldlen" |> pr
-    (*
-    | AbstInst.Ldelema of MetadataToken
-    *)
+    | AbstInst.Ldelema ty -> "ldelema " + ty.ToString(false) |> pr
     | AbstInst.LdelemI1 -> "ldelem.i1" |> pr
     | AbstInst.LdelemU1 -> "ldelem.u1" |> pr
     | AbstInst.LdelemI2 -> "ldelem.i2" |> pr
@@ -195,11 +197,9 @@ let disInst
     | AbstInst.StelemR4 -> "stelem.r4" |> pr
     | AbstInst.StelemR8 -> "stelem.r8" |> pr
     | AbstInst.StelemRef -> "stelem.ref" |> pr
-    (*
-    | AbstInst.Ldelem of MetadataToken
-    | AbstInst.Stelem of MetadataToken
-    | AbstInst.UnboxAny of MetadataToken
-    *)
+    | AbstInst.Ldelem ty -> "ldelem " + ty.ToString(false) |> pr
+    | AbstInst.Stelem ty -> "stelem " + ty.ToString(false) |> pr
+    | AbstInst.UnboxAny ty -> "unbox.any " + ty.ToString(false) |> pr
     | AbstInst.ConvOvfI1 -> "conv.ovf.i1" |> pr
     | AbstInst.ConvOvfU1 -> "conv.ovf.u1" |> pr
     | AbstInst.ConvOvfI2 -> "conv.ovf.i2" |> pr
@@ -228,8 +228,8 @@ let disInst
     | AbstInst.SubOvf -> "sub.ovf" |> pr
     | AbstInst.SubOvfUn -> "sub.ovf.un" |> pr
     | AbstInst.Endfinally -> "endfinally" |> pr
-    //| AbstInst.Leave of int
-    //| AbstInst.StindI of byte option
+    | AbstInst.Leave tgt -> "leave " + blockLabels.[tgt] |> pr
+    | AbstInst.StindI alignOpt -> maybePrependUnaligned alignOpt "ldind.i" |> pr
     | AbstInst.ConvU -> "conv.u" |> pr
     | AbstInst.Arglist -> "arglist" |> pr
     | AbstInst.Ceq -> "ceq" |> pr
@@ -237,15 +237,15 @@ let disInst
     | AbstInst.CgtUn -> "cgt.un" |> pr
     | AbstInst.Clt -> "clt" |> pr
     | AbstInst.CltUn -> "clt.un" |> pr
-    //| AbstInst.Ldftn of MetadataToken
+    | AbstInst.Ldftn meth -> prMeth "ldftn" None false meth
     //| AbstInst.Ldvirtftn of MetadataToken
     | AbstInst.Localloc -> "localloc" |> pr
     | AbstInst.Endfilter -> "endfilter" |> pr
-    //| AbstInst.Initobj of MetadataToken
+    | AbstInst.Initobj ty -> "initobj " + ty.ToString(false) |> pr
     | AbstInst.Cpblk -> "cpblk" |> pr
-    //| AbstInst.Initblk of byte option
+    | AbstInst.Initblk alignOpt -> maybePrependUnaligned alignOpt "initblk" |> pr
     | AbstInst.Rethrow -> "rethrow" |> pr
-    //| AbstInst.Sizeof of MetadataToken
+    | AbstInst.Sizeof ty -> "sizeof " + ty.ToString(false) |> pr
     | AbstInst.Refanytype -> "refanytype" |> pr
     | _ ->
         //sprintf "TODO %A" inst |> pr
