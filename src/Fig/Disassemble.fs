@@ -30,6 +30,7 @@ let asStringLitteral (s : string) =
 let disInst
         (tw : TextWriter)
         (indent : uint32)
+        (assemCtxt : Assembly)
         (blockLabels : string array)
         (addr : uint32)
         (inst : AbstInst) =
@@ -44,14 +45,14 @@ let disInst
                 | None -> ()
                 | Some ty ->
                     yield ".constrained"
-                    yield ty.ToString()
+                    yield ty.CilId(true, assemCtxt)
 
                 if isTail then yield ".tail"
 
                 yield instStr
 
                 // TODO change the following to call.Method.Resolve
-                yield meth.ToString()
+                yield meth.CilId(assemCtxt)
             |]
         pr instStr
 
@@ -88,7 +89,7 @@ let disInst
     | AbstInst.ConvR8 -> "conv.r8" |> pr
     | AbstInst.ConvU4 -> "conv.u4" |> pr
     | AbstInst.ConvU8 -> "conv.u8" |> pr
-    | AbstInst.Cpobj ty -> "cpobj " + ty.ToString() |> pr
+    | AbstInst.Cpobj ty -> "cpobj " + ty.CilId(true, assemCtxt) |> pr
     | AbstInst.Div -> "div" |> pr
     | AbstInst.DivUn -> "div.un" |> pr
     | AbstInst.Dup -> "dup" |> pr
@@ -115,7 +116,7 @@ let disInst
     | AbstInst.Ldloca i -> "ldloca " + string i |> pr
     | AbstInst.Ldnull -> "ldnull" |> pr
     | AbstInst.Ldobj (alignOpt, ty) ->
-        let instStr = "ldobj " + ty.ToString(false)
+        let instStr = "ldobj " + ty.CilId(false, assemCtxt)
         maybePrependUnaligned alignOpt instStr |> pr
     | AbstInst.Ldstr s -> "ldstr " + asStringLitteral s |> pr
     | AbstInst.Mul -> "mul" |> pr
@@ -147,22 +148,22 @@ let disInst
             ifprintfn tw (indent + 1u) "%s," blockLabels.[tgts.[i]]
         ifprintfn tw (indent + 1u) "%s)" blockLabels.[tgts.[tgts.Length - 1]]
     | AbstInst.Xor -> "xor" |> pr
-    | AbstInst.Castclass ty -> "castclass " + ty.ToString(false) |> pr
-    | AbstInst.Isinst ty -> "isinst " + ty.ToString(false) |> pr
+    | AbstInst.Castclass ty -> "castclass " + ty.CilId(false, assemCtxt) |> pr
+    | AbstInst.Isinst ty -> "isinst " + ty.CilId(false, assemCtxt) |> pr
     | AbstInst.ConvRUn -> "conv.r.un" |> pr
-    | AbstInst.Unbox ty -> "unbox " + ty.ToString(false) |> pr
+    | AbstInst.Unbox ty -> "unbox " + ty.CilId(false, assemCtxt) |> pr
     | AbstInst.Throw -> "throw" |> pr
     | AbstInst.Ldfld (alignOpt, fld) ->
-        maybePrependUnaligned alignOpt ("ldfld " + fld.ToString()) |> pr
+        maybePrependUnaligned alignOpt ("ldfld " + fld.CilId(assemCtxt)) |> pr
     | AbstInst.Ldflda (alignOpt, fld) ->
-        maybePrependUnaligned alignOpt ("ldflda " + fld.ToString()) |> pr
+        maybePrependUnaligned alignOpt ("ldflda " + fld.CilId(assemCtxt)) |> pr
     | AbstInst.Stfld (alignOpt, fld) ->
-        maybePrependUnaligned alignOpt ("stfld " + fld.ToString()) |> pr
-    | AbstInst.Ldsfld fld -> "ldsfld " + fld.ToString() |> pr
-    | AbstInst.Ldsflda fld -> "ldsflda " + fld.ToString() |> pr
-    | AbstInst.Stsfld fld -> "stsfld " + fld.ToString() |> pr
+        maybePrependUnaligned alignOpt ("stfld " + fld.CilId(assemCtxt)) |> pr
+    | AbstInst.Ldsfld fld -> "ldsfld " + fld.CilId(assemCtxt) |> pr
+    | AbstInst.Ldsflda fld -> "ldsflda " + fld.CilId(assemCtxt) |> pr
+    | AbstInst.Stsfld fld -> "stsfld " + fld.CilId(assemCtxt) |> pr
     | AbstInst.Stobj (alignOpt, ty) ->
-        let instStr = "stobj " + ty.ToString(false)
+        let instStr = "stobj " + ty.CilId(false, assemCtxt)
         maybePrependUnaligned alignOpt instStr |> pr
     | AbstInst.ConvOvfI1Un -> "conv.ovf.i1.un" |> pr
     | AbstInst.ConvOvfI2Un -> "conv.ovf.i2.un" |> pr
@@ -174,10 +175,10 @@ let disInst
     | AbstInst.ConvOvfU8Un -> "conv.ovf.u8.un" |> pr
     | AbstInst.ConvOvfIUn -> "conv.ovf.i.un" |> pr
     | AbstInst.ConvOvfUUn -> "conv.ovf.u.un" |> pr
-    | AbstInst.Box ty -> "box " + ty.ToString(false) |> pr
-    | AbstInst.Newarr ty -> "newarr " + ty.ToString(false) |> pr
+    | AbstInst.Box ty -> "box " + ty.CilId(false, assemCtxt) |> pr
+    | AbstInst.Newarr ty -> "newarr " + ty.CilId(false, assemCtxt) |> pr
     | AbstInst.Ldlen -> "ldlen" |> pr
-    | AbstInst.Ldelema ty -> "ldelema " + ty.ToString(false) |> pr
+    | AbstInst.Ldelema ty -> "ldelema " + ty.CilId(false, assemCtxt) |> pr
     | AbstInst.LdelemI1 -> "ldelem.i1" |> pr
     | AbstInst.LdelemU1 -> "ldelem.u1" |> pr
     | AbstInst.LdelemI2 -> "ldelem.i2" |> pr
@@ -197,9 +198,9 @@ let disInst
     | AbstInst.StelemR4 -> "stelem.r4" |> pr
     | AbstInst.StelemR8 -> "stelem.r8" |> pr
     | AbstInst.StelemRef -> "stelem.ref" |> pr
-    | AbstInst.Ldelem ty -> "ldelem " + ty.ToString(false) |> pr
-    | AbstInst.Stelem ty -> "stelem " + ty.ToString(false) |> pr
-    | AbstInst.UnboxAny ty -> "unbox.any " + ty.ToString(false) |> pr
+    | AbstInst.Ldelem ty -> "ldelem " + ty.CilId(false, assemCtxt) |> pr
+    | AbstInst.Stelem ty -> "stelem " + ty.CilId(false, assemCtxt) |> pr
+    | AbstInst.UnboxAny ty -> "unbox.any " + ty.CilId(false, assemCtxt) |> pr
     | AbstInst.ConvOvfI1 -> "conv.ovf.i1" |> pr
     | AbstInst.ConvOvfU1 -> "conv.ovf.u1" |> pr
     | AbstInst.ConvOvfI2 -> "conv.ovf.i2" |> pr
@@ -241,11 +242,11 @@ let disInst
     //| AbstInst.Ldvirtftn of MetadataToken
     | AbstInst.Localloc -> "localloc" |> pr
     | AbstInst.Endfilter -> "endfilter" |> pr
-    | AbstInst.Initobj ty -> "initobj " + ty.ToString(false) |> pr
+    | AbstInst.Initobj ty -> "initobj " + ty.CilId(false, assemCtxt) |> pr
     | AbstInst.Cpblk -> "cpblk" |> pr
     | AbstInst.Initblk alignOpt -> maybePrependUnaligned alignOpt "initblk" |> pr
     | AbstInst.Rethrow -> "rethrow" |> pr
-    | AbstInst.Sizeof ty -> "sizeof " + ty.ToString(false) |> pr
+    | AbstInst.Sizeof ty -> "sizeof " + ty.CilId(false, assemCtxt) |> pr
     | AbstInst.Refanytype -> "refanytype" |> pr
     | _ ->
         //sprintf "TODO %A" inst |> pr
@@ -278,7 +279,7 @@ let genParToStr (genPar : GenericParam) =
         yield genPar.Name
     |]
 
-let disMethodDef (tw : TextWriter) (indent : uint32) (md : MethodDef) =
+let disMethodDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (md : MethodDef) =
     
     // .method MethodHeader '{' MethodBodyItem* '}'
     // MethAttr* [ CallConv ] Type [marshal '(' [NativeType] ')']
@@ -327,7 +328,7 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (md : MethodDef) =
                 "vararg"
         
         for cm in methSig.retType.customMods do
-            yield cm.ToString()
+            yield cm.CilId(assemCtxt)
 
         yield md.Name
     |]
@@ -352,7 +353,7 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (md : MethodDef) =
                         failwith "TODO what do i do with a pinned local"
                     if specLocalVar.mayByRefType.isByRef then
                         failwith "TODO what do i do with this byref?"
-                    let tyStr = specLocalVar.mayByRefType.ty.ToString()
+                    let tyStr = specLocalVar.mayByRefType.ty.CilId(assemCtxt)
                     sprintf "%s V_%i" tyStr i
 
             if mb.initLocals then
@@ -375,12 +376,12 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (md : MethodDef) =
         let mutable currAddr = 0u
         for block in mb.blocks do
             for inst, instSize in block do
-                disInst tw indent blockLabels currAddr inst
+                disInst tw indent assemCtxt blockLabels currAddr inst
                 currAddr <- currAddr + instSize
 
     ifprintfn tw indent "}"
 
-let rec disTypeDef (tw : TextWriter) (indent : uint32) (td : TypeDef) =
+let rec disTypeDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (td : TypeDef) =
     // partition II 10.1
     let classHeaderStrs = [|
         yield ".class"
@@ -466,17 +467,17 @@ let rec disTypeDef (tw : TextWriter) (indent : uint32) (td : TypeDef) =
     ifprintfn tw indent "%s" (spaceSepStrs classHeaderStrs)
     ifprintfn tw indent "{"
 
-    Array.iter (disMethodDef tw (indent + 1u)) td.Methods
-    Array.iter (disTypeDef tw (indent + 1u)) td.NestedTypes
+    Array.iter (disMethodDef tw (indent + 1u) assemCtxt) td.Methods
+    Array.iter (disTypeDef tw (indent + 1u) assemCtxt) td.NestedTypes
 
     ifprintfn tw indent "}"
 
-let disModule (tr : TextWriter) (m : Module) =
+let disModule (tr : TextWriter) (assem : Assembly) (m : Module) =
     fprintfn tr ".module %s" m.Name
     tr.WriteLine()
 
     for td in m.TypeDefs do
-        disTypeDef tr 1u td
+        disTypeDef tr 1u assem td
 
 let disassemble (tw : TextWriter) (assem : Assembly) =
     for ar in assem.AssemblyRefs do
@@ -501,4 +502,4 @@ let disassemble (tw : TextWriter) (assem : Assembly) =
     let modules = assem.Modules
     if modules.Length <> 1 then
         failwith "TODO deal with multi module assemblies"
-    for m in modules do disModule tw m
+    for m in modules do disModule tw assem m

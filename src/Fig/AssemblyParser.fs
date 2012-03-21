@@ -1585,6 +1585,7 @@ and [<AbstractClass>] FieldDefOrRef() =
     abstract Name : string with get
     abstract Resolve : unit -> FieldDef
     abstract Signature : FieldSig with get
+    abstract CilId : assemCtxt:AssemblyBase -> string
 
     static member FromKindAndIndex (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : FieldDefOrRef =
         match mt with
@@ -1629,7 +1630,7 @@ and FieldRef(assem : Assembly, selfIndex : int) =
     override x.Signature =
         let blob = ref(assem.ReadBlobAtIndex frRow.signatureIndex |> List.ofArray)
         FieldSig.FromBlob assem blob
-    override x.ToString() = x.Resolve().ToString()
+    override x.CilId(assemCtxt:AssemblyBase) = x.Resolve().CilId(assemCtxt)
 
 and FieldDef(assem : Assembly, selfIndex : int) =
     inherit FieldDefOrRef()
@@ -1642,12 +1643,12 @@ and FieldDef(assem : Assembly, selfIndex : int) =
     override x.Signature =
         let blob = ref(assem.ReadBlobAtIndex fRow.signatureIndex |> List.ofArray)
         FieldSig.FromBlob assem blob
-    override x.ToString() =
+    override x.CilId(assemCtxt:AssemblyBase) =
         let mySig = x.Signature
         spaceSepStrs [|
             for cm in mySig.customMods do
-                yield cm.ToString()
-            yield mySig.fType.ToString()
+                yield cm.CilId(assemCtxt)
+            yield mySig.fType.CilId(assemCtxt)
             yield x.DeclaringType.FullName + "::" + x.Name
         |]
 
@@ -1664,7 +1665,7 @@ and FieldDef(assem : Assembly, selfIndex : int) =
         findDecTy 0
 
 and [<AbstractClass>] TypeDefRefOrSpec() =
-    abstract ToString : bool -> string
+    abstract CilId : typeKindReq:bool * assemCtxt:AssemblyBase -> string
 
     static member FromKindAndIndex (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefRefOrSpec =
         match mt with
@@ -1728,8 +1729,7 @@ and TypeSpec(assem : Assembly, selfIndex : int) =
 
     member x.TypeSpecBlob = typeSpecBlob
 
-    override x.ToString(showTypeKind : bool) = "TODO impl tostring for TypeSpec"
-    override x.ToString() = "TODO impl tostring for TypeSpec"
+    override x.CilId(typeKindReq:bool, assemCtxt:AssemblyBase) = "TODO impl CilId for typespec"
     (*
     override x.Namespace =
         match typeSpecBlob with
@@ -1782,8 +1782,8 @@ and TypeRef(assem : Assembly, selfIndex : int) =
         | rsk ->
             failwith "unexpected resolution scope table kind %A" rsk
 
-    override x.ToString(showTypeKind : bool) = x.Resolve().ToString(showTypeKind)
-    override x.ToString() = x.Resolve().ToString()
+    override x.CilId(typeKindReq:bool, assemCtxt:AssemblyBase) =
+        x.Resolve().CilId(typeKindReq, assemCtxt)
 
 and [<RequireQualifiedAccess>] TypeVisibilityAttr =
     | NotPublic
@@ -1811,8 +1811,8 @@ and TypeDef(assem : Assembly, selfIndex : int) =
     override x.Name = typeDefRow.typeName
     override x.Resolve() = x
 
-    override x.ToString(showTypeKind : bool) =
-        if showTypeKind then
+    override x.CilId(typeKindReq:bool, assemCtxt:AssemblyBase) =
+        if typeKindReq then
             let tkStr =
                 match x.TypeKind with
                 | TypeKind.Class | TypeKind.Interface | TypeKind.Delegate -> "class"
@@ -1821,14 +1821,6 @@ and TypeDef(assem : Assembly, selfIndex : int) =
             tkStr + " " + x.FullName
         else
             x.FullName
-
-    override x.ToString() =
-        let tkStr =
-            match x.TypeKind with
-            | TypeKind.Class | TypeKind.Interface | TypeKind.Delegate -> "class"
-            | TypeKind.Valuetype -> "valuetype"
-            | tk -> failwithf "TODO woah don't know how to deal with %A" tk
-        tkStr + " " + x.FullName
 
     member x.SelfIndex = selfIndex
 
@@ -2032,6 +2024,7 @@ and [<AbstractClass>] Method() =
     abstract Name : string with get
     abstract Resolve : unit -> MethodDef
     abstract Signature : MethodDefOrRefSig with get
+    abstract CilId : assemCtxt:AssemblyBase -> string
 
     static member FromKindAndIndex (assem : Assembly) (kind : MetadataTableKind) (i : int) : Method =
         match kind with
@@ -2072,6 +2065,7 @@ and MethodSpec (assem : Assembly, selfIndex : int) =
     override x.Name = meth.Name
     override x.Resolve() = meth.Resolve()
     override x.Signature = meth.Signature
+    override x.CilId(assemCtxt : AssemblyBase) = "TODO implement CilId for MethodSpec"
 
 and MethodRef (assem : Assembly, selfIndex : int) =
     inherit Method()
@@ -2105,7 +2099,7 @@ and MethodRef (assem : Assembly, selfIndex : int) =
     override x.Signature =
         let blob = ref(assem.ReadBlobAtIndex mrRow.signatureIndex |> List.ofArray)
         MethodDefOrRefSig.FromBlob assem blob
-    override x.ToString() = x.Resolve().ToString()
+    override x.CilId(assemCtxt : AssemblyBase) = x.Resolve().CilId(assemCtxt)
 
 and MethodDef (assem : Assembly, selfIndex : int) =
     inherit Method()
@@ -2185,17 +2179,17 @@ and MethodDef (assem : Assembly, selfIndex : int) =
     override x.Signature =
         let blob = ref(assem.ReadBlobAtIndex mdRow.signatureIndex |> List.ofArray)
         MethodDefOrRefSig.FromBlob assem blob
-    override x.ToString() =
+    override x.CilId(assemCtxt : AssemblyBase) =
         spaceSepStrs [|
             if not x.IsStatic then yield "instance"
-            yield x.Signature.retType.ToString()
-            yield x.DeclaringType.ToString()  + "::" + x.Name + "("
+            yield x.Signature.retType.CilId(assemCtxt)
+            yield x.DeclaringType.CilId(true, assemCtxt)  + "::" + x.Name + "("
             yield commaSepStrs [|
                 for p in x.Signature.methParams do
                     yield spaceSepStrs [|
                         for cm in p.customMods do
-                            yield cm.ToString()
-                        yield p.pType.ToString()
+                            yield cm.CilId(assemCtxt)
+                        yield p.pType.CilId(assemCtxt)
                     |]
             |]
             yield ")"
@@ -2974,7 +2968,7 @@ and [<RequireQualifiedAccess>] CustomModBlob = {
     theType : TypeDefRefOrSpec
 }
 with
-    override x.ToString() =
+    member x.CilId(assemCtxt:AssemblyBase) =
         let reqStr =
             if x.isRequired then
                 "modreq"
@@ -2982,7 +2976,7 @@ with
                 "modopt"
         match x.theType with
         | :? TypeDefOrRef as ty ->
-            sprintf "%s (%s)" reqStr ty.FullName
+            sprintf "%s (%s)" reqStr (ty.CilId(false, assemCtxt))
         | ty ->
             failwith "TODO: custom mod of %A" ty
 
@@ -3044,7 +3038,7 @@ and [<RequireQualifiedAccess>] TypeBlob =
                 // we can fall back on structural equality for everything else
                 ty1 = ty2
 
-        override x.ToString() =
+        member x.CilId(assemCtxt:AssemblyBase) =
             match x with
             | TypeBlob.Boolean -> "bool"
             | TypeBlob.Char -> "char"
@@ -3060,12 +3054,12 @@ and [<RequireQualifiedAccess>] TypeBlob =
             | TypeBlob.R8 -> "float64"
             | TypeBlob.I -> "native int"
             | TypeBlob.U -> "native unsigned int"
-            | TypeBlob.Class (:? TypeDefOrRef as tyDefOrRef) -> "class " + tyDefOrRef.FullName
+            | TypeBlob.Class (:? TypeDefOrRef as tyDefOrRef) -> "class " + tyDefOrRef.CilId(false, assemCtxt)
             | TypeBlob.Class _ -> failwithf "TODO can't turn %A into string" x
             | TypeBlob.MVar i -> "!!" + string i
             | TypeBlob.Object -> "object"
             | TypeBlob.String -> "string"
-            | TypeBlob.ValueType (:? TypeDefOrRef as tyDefOrRef) -> "valuetype " + tyDefOrRef.FullName
+            | TypeBlob.ValueType (:? TypeDefOrRef as tyDefOrRef) -> "valuetype " + tyDefOrRef.CilId(false, assemCtxt)
             | TypeBlob.ValueType _ -> failwithf "TODO can't turn %A into string" x
             | TypeBlob.Var i -> "!" + string i
 
@@ -3074,10 +3068,10 @@ and [<RequireQualifiedAccess>] TypeBlob =
                 spaceSepStrs [|
                     match tyOpt with
                     | None      -> yield "void*"
-                    | Some ty   -> yield ty.ToString() + "*"
+                    | Some ty   -> yield ty.CilId(assemCtxt) + "*"
 
                     for cm in custMods do
-                        yield cm.ToString()
+                        yield cm.CilId(assemCtxt)
                 |]
 
             | TypeBlob.FnPtr methDefOrRef ->
@@ -3093,12 +3087,12 @@ and [<RequireQualifiedAccess>] TypeBlob =
                     yield "(TODO_PARAMS_GO_HERE)"
                 |]
             | TypeBlob.Array (tyBlob, arrShape) ->
-                tyBlob.ToString() + "[" + arrShape.ToString() + "]"
-            | TypeBlob.SzArray (custMods, tyBlob) -> //of List<CustomModBlob> * TypeBlob
+                tyBlob.CilId(assemCtxt) + "[" + arrShape.ToString() + "]"
+            | TypeBlob.SzArray (custMods, tyBlob) ->
                 spaceSepStrs [|
-                    yield tyBlob.ToString()
+                    yield tyBlob.CilId(assemCtxt)
                     for cm in custMods do
-                        yield cm.ToString()
+                        yield cm.CilId(assemCtxt)
                 |]
             // GenericInst bool isClass with false indicating valuetype
             | TypeBlob.GenericInst genTyInst ->
@@ -3235,13 +3229,13 @@ and [<RequireQualifiedAccess>] ParamType =
     | MayByRefTy of MaybeByRefType
     | TypedByRef
     with
-        override x.ToString() =
+        member x.CilId(assemCtxt:AssemblyBase) =
             match x with
             | ParamType.MayByRefTy mayByTyRef ->
                 if mayByTyRef.isByRef then
-                    mayByTyRef.ty.ToString() + "&"
+                    mayByTyRef.ty.CilId(assemCtxt) + "&"
                 else
-                    mayByTyRef.ty.ToString()
+                    mayByTyRef.ty.CilId(assemCtxt)
             | ParamType.TypedByRef ->
                 failwith "TODO no can do for typedbyref"
 
@@ -3278,7 +3272,7 @@ and RetType = {
     rType : RetTypeKind
 }
 with
-    override x.ToString() =
+    member x.CilId(assemCtxt:AssemblyBase) =
         if x.customMods.Length >= 1 then
             failwith "TODO need to deal with custmods in return type"
         match x.rType with
@@ -3287,7 +3281,7 @@ with
         | RetTypeKind.MayByRefTy mayByRefTy ->
             if mayByRefTy.isByRef then
                 failwith "TODO not yet dealing with by ref return type"
-            mayByRefTy.ty.ToString()
+            mayByRefTy.ty.CilId(assemCtxt)
 
     static member FromBlob (assem : Assembly) (blob : byte list ref) : RetType =
         let custMods = CustomModBlob.ManyFromBlob assem blob
