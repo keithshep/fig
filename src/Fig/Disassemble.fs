@@ -382,95 +382,105 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (md 
     ifprintfn tw indent "}"
 
 let rec disTypeDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (td : TypeDef) =
-    // partition II 10.1
-    let classHeaderStrs = [|
-        yield ".class"
 
-        // ClassAttr* Id ['<' GenPars '>' ] [ extends TypeSpec [ implements TypeSpec ] [ ',' TypeSpec ]* ]
+    let dealWithTypePart (indent : uint32) =
+        // partition II 10.1
+        let classHeaderStrs = [|
+            yield ".class"
 
-        // type attributes
-        if td.IsAbstract then yield "abstract"
+            // ClassAttr* Id ['<' GenPars '>' ] [ extends TypeSpec [ implements TypeSpec ] [ ',' TypeSpec ]* ]
 
-        yield
-            match td.StringFormattingAttr with
-            | StringFmtAttr.Ansi    -> "ansi"
-            | StringFmtAttr.Auto    -> "autochar"
-            | StringFmtAttr.Unicode -> "unicode"
-            | StringFmtAttr.Custom  ->
-                failwith "don't know how to deal with custom string formats"
+            // type attributes
+            if td.IsAbstract then yield "abstract"
 
-        yield
-            match td.ClassLayoutAttr with
-            | ClassLayoutAttr.Auto          -> "auto"
-            | ClassLayoutAttr.Explicit      -> "explicit"
-            | ClassLayoutAttr.Sequential    -> "sequential"
+            yield
+                match td.StringFormattingAttr with
+                | StringFmtAttr.Ansi    -> "ansi"
+                | StringFmtAttr.Auto    -> "autochar"
+                | StringFmtAttr.Unicode -> "unicode"
+                | StringFmtAttr.Custom  ->
+                    failwith "don't know how to deal with custom string formats"
+
+            yield
+                match td.ClassLayoutAttr with
+                | ClassLayoutAttr.Auto          -> "auto"
+                | ClassLayoutAttr.Explicit      -> "explicit"
+                | ClassLayoutAttr.Sequential    -> "sequential"
         
-        if td.BeforeFieldInit then  yield "beforefieldinit"
-        if td.IsInterface then      yield "interface"
+            if td.BeforeFieldInit then  yield "beforefieldinit"
+            if td.IsInterface then      yield "interface"
 
-        yield
-            match td.TypeVisibilityAttr with
-            | TypeVisibilityAttr.NestedAssembly     -> "nested assembly"
-            | TypeVisibilityAttr.NestedFamANDAssem  -> "nested famandassem"
-            | TypeVisibilityAttr.NestedFamily       -> "nested family"
-            | TypeVisibilityAttr.NestedFamORAssem   -> "nested famorassem"
-            | TypeVisibilityAttr.NestedPrivate      -> "nested private"
-            | TypeVisibilityAttr.NestedPublic       -> "nested public"
-            | TypeVisibilityAttr.NotPublic          -> "private"
-            | TypeVisibilityAttr.Public             -> "public"
+            yield
+                match td.TypeVisibilityAttr with
+                | TypeVisibilityAttr.NestedAssembly     -> "nested assembly"
+                | TypeVisibilityAttr.NestedFamANDAssem  -> "nested famandassem"
+                | TypeVisibilityAttr.NestedFamily       -> "nested family"
+                | TypeVisibilityAttr.NestedFamORAssem   -> "nested famorassem"
+                | TypeVisibilityAttr.NestedPrivate      -> "nested private"
+                | TypeVisibilityAttr.NestedPublic       -> "nested public"
+                | TypeVisibilityAttr.NotPublic          -> "private"
+                | TypeVisibilityAttr.Public             -> "public"
 
-        if td.RTSpecialName then    yield "rtspecialname"
-        if td.IsSealed then         yield "sealed"
-        if td.IsSerializable then   yield "serializable"
-        if td.IsSpecialName then    yield "specialname"
+            if td.RTSpecialName then    yield "rtspecialname"
+            if td.IsSealed then         yield "sealed"
+            if td.IsSerializable then   yield "serializable"
+            if td.IsSpecialName then    yield "specialname"
 
-        // optional generic parameters
-        let genPars = td.GenericParams |> Array.ofSeq
-        if not <| Array.isEmpty genPars then
-            let sb = new StringBuilder("<")
+            // optional generic parameters
+            let genPars = td.GenericParams |> Array.ofSeq
+            if not <| Array.isEmpty genPars then
+                let sb = new StringBuilder("<")
 
-            let genParStr = commaSepStrs <| Array.map genParToStr genPars
-            sb.Append genParStr |> ignore
+                let genParStr = commaSepStrs <| Array.map genParToStr genPars
+                sb.Append genParStr |> ignore
 
-            sb.Append '>' |> ignore
+                sb.Append '>' |> ignore
 
-            yield sb.ToString()
+                yield sb.ToString()
 
-        // name
-        yield td.Name
+            // name
+            yield td.Name
 
-        // base type
-        match td.Extends with
-        | None -> ()
-        | Some (:? TypeDefOrRef as ty) ->
-            yield "extends"
+            // base type
+            match td.Extends with
+            | None -> ()
+            | Some (:? TypeDefOrRef as ty) ->
+                yield "extends"
 
-            // TODO need to add something along the lines of "[assembly name]" to this
-            yield ty.FullName
-        | Some _ ->
-            yield "extends"
-            yield "TODO_TYPE_SPEC"
+                // TODO need to add something along the lines of "[assembly name]" to this
+                yield ty.FullName
+            | Some _ ->
+                yield "extends"
+                yield "TODO_TYPE_SPEC"
 
-        // an optional list of interfaces
-        let imps = td.Implements
-        if not (Array.isEmpty imps) then
-            yield "implements"
-            // TODO need to add something along the lines of "[assembly name]" to this
-            yield commaSepStrs [|
-                for imp in imps ->
-                    match imp with
-                    | :? TypeDefOrRef as imp -> imp.FullName
-                    | _ -> "TODO_IMPLEMENTS_TYPE_SPEC"
-            |]
-    |]
+            // an optional list of interfaces
+            let imps = td.Implements
+            if not (Array.isEmpty imps) then
+                yield "implements"
+                // TODO need to add something along the lines of "[assembly name]" to this
+                yield commaSepStrs [|
+                    for imp in imps ->
+                        match imp with
+                        | :? TypeDefOrRef as imp -> imp.FullName
+                        | _ -> "TODO_IMPLEMENTS_TYPE_SPEC"
+                |]
+        |]
 
-    ifprintfn tw indent "%s" (spaceSepStrs classHeaderStrs)
-    ifprintfn tw indent "{"
+        ifprintfn tw indent "%s" (spaceSepStrs classHeaderStrs)
+        ifprintfn tw indent "{"
 
-    Array.iter (disMethodDef tw (indent + 1u) assemCtxt) td.Methods
-    Array.iter (disTypeDef tw (indent + 1u) assemCtxt) td.NestedTypes
+        Array.iter (disMethodDef tw (indent + 1u) assemCtxt) td.Methods
+        Array.iter (disTypeDef tw (indent + 1u) assemCtxt) td.NestedTypes
 
-    ifprintfn tw indent "}"
+        ifprintfn tw indent "}"
+    
+    match td.Namespace with
+    | None -> dealWithTypePart indent
+    | Some ns ->
+        ifprintfn tw indent ".namespace %s" ns
+        ifprintfn tw indent "{"
+        dealWithTypePart (indent + 1u)
+        ifprintfn tw indent "}"
 
 let disModule (tr : TextWriter) (assem : Assembly) (m : Module) =
     fprintfn tr ".module %s" m.Name

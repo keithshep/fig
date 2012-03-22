@@ -210,7 +210,7 @@ type ExportedTypeRow = {
     /// Ignored and should be zero if Flags has IsTypeForwarder set.
     typeDefId : uint32
     typeName : string
-    typeNamespace : string
+    typeNamespace : string option
     implKind : MetadataTableKind
     implIndex : int}
 
@@ -332,7 +332,7 @@ type StandAloneSigRow = {
 type TypeDefRow = {
     flags : uint32
     typeName : string
-    typeNamespace : string
+    typeNamespace : string option
     extendsKind : MetadataTableKind
     extendsIndex : int
     fieldsIndex : int
@@ -342,7 +342,7 @@ type TypeRefRow = {
     resolutionScopeKind : MetadataTableKind
     resolutionScopeIndex : int
     typeName : string
-    typeNamespace : string}
+    typeNamespace : string option}
 
 type TypeSpecRow = {
     sigIndex : uint32}
@@ -764,6 +764,10 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
             let str = readUTF8 r
             r.PopPos ()
             str
+        let readHeapStringOpt() =
+            match readHeapString() with
+            | "" -> None
+            | s -> Some s
 
         let readGUIDHeapIndex () =
             let guidHeapIndicesWide = heapSizes &&& 0x02uy <> 0x00uy
@@ -1039,11 +1043,11 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let flags = r.ReadUInt32()
                         let typeDefId = r.ReadUInt32()
                         let typeName = readHeapString()
-                        let typeNamespace = readHeapString()
+                        let typeNamespace = readHeapStringOpt()
                         let implKind, implIndex = readCodedIndex CodedIndexKind.Implementation
 
                         debugfn
-                            "ExportedTypeKind: flags=0x%X, typeDefId=%i, typeName=%s, typeNamespace=%s, impl=(%A, %i)"
+                            "ExportedTypeKind: flags=0x%X, typeDefId=%i, typeName=%s, typeNamespace=%A, impl=(%A, %i)"
                             flags
                             typeDefId
                             typeName
@@ -1371,12 +1375,12 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                     [|for _ in 1u .. rowCount do
                         let flags = r.ReadUInt32 ()
                         let typeName = readHeapString ()
-                        let typeNamespace = readHeapString ()
+                        let typeNamespace = readHeapStringOpt()
                         let extendsKind, extendsIndex = readCodedIndex CodedIndexKind.TypeDefOrRef
                         let fieldsIndex = readTableIndex MetadataTableKind.FieldKind
                         let methodsIndex = readTableIndex MetadataTableKind.MethodDefKind
 
-                        debugfn "TypeDefKind: typeName=\"%s\", typeNamespace=\"%s\"" typeName typeNamespace
+                        debugfn "TypeDefKind: typeName=\"%s\", typeNamespace=\"%A\"" typeName typeNamespace
 
                         yield {
                             TypeDefRow.flags = flags
@@ -1391,10 +1395,10 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                     [|for _ in 1u .. rowCount do
                         let resolutionScopeKind, resolutionScopeIndex = readCodedIndex CodedIndexKind.ResolutionScope
                         let typeName = readHeapString ()
-                        let typeNamespace = readHeapString ()
+                        let typeNamespace = readHeapStringOpt()
 
                         debugfn
-                            "TypeRefKind: resolutionScope=(%A, %i), typeName=\"%s\", typeNamespace=\"%s\""
+                            "TypeRefKind: resolutionScope=(%A, %i), typeName=\"%s\", typeNamespace=\"%A\""
                             resolutionScopeKind
                             resolutionScopeIndex
                             typeName
@@ -1489,7 +1493,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
             new Module(x, i)
     |]
 
-    member x.TypeDefNamed (tyNamespace : string) (tyName : string) =
+    member x.TypeDefNamed (tyNamespace : string option) (tyName : string) =
         let rec go i =
             if i < metadataTables.typeDefs.Length then
                 let currTyDef = metadataTables.typeDefs.[i]
@@ -1562,6 +1566,14 @@ and [<AbstractClass>] AssemblyBase() =
         string x.BuildNumber
 
     abstract AssemblyFlags : uint32 with get
+
+    static member SameAssemblies (assem1:AssemblyBase) (assem2:AssemblyBase) =
+        // TODO create a robust impl
+        assem1.Name = assem2.Name
+        && assem1.MajorVersion = assem2.MajorVersion
+        && assem1.MinorVersion = assem2.MinorVersion
+        && assem1.RevisionNumber = assem2.RevisionNumber
+        && assem1.BuildNumber = assem2.BuildNumber
 
 and Module(assem : Assembly, selfIndex : int) =
     let mt = assem.MetadataTables
@@ -1709,13 +1721,13 @@ and [<AbstractClass>] TypeDefRefOrSpec() =
 and [<AbstractClass>] TypeDefOrRef() =
     inherit TypeDefRefOrSpec()
     abstract Resolve : unit -> TypeDef
-    abstract Namespace : string
+    abstract Namespace : string option
     abstract Name : string
 
     member x.FullName =
         match x.Namespace with
-        | null | "" -> x.Name
-        | ns -> ns + "." + x.Name
+        | None -> x.Name
+        | Some ns -> ns + "." + x.Name
 
 and TypeSpec(assem : Assembly, selfIndex : int) =
     inherit TypeDefRefOrSpec()
@@ -1776,7 +1788,7 @@ and TypeRef(assem : Assembly, selfIndex : int) =
             let resolvedAssem = assemRes.ResolveAssembly assemRef
             match resolvedAssem.TypeDefNamed typeRefRow.typeNamespace typeRefRow.typeName with
             | Some tyDef -> tyDef
-            | None -> failwithf "failed to find type %s.%s" typeRefRow.typeNamespace typeRefRow.typeName
+            | None -> failwithf "failed to find type (%A).%s" typeRefRow.typeNamespace typeRefRow.typeName
         | MetadataTableKind.TypeRefKind ->
             failwith "impl type ref"
         | rsk ->
@@ -1812,15 +1824,20 @@ and TypeDef(assem : Assembly, selfIndex : int) =
     override x.Resolve() = x
 
     override x.CilId(typeKindReq:bool, assemCtxt:AssemblyBase) =
+        let fullName() =
+            if AssemblyBase.SameAssemblies assem assemCtxt then
+                x.FullName
+            else
+                "[" + assem.Name + "]" + x.FullName
         if typeKindReq then
             let tkStr =
                 match x.TypeKind with
                 | TypeKind.Class | TypeKind.Interface | TypeKind.Delegate -> "class"
                 | TypeKind.Valuetype -> "valuetype"
                 | tk -> failwithf "TODO woah don't know how to deal with %A" tk
-            tkStr + " " + x.FullName
+            tkStr + " " + fullName()
         else
-            x.FullName
+            fullName()
 
     member x.SelfIndex = selfIndex
 
@@ -1941,10 +1958,10 @@ and TypeDef(assem : Assembly, selfIndex : int) =
             // TODO is this approach robust?
             let immediateKindOf (t : TypeDefOrRef) =
                 match t.Namespace, t.Name with
-                | "System", "Object" -> Some TypeKind.Class
-                | "System", "ValueType" -> Some TypeKind.Valuetype
-                | "System", "Delegate" -> Some TypeKind.Delegate
-                | "System", "Enum" -> Some TypeKind.Enum
+                | Some "System", "Object" -> Some TypeKind.Class
+                | Some "System", "ValueType" -> Some TypeKind.Valuetype
+                | Some "System", "Delegate" -> Some TypeKind.Delegate
+                | Some "System", "Enum" -> Some TypeKind.Enum
                 | _ -> None
             match immediateKindOf x with
             | Some tk -> tk
@@ -2180,10 +2197,15 @@ and MethodDef (assem : Assembly, selfIndex : int) =
         let blob = ref(assem.ReadBlobAtIndex mdRow.signatureIndex |> List.ofArray)
         MethodDefOrRefSig.FromBlob assem blob
     override x.CilId(assemCtxt : AssemblyBase) =
+        let maybeQuotedName =
+            if x.Name.Contains "." then
+                "'" + x.Name + "'"
+            else
+                x.Name
         spaceSepStrs [|
             if not x.IsStatic then yield "instance"
             yield x.Signature.retType.CilId(assemCtxt)
-            yield x.DeclaringType.CilId(true, assemCtxt)  + "::" + x.Name + "("
+            yield x.DeclaringType.CilId(true, assemCtxt)  + "::" + maybeQuotedName + "("
             yield commaSepStrs [|
                 for p in x.Signature.methParams do
                     yield spaceSepStrs [|
