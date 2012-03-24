@@ -291,15 +291,7 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (md 
         // method attributes
         if md.IsAbstract then yield "abstract"
         
-        yield
-            match md.MemberAccess with
-            | MemberAccess.Assem -> "assembly"
-            | MemberAccess.CompilerControlled -> "compilercontrolled"
-            | MemberAccess.FamANDAssem -> "famandassem"
-            | MemberAccess.Family -> "family"
-            | MemberAccess.FamORAssem -> "famorassem"
-            | MemberAccess.Private -> "private"
-            | MemberAccess.Public -> "public"
+        yield md.MemberAccess.ToString()
 
         if md.HideBySig then yield "hidebysig"
         if md.NewVTableSlot then yield "newslot"
@@ -380,6 +372,65 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (md 
                 currAddr <- currAddr + instSize
 
     ifprintfn tw indent "}"
+
+let fieldToStr (assemCtxt : AssemblyBase) (field : FieldDef) =
+    spaceSepStrs [|
+        if field.HasFieldRVA then
+            yield "TODO HAS_RVA"
+        yield ".field"
+
+        match field.Offset with
+        | None -> ()
+        | Some off -> yield "[" + string off + "]"
+
+        yield field.MemberAccess.ToString()
+        if field.SpecialName then yield "specialname"
+        if field.RTSpecialName then yield "rtspecialname"
+        if field.IsStatic then yield "static"
+        if field.IsLiteral then yield "literal"
+        if field.IsInitOnly then yield "initonly"
+        yield field.Signature.CilId(assemCtxt)
+        yield field.Name
+        match field.ConstantValue with
+        | None -> ()
+        | Some constVal ->
+            let noImpl() = failwithf "TODO add field type impl for %A" constVal.Type
+            let invalTy() = failwithf "TODO invalid field type %A" constVal.Type
+            yield "="
+
+            // Type shall be exactly one of:
+            // ELEMENT_TYPE_BOOLEAN, ELEMENT_TYPE_CHAR, ELEMENT_TYPE_I1, ELEMENT_TYPE_U1,
+            // ELEMENT_TYPE_I2, ELEMENT_TYPE_U2, ELEMENT_TYPE_I4, ELEMENT_TYPE_U4,
+            // ELEMENT_TYPE_I8, ELEMENT_TYPE_U8, ELEMENT_TYPE_R4, ELEMENT_TYPE_R8, or
+            // ELEMENT_TYPE_STRING; or ELEMENT_TYPE_CLASS with a Value of zero
+            let tyName =
+                match constVal.Type with
+                | ElementType.Boolean | ElementType.Char -> noImpl()
+                | ElementType.I1 | ElementType.U1 -> "int8"
+                | ElementType.I2 | ElementType.U2 -> "int16"
+                | ElementType.I4 | ElementType.U4 -> "int32"
+                | ElementType.I8 | ElementType.U8 -> "int64"
+                | ElementType.R4 | ElementType.R8
+                | ElementType.String | ElementType.Class -> noImpl()
+                | _ -> invalTy()
+
+            let valStr =
+                match constVal.Type with
+                | ElementType.Boolean | ElementType.Char -> noImpl()
+                | ElementType.I1 | ElementType.U1 ->
+                    sprintf "0x%02x" constVal.Value.[0]
+                | ElementType.I2 | ElementType.U2 ->
+                    sprintf "0x%08x" (System.BitConverter.ToInt16(constVal.Value, 0))
+                | ElementType.I4 | ElementType.U4 ->
+                    sprintf "0x%08x" (System.BitConverter.ToInt32(constVal.Value, 0))
+                | ElementType.I8 | ElementType.U8 ->
+                    sprintf "0x%016x" (System.BitConverter.ToInt64(constVal.Value, 0))
+                | ElementType.R4 | ElementType.R8
+                | ElementType.String | ElementType.Class -> noImpl()
+                | _ -> invalTy()
+
+            yield tyName + "(" + valStr + ")"
+    |]
 
 let rec disTypeDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (td : TypeDef) =
 
@@ -468,6 +519,9 @@ let rec disTypeDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (t
 
         ifprintfn tw indent "%s" (spaceSepStrs classHeaderStrs)
         ifprintfn tw indent "{"
+
+        for field in td.Fields do
+            ifprintfn tw (indent + 1u) "%s" (fieldToStr assemCtxt field)
 
         Array.iter (disMethodDef tw (indent + 1u) assemCtxt) td.Methods
         Array.iter (disTypeDef tw (indent + 1u) assemCtxt) td.NestedTypes

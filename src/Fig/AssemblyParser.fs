@@ -167,7 +167,7 @@ type ClassLayoutRow = {
     parentIndex : int}
 
 type ConstantRow = {
-    typeVal : byte
+    typeVal : ElementType
     parentKind : MetadataTableKind
     parentIndex : int
     valueIndex : uint32}
@@ -956,7 +956,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         debugfn "ConstantKind: type=0x0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
 
                         yield {
-                            ConstantRow.typeVal = typeVal
+                            ConstantRow.typeVal = enum<ElementType>(int typeVal)
                             parentKind = parentKind
                             parentIndex = parentIndex
                             valueIndex = valueIndex}|]
@@ -1649,6 +1649,7 @@ and FieldDef(assem : Assembly, selfIndex : int) =
 
     let mt = assem.MetadataTables
     let fRow = mt.fields.[selfIndex]
+    let isFlagSet mask = fRow.fieldAttrFlags &&& mask <> 0us
 
     override x.Name = fRow.name
     override x.Resolve() = x
@@ -1675,6 +1676,55 @@ and FieldDef(assem : Assembly, selfIndex : int) =
             else
                 findDecTy (currIndex + 1)
         findDecTy 0
+
+    member x.MemberAccess = MemberAccess.FromUShort fRow.fieldAttrFlags
+
+    member x.IsStatic           = isFlagSet 0x0010us
+    member x.IsInitOnly         = isFlagSet 0x0020us
+    member x.IsLiteral          = isFlagSet 0x0040us
+    member x.NotSerialized      = isFlagSet 0x0080us
+    member x.SpecialName        = isFlagSet 0x0200us
+    member x.PInvokeImpl        = isFlagSet 0x2000us
+    member x.RTSpecialName      = isFlagSet 0x0400us
+    member x.HasFieldMarshal    = isFlagSet 0x1000us
+    member x.HasDefault         = isFlagSet 0x8000us
+    member x.HasFieldRVA        = isFlagSet 0x0100us
+
+    member x.ConstantValue : Constant option =
+        let consts = mt.constants
+        let rec getConst(i : int) =
+            if i < consts.Length then
+                let currConst = consts.[i]
+                match currConst.parentKind with
+                | MetadataTableKind.FieldKind when currConst.parentIndex = selfIndex ->
+                    Some(new Constant(assem, i))
+                | _ ->
+                    getConst(i + 1)
+            else
+                None
+
+        getConst 0
+
+    member x.Offset : uint32 option =
+        let layouts = mt.fieldLayouts
+        let rec getOffset(i : int) =
+            if i < layouts.Length then
+                if layouts.[i].fieldIndex = selfIndex then
+                    Some layouts.[i].offset
+                else
+                    getOffset(i + 1)
+            else
+                None
+
+        getOffset 0
+
+and Constant(assem:Assembly, selfIndex:int) =
+    let mt = assem.MetadataTables
+    let constRow = mt.constants.[selfIndex]
+
+    member x.Type = constRow.typeVal
+
+    member x.Value = assem.ReadBlobAtIndex constRow.valueIndex
 
 and [<AbstractClass>] TypeDefRefOrSpec() =
     abstract CilId : typeKindReq:bool * assemCtxt:AssemblyBase -> string
@@ -2030,6 +2080,29 @@ and [<RequireQualifiedAccess>] MemberAccess =
     | Family
     | FamORAssem
     | Public
+    with
+        static member FromUShort (i : uint16) =
+            // The MemberAccessMask (23.1.10) subfield of Flags shall contain precisely one of
+            // CompilerControlled, Private, FamANDAssem, Assem, Family, FamORAssem, or Public
+            match i &&& 0x0007us with
+            | 0x0000us -> MemberAccess.CompilerControlled
+            | 0x0001us -> MemberAccess.Private
+            | 0x0002us -> MemberAccess.FamANDAssem
+            | 0x0003us -> MemberAccess.Assem
+            | 0x0004us -> MemberAccess.Family
+            | 0x0005us -> MemberAccess.FamORAssem
+            | 0x0006us -> MemberAccess.Public
+            | n -> failwithf "bad MemberAccess value: 0x%X" n
+
+        override x.ToString() =
+            match x with
+            | MemberAccess.Assem -> "assembly"
+            | MemberAccess.CompilerControlled -> "compilercontrolled"
+            | MemberAccess.FamANDAssem -> "famandassem"
+            | MemberAccess.Family -> "family"
+            | MemberAccess.FamORAssem -> "famorassem"
+            | MemberAccess.Private -> "private"
+            | MemberAccess.Public -> "public"
 
 and Parameter (r : BinaryReader, mt : MetadataTables, selfIndex : int) =
     let pRow = mt.paramRows.[selfIndex]
@@ -2240,18 +2313,7 @@ and MethodDef (assem : Assembly, selfIndex : int) =
     member x.NoInlining     = isImplFlagSet 0x0008us
     member x.NoOptimization = isImplFlagSet 0x0040us
 
-    member x.MemberAccess =
-        // The MemberAccessMask (23.1.10) subfield of Flags shall contain precisely one of
-        // CompilerControlled, Private, FamANDAssem, Assem, Family, FamORAssem, or Public
-        match mdRow.flags &&& 0x0007us with
-        | 0x0000us -> MemberAccess.CompilerControlled
-        | 0x0001us -> MemberAccess.Private
-        | 0x0002us -> MemberAccess.FamANDAssem
-        | 0x0003us -> MemberAccess.Assem
-        | 0x0004us -> MemberAccess.Family
-        | 0x0005us -> MemberAccess.FamORAssem
-        | 0x0006us -> MemberAccess.Public
-        | n -> failwithf "bad MemberAccessMask value: 0x%X" n
+    member x.MemberAccess = MemberAccess.FromUShort mdRow.flags
 
     // Section 22.26 item 7. The following combined bit settings in Flags are invalid
     // a. Static | Final
@@ -3246,6 +3308,11 @@ with
             }
         | Some et -> failwithf "the following element type is not valid for a field sig: %A" et
         | None -> failwith "unexpected end of blob while reading method def or ref sig"
+
+    member x.CilId(assemCtxt:AssemblyBase) =
+        if x.customMods.Length >= 1 then
+            failwith "TODO need to deal with custmods in return type"
+        x.fType.CilId(assemCtxt)
 
 and [<RequireQualifiedAccess>] ParamType =
     | MayByRefTy of MaybeByRefType
