@@ -1688,7 +1688,7 @@ and FieldDef(assem : Assembly, selfIndex : int) =
     member x.RTSpecialName      = isFlagSet 0x0400us
     member x.HasFieldMarshal    = isFlagSet 0x1000us
     member x.HasDefault         = isFlagSet 0x8000us
-    member x.HasFieldRVA        = isFlagSet 0x0100us
+    //member x.HasFieldRVA        = isFlagSet 0x0100us
 
     member x.ConstantValue : Constant option =
         let consts = mt.constants
@@ -1718,6 +1718,29 @@ and FieldDef(assem : Assembly, selfIndex : int) =
 
         getOffset 0
 
+    member x.FieldRVA =
+        if isFlagSet 0x0100us then
+            let rvas = mt.fieldRVAs
+            let rec getRVA (i : int) =
+                if rvas.[i].fieldIndex = selfIndex then
+                    rvas.[i].rva
+                else getRVA (i + 1)
+            Some (getRVA 0)
+        else
+            None
+
+    member x.Data : byte array option =
+        match x.FieldRVA with
+        | None -> None
+        | Some rva ->
+            let pos = assem.RVAToDiskPos rva
+            match x.Signature.fType.SizeBytes with
+            | None -> failwithf "failed to calculate size for %s" (x.Signature.fType.CilId assem)
+            | Some size ->
+                let r = assem.Reader
+                r.BaseStream.Seek(pos, SeekOrigin.Begin) |> ignore
+                Some (r.ReadBytes size)
+
 and Constant(assem:Assembly, selfIndex:int) =
     let mt = assem.MetadataTables
     let constRow = mt.constants.[selfIndex]
@@ -1728,6 +1751,8 @@ and Constant(assem:Assembly, selfIndex:int) =
 
 and [<AbstractClass>] TypeDefRefOrSpec() =
     abstract CilId : typeKindReq:bool * assemCtxt:AssemblyBase -> string
+
+    abstract SizeBytes : int option with get
 
     static member FromKindAndIndex (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefRefOrSpec =
         match mt with
@@ -1792,6 +1817,8 @@ and TypeSpec(assem : Assembly, selfIndex : int) =
     member x.TypeSpecBlob = typeSpecBlob
 
     override x.CilId(typeKindReq:bool, assemCtxt:AssemblyBase) = "TODO impl CilId for typespec"
+
+    override x.SizeBytes = None
     (*
     override x.Namespace =
         match typeSpecBlob with
@@ -1846,6 +1873,8 @@ and TypeRef(assem : Assembly, selfIndex : int) =
 
     override x.CilId(typeKindReq:bool, assemCtxt:AssemblyBase) =
         x.Resolve().CilId(typeKindReq, assemCtxt)
+
+    override x.SizeBytes = x.Resolve().SizeBytes
 
 and [<RequireQualifiedAccess>] TypeVisibilityAttr =
     | NotPublic
@@ -1911,6 +1940,9 @@ and TypeDef(assem : Assembly, selfIndex : int) =
         | 0x00000008u -> ClassLayoutAttr.Sequential
         | 0x00000010u -> ClassLayoutAttr.Explicit
         | v -> failwithf "unexpected class layout flag: %X" v
+
+    member x.ClassLayout : ClassLayoutRow option =
+        Array.tryFind (fun cl -> cl.parentIndex = selfIndex) mt.classLayouts
 
     member x.IsInterface    = isFlagSet 0x00000020u
     member x.IsAbstract     = isFlagSet 0x00000080u
@@ -2026,6 +2058,21 @@ and TypeDef(assem : Assembly, selfIndex : int) =
                     printfn "TODO figure out the type kind of %A" ext
                     TypeKind.Class
                 | None -> failwith "we should never reach this error"
+
+    override x.SizeBytes =
+        match x.ClassLayout with
+        | Some {ClassLayoutRow.classSize = s} -> Some (int s)
+        | None ->
+            let fields = x.Fields
+            let rec accumSum (i : int) (sum : int) =
+                if i < fields.Length then
+                    match fields.[i].Signature.fType.SizeBytes with
+                    | None -> None
+                    | Some s -> accumSum (i + 1) (sum + s)
+                else
+                    Some sum
+
+            accumSum 0 0
 
 and [<RequireQualifiedAccess>] GenericParamVariance = None | Covariant | Contravariant
 
@@ -3183,6 +3230,24 @@ and [<RequireQualifiedAccess>] TypeBlob =
                 spaceSepStrs [|
                     "TODO_GENERIC_INST"
                 |]
+
+        member x.SizeBytes =
+            match x with
+            | TypeBlob.Boolean | TypeBlob.U1 | TypeBlob.I1 ->
+                Some 1
+            | TypeBlob.U2 | TypeBlob.I2 | TypeBlob.Char ->
+                Some 2
+            | TypeBlob.U4 | TypeBlob.I4 | TypeBlob.R4 ->
+                Some 4
+            | TypeBlob.U8 | TypeBlob.I8 | TypeBlob.R8 ->
+                Some 8
+            | TypeBlob.Ptr _ | TypeBlob.FnPtr _ | TypeBlob.I ->
+                Some System.IntPtr.Size
+            | TypeBlob.ValueType ty ->
+                ty.SizeBytes
+            | _ ->
+                None
+
         static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeBlob =
             match !blob with
             | [] -> failwith "unexpected end of blob while reading type"

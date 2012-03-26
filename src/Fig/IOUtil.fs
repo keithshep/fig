@@ -20,7 +20,9 @@ let ifprintfn (tr : TextWriter) (depth : uint32) fmt =
         tr.WriteLine s
     Printf.ksprintf printIndented fmt
 
-let debugfn fmt = Printf.ksprintf System.Diagnostics.Debug.WriteLine fmt
+//let debugfn fmt = printfn fmt
+//let debugfn fmt = Printf.ksprintf System.Diagnostics.Debug.WriteLine fmt
+let debugfn fmt = Printf.ksprintf (fun _ -> ()) fmt
 
 let sepStrsWith (sep : string) (strings : string array) =
     if Array.isEmpty strings then

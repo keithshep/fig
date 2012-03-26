@@ -8,8 +8,23 @@ open System.Text
 
 let private labelAt addr = sprintf "IL_%04x" addr
 
+let private rvaNameAt (rva : uint32) = sprintf "D_%08x" rva
+
 let private bytesToString (bytes : byte array) =
     spaceSepStrs <| Array.map (sprintf "%02X") bytes
+
+let private chunkSeq (s : #seq<_>) (chunkSize : int) =
+    use e = s.GetEnumerator()
+    [|
+        while e.MoveNext() do
+            yield [|
+                yield e.Current
+                let i = ref 1
+                while !i < chunkSize && e.MoveNext() do
+                    yield e.Current
+                    i := !i + 1
+            |]
+    |]
 
 let versionString (assemRef : AssemblyRef) =
     string assemRef.MajorVersion + ":" +
@@ -375,8 +390,6 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (md 
 
 let fieldToStr (assemCtxt : AssemblyBase) (field : FieldDef) =
     spaceSepStrs [|
-        if field.HasFieldRVA then
-            yield "TODO HAS_RVA"
         yield ".field"
 
         match field.Offset with
@@ -430,6 +443,12 @@ let fieldToStr (assemCtxt : AssemblyBase) (field : FieldDef) =
                 | _ -> invalTy()
 
             yield tyName + "(" + valStr + ")"
+
+        match field.FieldRVA with
+        | None -> ()
+        | Some rva ->
+            yield "at"
+            yield rvaNameAt rva
     |]
 
 let rec disTypeDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (td : TypeDef) =
@@ -543,6 +562,25 @@ let disModule (tr : TextWriter) (assem : Assembly) (m : Module) =
     for td in m.TypeDefs do
         disTypeDef tr 1u assem td
 
+let disData (tw : TextWriter) (assem : Assembly) =
+    for m in assem.Modules do
+        for td in m.TypeDefs do
+            for field in td.Fields do
+                match field.Data with
+                | None -> ()
+                | Some data ->
+                    let rva = Option.get field.FieldRVA
+                    fprintfn tw ".data %s = bytearray (" (rvaNameAt rva)
+                    let chunks = Array.ofSeq (chunkSeq data 16)
+                    for i = 0 to chunks.Length - 2 do
+                        let chunkStr = bytesToString (Array.ofSeq chunks.[i])
+                        ifprintfn tw 1u "%s" chunkStr
+                    if chunks.Length = 0 then
+                        ifprintfn tw 1u ")"
+                    else
+                        let chunkStr = bytesToString (Array.ofSeq chunks.[chunks.Length - 1])
+                        ifprintfn tw 1u "%s)" chunkStr
+
 let disassemble (tw : TextWriter) (assem : Assembly) =
     for ar in assem.AssemblyRefs do
         fprintfn tw ".assembly extern %s" ar.Name
@@ -567,3 +605,5 @@ let disassemble (tw : TextWriter) (assem : Assembly) =
     if modules.Length <> 1 then
         failwith "TODO deal with multi module assemblies"
     for m in modules do disModule tw assem m
+
+    disData tw assem
