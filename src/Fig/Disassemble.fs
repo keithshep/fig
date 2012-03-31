@@ -294,6 +294,13 @@ let genParToStr (genPar : GenericParam) =
         yield genPar.Name
     |]
 
+let paramsToStr (assemCtxt : Assembly) (ps : Param list) =
+    commaSepStrs [|
+        for p in ps do
+            // TODO deal with cust mods [INOUT] and all that junk
+            yield p.pType.CilId(assemCtxt)
+    |]
+
 let disMethodDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (md : MethodDef) =
     
     // .method MethodHeader '{' MethodBodyItem* '}'
@@ -326,6 +333,7 @@ let disMethodDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (md 
         | ThisKind.HasThis -> yield "instance"
 
         let methSig = md.Signature
+        // TODO CallKind's like "unmanaged cdecl" etc
         yield
             match methSig.callingConv with
             | MethCallingConv.Default | MethCallingConv.Generic _ ->
@@ -451,6 +459,50 @@ let fieldToStr (assemCtxt : AssemblyBase) (field : FieldDef) =
             yield rvaNameAt rva
     |]
 
+let disProperty (tw : TextWriter) (ident : uint32) (assemCtxt : Assembly) (prop : Property) =
+    let propSig = prop.Signature
+    let propHeaderStr =
+        spaceSepStrs [|
+            yield ".property"
+            yield if propSig.hasThis then "instance" else "class"
+            yield propSig.propType.CilId(assemCtxt)
+            yield prop.Name
+            yield "(" + paramsToStr assemCtxt propSig.indexParams + ")"
+        |]
+    ifprintfn tw ident "%s" propHeaderStr
+    ifprintfn tw ident "{"
+    for methSem in prop.MethodSemantics do
+        let methSemStr =
+            spaceSepStrs [|
+                yield
+                    match methSem.PropKind with
+                    | PropKind.Getter -> ".get"
+                    | PropKind.Setter -> ".set"
+                    | PropKind.Other -> ".other"
+                let md = methSem.Method
+                //if md.SpecialName then yield "specialname"
+                //if md.RTSpecialName then yield "rtspecialname"
+                match md.Signature.thisKind with
+                | ThisKind.NoThis -> ()
+                | ThisKind.ExplicitThis -> yield! [|"instance"; "explicit"|]
+                | ThisKind.HasThis -> yield "instance"
+
+                let methSig = md.Signature
+                // TODO CallKind's like "unmanaged cdecl" etc
+                yield
+                    match methSig.callingConv with
+                    | MethCallingConv.Default | MethCallingConv.Generic _ ->
+                        // TODO are we supposed to yield "default" for generic
+                        "default"
+                    | MethCallingConv.Vararg ->
+                        "vararg"
+                yield md.Signature.retType.CilId(assemCtxt)
+                yield md.DeclaringType.FullName + "::" + md.Name
+                yield "(" + paramsToStr assemCtxt md.Signature.methParams + ")"
+            |]
+        ifprintfn tw (ident + 1u) "%s" methSemStr
+    ifprintfn tw ident "}"
+
 let rec disTypeDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (td : TypeDef) =
 
     let dealWithTypePart (indent : uint32) =
@@ -539,10 +591,17 @@ let rec disTypeDef (tw : TextWriter) (indent : uint32) (assemCtxt : Assembly) (t
         ifprintfn tw indent "%s" (spaceSepStrs classHeaderStrs)
         ifprintfn tw indent "{"
 
+        match td.ClassLayout with
+        | None -> ()
+        | Some cl ->
+            ifprintfn tw (indent + 1u) ".pack %i" cl.packingSize
+            ifprintfn tw (indent + 1u) ".size %i" cl.classSize
+
         for field in td.Fields do
             ifprintfn tw (indent + 1u) "%s" (fieldToStr assemCtxt field)
 
         Array.iter (disMethodDef tw (indent + 1u) assemCtxt) td.Methods
+        Array.iter (disProperty tw (indent + 1u) assemCtxt) td.Properties
         Array.iter (disTypeDef tw (indent + 1u) assemCtxt) td.NestedTypes
 
         ifprintfn tw indent "}"

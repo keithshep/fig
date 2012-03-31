@@ -2010,6 +2010,21 @@ and TypeDef(assem : Assembly, selfIndex : int) =
 
         [|for i in typeDefRow.methodsIndex .. lastMethodIndex -> new MethodDef(assem, i)|]
 
+    member x.Properties =
+        let propMaps = mt.propertyMaps
+        let propMapRowMatch (pmRow:PropertyMapRow) = pmRow.parentIndex = selfIndex
+        match Array.tryFindIndex propMapRowMatch propMaps with
+        | None -> [||]
+        | Some propMapIndex ->
+            let firstPropIndex = propMaps.[propMapIndex].propertyListIndex
+            let lastPropIndex =
+                if propMapIndex < propMaps.Length - 1 then
+                    propMaps.[propMapIndex + 1].propertyListIndex - 1
+                else
+                    mt.properties.Length - 1
+
+            [|for i in firstPropIndex .. lastPropIndex -> new Property(assem, i)|]
+
     member x.TypeKind : TypeKind =
 
         // From partition II section 22.37
@@ -2073,6 +2088,38 @@ and TypeDef(assem : Assembly, selfIndex : int) =
                     Some sum
 
             accumSum 0 0
+
+and Property(assem:Assembly, selfIndex) =
+    let mt = assem.MetadataTables
+    let propRow = mt.properties.[selfIndex]
+    let methSems =
+        let methSemMatch (msRow:MethodSemanticsRow) =
+            msRow.assocIndex = selfIndex
+            && msRow.assocKind = MetadataTableKind.PropertyKind
+        [|for i = 0 to mt.methodSemantics.Length - 1 do
+            if methSemMatch mt.methodSemantics.[i] then
+                yield new PropertyMethodSemantics(assem, i)|]
+
+    member x.MethodSemantics = methSems
+    member x.Name = propRow.name
+    member x.Signature =
+        let blob = ref(assem.ReadBlobAtIndex propRow.typeIndex |> List.ofArray)
+        PropertySig.FromBlob assem blob
+
+and PropertyMethodSemantics(assem:Assembly, selfIndex:int) =
+    let msRow = assem.MetadataTables.methodSemantics.[selfIndex]
+
+    member x.PropKind = PropKind.FromFlags msRow.semanticsFlags
+    member x.Method = new MethodDef(assem, msRow.methodIndex)
+
+and [<RequireQualifiedAccess>] PropKind = Getter | Setter | Other
+with
+    static member FromFlags (flags:uint16) =
+        match flags with
+        | 0x0001us -> Setter
+        | 0x0002us -> Getter
+        | 0x0004us -> Other
+        | _ -> failwithf "unexpected property method kind flag 0x%X" flags
 
 and [<RequireQualifiedAccess>] GenericParamVariance = None | Covariant | Contravariant
 
@@ -3297,6 +3344,30 @@ with
                 | ElementType.ByRef -> listSkip blob; true
                 | _ -> false
             {MaybeByRefType.isByRef = isByRef; ty = TypeBlob.FromBlob assem blob}
+
+and PropertySig = {
+    hasThis : bool
+    custMods : CustomModBlob list
+    propType : TypeBlob
+    indexParams : Param list
+}
+with
+    static member FromBlob (assem : Assembly) (blob : byte list ref) : PropertySig =
+        let hasThis =
+            match listRead blob with
+            | Some 0x08uy -> false
+            | Some 0x28uy -> true
+            | a -> failwithf "unexpected value while reading property sig: %A" a
+        let paramCount = readCompressedUnsignedInt (makeReadByteFun blob)
+        let custMods = CustomModBlob.ManyFromBlob assem blob
+        let propType = TypeBlob.FromBlob assem blob
+
+        {
+            PropertySig.hasThis = hasThis
+            custMods = custMods
+            propType = propType
+            indexParams = [for _ in 1u .. paramCount -> Param.FromBlob assem blob]
+        }
 
 and ThisKind = NoThis | HasThis | ExplicitThis
 and [<RequireQualifiedAccess>] MethCallingConv = Default | Vararg | Generic of uint32
