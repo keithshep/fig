@@ -3,6 +3,7 @@ module Fig.ParseCode
 open Fig.IOUtil
 
 open System.IO
+open System.Reflection.Emit
 
 type MetadataTableKind =
     | AssemblyKind = 0x20
@@ -105,20 +106,21 @@ type [<RequireQualifiedAccess>] RawInst =
     | LdcI8 of int64
     | LdcR4 of single
     | LdcR8 of double
-    | LdindU1 of byte option
-    | LdindI2 of byte option
-    | LdindU2 of byte option
-    | LdindI4 of byte option
-    | LdindU4 of byte option
-    | LdindI8 of byte option
-    | LdindI of byte option
-    | LdindR4 of byte option
-    | LdindR8 of byte option
-    | LdindRef of byte option
+    | LdindI1 of byte option * bool
+    | LdindU1 of byte option * bool
+    | LdindI2 of byte option * bool
+    | LdindU2 of byte option * bool
+    | LdindI4 of byte option * bool
+    | LdindU4 of byte option * bool
+    | LdindI8 of byte option * bool
+    | LdindI of byte option * bool
+    | LdindR4 of byte option * bool
+    | LdindR8 of byte option * bool
+    | LdindRef of byte option * bool
     | Ldloc of uint16
     | Ldloca of uint16
     | Ldnull
-    | Ldobj of byte option * MetadataToken
+    | Ldobj of byte option * bool * MetadataToken
     | Ldstr of MetadataToken
     | Mul
     | Neg
@@ -134,13 +136,13 @@ type [<RequireQualifiedAccess>] RawInst =
     | Shr
     | ShrUn
     | Starg of uint16
-    | StindRef of byte option
-    | StindI1 of byte option
-    | StindI2 of byte option
-    | StindI4 of byte option
-    | StindI8 of byte option
-    | StindR4 of byte option
-    | StindR8 of byte option
+    | StindRef of byte option * bool
+    | StindI1 of byte option * bool
+    | StindI2 of byte option * bool
+    | StindI4 of byte option * bool
+    | StindI8 of byte option * bool
+    | StindR4 of byte option * bool
+    | StindR8 of byte option * bool
     | Stloc of uint16
     | Sub
     | Switch of int array
@@ -150,13 +152,13 @@ type [<RequireQualifiedAccess>] RawInst =
     | ConvRUn
     | Unbox of MetadataToken
     | Throw
-    | Ldfld of byte option * MetadataToken
-    | Ldflda of byte option * MetadataToken
-    | Stfld of byte option * MetadataToken
-    | Ldsfld of MetadataToken
-    | Ldsflda of MetadataToken
-    | Stsfld of MetadataToken
-    | Stobj of byte option * MetadataToken
+    | Ldfld of byte option * bool * MetadataToken
+    | Ldflda of byte option * bool * MetadataToken
+    | Stfld of byte option * bool * MetadataToken
+    | Ldsfld of bool * MetadataToken
+    | Ldsflda of bool * MetadataToken
+    | Stsfld of bool * MetadataToken
+    | Stobj of byte option * bool * MetadataToken
     | ConvOvfI1Un
     | ConvOvfI2Un
     | ConvOvfI4Un
@@ -218,7 +220,7 @@ type [<RequireQualifiedAccess>] RawInst =
     | SubOvfUn
     | Endfinally
     | Leave of int
-    | StindI of byte option
+    | StindI of byte option * bool
     | ConvU
     | Arglist
     | Ceq
@@ -231,8 +233,8 @@ type [<RequireQualifiedAccess>] RawInst =
     | Localloc
     | Endfilter
     | Initobj of MetadataToken
-    | Cpblk
-    | Initblk of byte option
+    | Cpblk of bool
+    | Initblk of byte option * bool
     | Rethrow
     | Sizeof of MetadataToken
     | Refanytype
@@ -356,23 +358,24 @@ let readInsts (r : BinaryReader) (codeSize : uint32) =
         | 0x43uy -> RawInst.BleUn (readInt32 ())
         | 0x44uy -> RawInst.BltUn (readInt32 ())
         | 0x45uy -> RawInst.Switch [|for _ in 1u .. readUInt32 () -> readInt32 ()|]
-        | 0x47uy -> RawInst.LdindU1 unalignedPrefix
-        | 0x48uy -> RawInst.LdindI2 unalignedPrefix
-        | 0x49uy -> RawInst.LdindU2 unalignedPrefix
-        | 0x4Auy -> RawInst.LdindI4 unalignedPrefix
-        | 0x4Buy -> RawInst.LdindU4 unalignedPrefix
-        | 0x4Cuy -> RawInst.LdindI8 unalignedPrefix
-        | 0x4Duy -> RawInst.LdindI unalignedPrefix
-        | 0x4Euy -> RawInst.LdindR4 unalignedPrefix
-        | 0x4Fuy -> RawInst.LdindR8 unalignedPrefix
-        | 0x50uy -> RawInst.LdindRef unalignedPrefix
-        | 0x51uy -> RawInst.StindRef unalignedPrefix
-        | 0x52uy -> RawInst.StindI1 unalignedPrefix
-        | 0x53uy -> RawInst.StindI2 unalignedPrefix
-        | 0x54uy -> RawInst.StindI4 unalignedPrefix
-        | 0x55uy -> RawInst.StindI8 unalignedPrefix
-        | 0x56uy -> RawInst.StindR4 unalignedPrefix
-        | 0x57uy -> RawInst.StindR8 unalignedPrefix
+        | 0x46uy -> RawInst.LdindI1 (unalignedPrefix, volatilePrefix)
+        | 0x47uy -> RawInst.LdindU1 (unalignedPrefix, volatilePrefix)
+        | 0x48uy -> RawInst.LdindI2 (unalignedPrefix, volatilePrefix)
+        | 0x49uy -> RawInst.LdindU2 (unalignedPrefix, volatilePrefix)
+        | 0x4Auy -> RawInst.LdindI4 (unalignedPrefix, volatilePrefix)
+        | 0x4Buy -> RawInst.LdindU4 (unalignedPrefix, volatilePrefix)
+        | 0x4Cuy -> RawInst.LdindI8 (unalignedPrefix, volatilePrefix)
+        | 0x4Duy -> RawInst.LdindI (unalignedPrefix, volatilePrefix)
+        | 0x4Euy -> RawInst.LdindR4 (unalignedPrefix, volatilePrefix)
+        | 0x4Fuy -> RawInst.LdindR8 (unalignedPrefix, volatilePrefix)
+        | 0x50uy -> RawInst.LdindRef (unalignedPrefix, volatilePrefix)
+        | 0x51uy -> RawInst.StindRef (unalignedPrefix, volatilePrefix)
+        | 0x52uy -> RawInst.StindI1 (unalignedPrefix, volatilePrefix)
+        | 0x53uy -> RawInst.StindI2 (unalignedPrefix, volatilePrefix)
+        | 0x54uy -> RawInst.StindI4 (unalignedPrefix, volatilePrefix)
+        | 0x55uy -> RawInst.StindI8 (unalignedPrefix, volatilePrefix)
+        | 0x56uy -> RawInst.StindR4 (unalignedPrefix, volatilePrefix)
+        | 0x57uy -> RawInst.StindR8 (unalignedPrefix, volatilePrefix)
         | 0x58uy -> RawInst.Add
         | 0x59uy -> RawInst.Sub
         | 0x5Auy -> RawInst.Mul
@@ -396,9 +399,9 @@ let readInsts (r : BinaryReader) (codeSize : uint32) =
         | 0x6Cuy -> RawInst.ConvR8
         | 0x6Duy -> RawInst.ConvU4
         | 0x6Euy -> RawInst.ConvU8
-        | 0x6Fuy -> RawInst.Callvirt (constrainedPrefix, tailPrefix, readMetaTok ())
+        | 0x6Fuy -> RawInst.Callvirt (constrainedPrefix, tailPrefix, readMetaTok())
         | 0x70uy -> RawInst.Cpobj (readMetaTok ())
-        | 0x71uy -> RawInst.Ldobj (unalignedPrefix, readMetaTok ())
+        | 0x71uy -> RawInst.Ldobj (unalignedPrefix, volatilePrefix, readMetaTok())
         | 0x72uy -> RawInst.Ldstr (readMetaTok ())
         | 0x73uy -> RawInst.Newobj (readMetaTok ())
         | 0x74uy -> RawInst.Castclass (readMetaTok ())
@@ -406,13 +409,13 @@ let readInsts (r : BinaryReader) (codeSize : uint32) =
         | 0x76uy -> RawInst.ConvRUn
         | 0x79uy -> RawInst.Unbox (readMetaTok ())
         | 0x7Auy -> RawInst.Throw
-        | 0x7Buy -> RawInst.Ldfld (unalignedPrefix, readMetaTok ())
-        | 0x7Cuy -> RawInst.Ldflda (unalignedPrefix, readMetaTok ())
-        | 0x7Duy -> RawInst.Stfld (unalignedPrefix, readMetaTok ())
-        | 0x7Euy -> RawInst.Ldsfld (readMetaTok ())
-        | 0x7Fuy -> RawInst.Ldsflda (readMetaTok ())
-        | 0x80uy -> RawInst.Stsfld (readMetaTok ())
-        | 0x81uy -> RawInst.Stobj (unalignedPrefix, readMetaTok ())
+        | 0x7Buy -> RawInst.Ldfld (unalignedPrefix, volatilePrefix, readMetaTok())
+        | 0x7Cuy -> RawInst.Ldflda (unalignedPrefix, volatilePrefix, readMetaTok())
+        | 0x7Duy -> RawInst.Stfld (unalignedPrefix, volatilePrefix, readMetaTok())
+        | 0x7Euy -> RawInst.Ldsfld (volatilePrefix, readMetaTok())
+        | 0x7Fuy -> RawInst.Ldsflda (volatilePrefix, readMetaTok())
+        | 0x80uy -> RawInst.Stsfld (volatilePrefix, readMetaTok())
+        | 0x81uy -> RawInst.Stobj (unalignedPrefix, volatilePrefix, readMetaTok())
         | 0x82uy -> RawInst.ConvOvfI1Un
         | 0x83uy -> RawInst.ConvOvfI2Un
         | 0x84uy -> RawInst.ConvOvfI4Un
@@ -475,7 +478,7 @@ let readInsts (r : BinaryReader) (codeSize : uint32) =
         | 0xDCuy -> RawInst.Endfinally
         | 0xDDuy -> RawInst.Leave (readInt32 ())
         | 0xDEuy -> RawInst.Leave (readSByte () |> int)
-        | 0xDFuy -> RawInst.StindI unalignedPrefix
+        | 0xDFuy -> RawInst.StindI (unalignedPrefix, volatilePrefix)
         | 0xE0uy -> RawInst.ConvU
         | 0xFEuy ->
             match readByte () with
@@ -518,8 +521,8 @@ let readInsts (r : BinaryReader) (codeSize : uint32) =
                 | None ->
                     let constrainedTok = Some (readMetaTok ())
                     readInst constrainedTok noPrefix readonlyPrefix tailPrefix unalignedPrefix volatilePrefix
-            | 0x17uy -> RawInst.Cpblk
-            | 0x18uy -> RawInst.Initblk unalignedPrefix
+            | 0x17uy -> RawInst.Cpblk volatilePrefix
+            | 0x18uy -> RawInst.Initblk (unalignedPrefix, volatilePrefix)
             | 0x19uy ->
                 // TODO is it worth doing anything with this?
                 let currNo = readByte ()

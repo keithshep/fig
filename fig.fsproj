@@ -60,6 +60,18 @@
     <Compile Include="src\Fig\CecilExt.fs">
       <Link>CecilExt.fs</Link>
     </Compile>
+    <Compile Include="src\Fig\IOUtil.fs">
+      <Link>IOUtil.fs</Link>
+    </Compile>
+    <Compile Include="src\Fig\ParseCode.fs">
+      <Link>ParseCode.fs</Link>
+    </Compile>
+    <Compile Include="src\Fig\AssemblyParser.fs">
+      <Link>AssemblyParser.fs</Link>
+    </Compile>
+    <Compile Include="src\Fig\AssemblyResolution.fs">
+      <Link>AssemblyResolution.fs</Link>
+    </Compile>
     <Compile Include="src\Fig\LLVMCodeGen.fs">
       <Link>LLVMCodeGen.fs</Link>
     </Compile>

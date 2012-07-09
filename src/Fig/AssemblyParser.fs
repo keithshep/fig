@@ -4,6 +4,48 @@ open Fig.IOUtil
 open Fig.ParseCode
 
 open System.IO
+open System.Reflection.Emit
+
+let rec splitAt i xs =
+    if i = 0 then
+        ([], xs)
+    else
+        match xs with
+        | [] -> failwith "not enough elements for split"
+        | x :: xt ->
+            let splitFst, splitSnd = splitAt (i - 1) xt
+            (x :: splitFst, splitSnd)
+
+/// for keeping track of what types will be on the stack
+/// See EMCA 335: Partition VI C.2, Partition III 1.5, Partition III 1.1
+type StackType =
+    | Int32_ST
+    | Int64_ST
+    | NativeInt_ST
+    | Float32_ST
+    | Float64_ST
+    | ObjectRef_ST
+    | ManagedPointer_ST
+    with
+        interface StackTyped with
+            member x.StackType = x
+and StackTyped =
+    abstract member StackType : StackType with get
+let (|Int_ST|Float_ST|Managed_ST|) = function
+    | Int32_ST | Int64_ST | NativeInt_ST ->
+        Int_ST
+    | Float32_ST | Float64_ST ->
+        Float_ST
+    | ObjectRef_ST | ManagedPointer_ST ->
+        Managed_ST
+let (|STyped|) (st : #StackTyped) = STyped st.StackType
+
+type InstPopKind =
+    | Pop0 | Pop1 | Pop1Pop1 | PopI | PopIPop1
+    | PopIPopI | PopIPopIPopI | PopI8Pop8 | PopIPopR4
+    | PopIPopR8 | PopRef | PopRefPopI | PopRefPopIPopI
+    | PopRefPopIPopI8 | PopRefPopIPopR4 | PopRefPopIPopR8
+    | VarPop | PopAll
 
 type SubSystem = WindowsCUI | WindowsGUI
 
@@ -1518,6 +1560,17 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
 
     member x.Reader = r
 
+    member x.EntryPoint : MethodDef option =
+        // TODO this can be a methoddef **OR** a file
+        // Section 25.3.3 Token for the MethodDef or File of the entry point for the image
+        match toMetadataToken cliHeader.entryPointTok with
+        | _, -1 ->
+            None
+        | Some MetadataTableKind.MethodDefKind, row ->
+            Some (new MethodDef(x, row))
+        | tok ->
+            failwithf "implement entry point for %A" tok
+
 and AssemblyRef(assem : Assembly, selfIndex : int) =
     inherit AssemblyBase()
     let mt = assem.MetadataTables
@@ -1567,7 +1620,19 @@ and [<AbstractClass>] AssemblyBase() =
 
     abstract AssemblyFlags : uint32 with get
 
-    static member SameAssemblies (assem1:AssemblyBase) (assem2:AssemblyBase) =
+    override x.GetHashCode() : int =
+        int x.MajorVersion
+        ^^^ (int x.MinorVersion <<< 8)
+        ^^^ (int x.RevisionNumber <<< 16)
+        ^^^ (int <| rotL (uint32 x.BuildNumber) 24)
+    override x.Equals otherObj : bool =
+        match otherObj with
+        | :? AssemblyBase as assem2 ->
+            x.GetType() = assem2.GetType() && AssemblyBase.SameAssemblies x assem2
+        | _ ->
+            false
+
+    static member SameAssemblies (assem1:AssemblyBase) (assem2:AssemblyBase) : bool =
         // TODO create a robust impl
         assem1.Name = assem2.Name
         && assem1.MajorVersion = assem2.MajorVersion
@@ -1592,6 +1657,13 @@ and Module(assem : Assembly, selfIndex : int) =
         }
 
     member x.Name = moduleRow.name
+
+    member x.Assembly = assem
+
+and ModuleRef(assem:Assembly, selfIndex:int) =
+    let moduleRefRow = assem.MetadataTables.moduleRefs.[selfIndex]
+
+    member x.Name = moduleRefRow.name
 
 and [<AbstractClass>] FieldDefOrRef() =
     abstract Name : string with get
@@ -1651,6 +1723,9 @@ and FieldDef(assem : Assembly, selfIndex : int) =
     let fRow = mt.fields.[selfIndex]
     let isFlagSet mask = fRow.fieldAttrFlags &&& mask <> 0us
 
+    member private x.SelfIndex = selfIndex
+    member private x.Assembly = assem
+
     override x.Name = fRow.name
     override x.Resolve() = x
     override x.Signature =
@@ -1664,6 +1739,14 @@ and FieldDef(assem : Assembly, selfIndex : int) =
             yield mySig.fType.CilId(assemCtxt)
             yield x.DeclaringType.FullName + "::" + x.Name
         |]
+
+    override x.GetHashCode() = selfIndex ^^^ assem.GetHashCode()
+    override x.Equals otherObj =
+        match otherObj with
+        | :? FieldDef as otherField ->
+            selfIndex = otherField.SelfIndex && assem = otherField.Assembly
+        | _ ->
+            false
 
     member x.DeclaringType : TypeDef =
         let tdRows = mt.typeDefs
@@ -1684,11 +1767,9 @@ and FieldDef(assem : Assembly, selfIndex : int) =
     member x.IsLiteral          = isFlagSet 0x0040us
     member x.NotSerialized      = isFlagSet 0x0080us
     member x.SpecialName        = isFlagSet 0x0200us
-    member x.PInvokeImpl        = isFlagSet 0x2000us
     member x.RTSpecialName      = isFlagSet 0x0400us
     member x.HasFieldMarshal    = isFlagSet 0x1000us
     member x.HasDefault         = isFlagSet 0x8000us
-    //member x.HasFieldRVA        = isFlagSet 0x0100us
 
     member x.ConstantValue : Constant option =
         let consts = mt.constants
@@ -1753,6 +1834,8 @@ and [<AbstractClass>] TypeDefRefOrSpec() =
     abstract CilId : typeKindReq:bool * assemCtxt:AssemblyBase -> string
 
     abstract SizeBytes : int option with get
+
+    abstract AsIntermediateType : unit -> StackType
 
     static member FromKindAndIndex (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefRefOrSpec =
         match mt with
@@ -1845,6 +1928,9 @@ and TypeSpec(assem : Assembly, selfIndex : int) =
             "TODO deal with var types"
     *)
 
+    override x.AsIntermediateType() : StackType =
+        typeSpecBlob.AsTypeBlob().AsIntermediateType()
+
 and TypeRef(assem : Assembly, selfIndex : int) =
     inherit TypeDefOrRef()
 
@@ -1875,6 +1961,8 @@ and TypeRef(assem : Assembly, selfIndex : int) =
         x.Resolve().CilId(typeKindReq, assemCtxt)
 
     override x.SizeBytes = x.Resolve().SizeBytes
+
+    override x.AsIntermediateType() = x.Resolve().AsIntermediateType()
 
 and [<RequireQualifiedAccess>] TypeVisibilityAttr =
     | NotPublic
@@ -1918,7 +2006,17 @@ and TypeDef(assem : Assembly, selfIndex : int) =
         else
             fullName()
 
+    override x.GetHashCode() = selfIndex ^^^ assem.GetHashCode()
+    override x.Equals otherObj =
+        match otherObj with
+        | :? TypeDef as otherTy ->
+            selfIndex = otherTy.SelfIndex && assem = otherTy.Assembly
+        | _ ->
+            false
+
+    member x.Assembly = assem
     member x.SelfIndex = selfIndex
+    member x.Module = assem.Modules.[0] // TODO what is the right way to do this
 
     member x.TypeVisibilityAttr =
         let visibilityMask = 0x00000007u
@@ -1999,6 +2097,10 @@ and TypeDef(assem : Assembly, selfIndex : int) =
                 mt.typeDefs.[selfIndex + 1].fieldsIndex - 1
 
         [|for i in typeDefRow.fieldsIndex .. lastFieldIndex -> new FieldDef(assem, i)|]
+
+    member x.InstanceFields =  Array.filter (fun (f : FieldDef) -> not f.IsStatic) x.Fields
+
+    member x.StaticFields = Array.filter (fun (f : FieldDef) -> f.IsStatic) x.Fields
 
     member x.Methods =
         let lastMethodIndex =
@@ -2088,6 +2190,45 @@ and TypeDef(assem : Assembly, selfIndex : int) =
                     Some sum
 
             accumSum 0 0
+
+    member x.AsTypeBlob() =
+        let asClassOrVal() =
+            match x.TypeKind with
+            | TypeKind.Interface ->
+                None
+            | TypeKind.Class | TypeKind.Delegate ->
+                Some (TypeBlob.Class x)
+            | TypeKind.Valuetype | TypeKind.Enum ->
+                Some (TypeBlob.ValueType x)
+        match x.Namespace with
+        | Some "System" ->
+            match x.Name with
+            | "Boolean"         -> Some TypeBlob.Boolean
+            | "Char"            -> Some TypeBlob.Char
+            | "Object"          -> Some TypeBlob.Object
+            | "String"          -> Some TypeBlob.String
+            | "Single"          -> Some TypeBlob.R4
+            | "Double"          -> Some TypeBlob.R8
+            | "SByte"           -> Some TypeBlob.I1
+            | "Int16"           -> Some TypeBlob.I2
+            | "Int32"           -> Some TypeBlob.I4
+            | "Int64"           -> Some TypeBlob.I8
+            | "IntPtr"          -> Some TypeBlob.I
+            | "UIntPtr"         -> Some TypeBlob.U
+            | "Byte"            -> Some TypeBlob.U1
+            | "UInt16"          -> Some TypeBlob.U2
+            | "UInt32"          -> Some TypeBlob.U4
+            | "UInt64"          -> Some TypeBlob.U8
+            | _                 -> asClassOrVal()
+        | _ ->
+            asClassOrVal()
+
+    member x.IsPrimitive =
+        match x.AsTypeBlob() with
+        | Some tb -> tb.IsPrimitive
+        | None -> false
+
+    override x.AsIntermediateType() = x.AsTypeBlob().Value.AsIntermediateType()
 
 and Property(assem:Assembly, selfIndex) =
     let mt = assem.MetadataTables
@@ -2198,11 +2339,14 @@ and [<RequireQualifiedAccess>] MemberAccess =
             | MemberAccess.Private -> "private"
             | MemberAccess.Public -> "public"
 
-and Parameter (r : BinaryReader, mt : MetadataTables, selfIndex : int) =
-    let pRow = mt.paramRows.[selfIndex]
-    
-    member x.Name = pRow.name
-    member x.Sequence = pRow.sequence
+and Parameter (name:string, sequence:int, pType:Param) =
+
+    new(pRow:ParamRow, pType:Param) = Parameter(pRow.name, int pRow.sequence, pType)
+
+    member x.Name = name
+    member x.Sequence = sequence
+    member x.CustomMods = pType.customMods
+    member x.Type = pType
 
 and [<AbstractClass>] Method() =
     abstract Name : string with get
@@ -2358,11 +2502,15 @@ and MethodDef (assem : Assembly, selfIndex : int) =
                 exceptionClauses = exceptionSecs
             }
 
+    let signature =
+        lazy (
+            let blob = ref(assem.ReadBlobAtIndex mdRow.signatureIndex |> List.ofArray)
+            MethodDefOrRefSig.FromBlob assem blob
+        )
+
     override x.Name = mdRow.name
     override x.Resolve() = x
-    override x.Signature =
-        let blob = ref(assem.ReadBlobAtIndex mdRow.signatureIndex |> List.ofArray)
-        MethodDefOrRefSig.FromBlob assem blob
+    override x.Signature = signature.Value
     override x.CilId(assemCtxt : AssemblyBase) =
         let maybeQuotedName =
             if x.Name.Contains "." then
@@ -2425,7 +2573,7 @@ and MethodDef (assem : Assembly, selfIndex : int) =
     member x.IsStrict       = isFlagSet 0x0200us
     member x.IsAbstract     = isFlagSet 0x0400us
     member x.SpecialName    = isFlagSet 0x0800us
-    member x.PInvokeImpl    = isFlagSet 0x2000us
+    member x.HasPInvokeImpl = isFlagSet 0x2000us
     member x.RTSpecialName  = isFlagSet 0x1000us
     member x.HasSecurity    = isFlagSet 0x4000us
     member x.RequireSecObj  = isFlagSet 0x8000us
@@ -2438,8 +2586,18 @@ and MethodDef (assem : Assembly, selfIndex : int) =
             else
                 mt.methodDefs.[selfIndex + 1].paramIndex - 1
         let r = assem.Reader
+        let methParamBlobs = x.Signature.methParams
+        if methParamBlobs.Length <> 1 + lastParamIndex - mdRow.paramIndex then
+            failwithf
+                "signature length (%i) not equal to parameter length (%i)"
+                methParamBlobs.Length
+                (1 + lastParamIndex - mdRow.paramIndex)
+        [|
+            for i in mdRow.paramIndex .. lastParamIndex ->
+                new Parameter(mt.paramRows.[i], methParamBlobs.[i])
+        |]
 
-        [|for i in mdRow.paramIndex .. lastParamIndex -> new Parameter(r, mt, i)|]
+    member x.ReturnType = x.Signature.retType
 
     member x.MethodBody =
         if mdRow.rva = 0u then
@@ -2447,7 +2605,7 @@ and MethodDef (assem : Assembly, selfIndex : int) =
             // * Flags.Abstract = 1, or
             // * ImplFlags.Runtime = 1, or
             // * Flags.PinvokeImpl = 1
-            if not (x.IsAbstract || x.CodeType = CodeType.Runtime || x.PInvokeImpl) then
+            if not (x.IsAbstract || x.CodeType = CodeType.Runtime || x.HasPInvokeImpl) then
                 failwith "bad method body RVA"
             None
         else
@@ -2475,6 +2633,60 @@ and MethodDef (assem : Assembly, selfIndex : int) =
                 findDecTy (currIndex + 1)
         findDecTy 0
 
+    member x.PInvokeInfo : PInvokeInfo option =
+        if x.HasPInvokeImpl then
+            let implMaps = mt.implMaps
+            let rec go i =
+                if i < implMaps.Length then
+                    let currImplMap = implMaps.[i]
+                    match currImplMap.memberForwardedKind with
+                    | MetadataTableKind.MethodDefKind when currImplMap.memberForwardedIndex = i ->
+                        i
+                    | _ ->
+                        go (i + 1)
+                else
+                    let decName = x.DeclaringType.FullName
+                    failwithf "failed to find PInvokeInfo for %s::%s" decName x.Name
+            Some <| new PInvokeInfo(assem, go 0)
+        else
+            None
+
+    member x.ThisParam : Parameter option =
+        match x.Signature.thisKind with
+        | ThisKind.HasThis ->
+            let thisTy =
+                match x.DeclaringType.AsTypeBlob() with
+                | None -> failwith "expected a valid \"this\" type blob"
+                | Some declTy ->
+                    if declTy.IsValType then
+                        TypeBlob.Ptr([], Some declTy)
+                    else
+                        declTy
+            
+            let pType = {
+                Param.customMods = []
+                pType = ParamType.MayByRefTy {MaybeByRefType.isByRef = false; ty = thisTy}
+            }
+
+            Some (new Parameter("this", -1, pType))
+        | _ ->
+            // TODO figure out what explicit this means
+            None
+
+    member x.AllParameters =
+        [|
+            match x.ThisParam with
+            | Some tp -> yield tp
+            | None -> ()
+
+            yield! x.Parameters
+        |]
+
+    member x.Locals =
+        match x.MethodBody with
+        | Some body -> body.locals
+        | None -> [||]
+
 and MethodBody = {
     maxStack : uint16
     initLocals : bool
@@ -2482,6 +2694,35 @@ and MethodBody = {
     blocks : (AbstInst * uint32) array array
     exceptionClauses : ExceptionClause array array
 }
+
+and [<RequireQualifiedAccess>] CharSet = NotSpec | Ansi | Unicode | Auto
+and [<RequireQualifiedAccess>] CallConv = Platformapi | Cdecl | Stdcall | Thiscall | Fastcall
+and PInvokeInfo(assem:Assembly, selfIndex:int) =
+    let mt = assem.MetadataTables
+    let implMapRow = mt.implMaps.[selfIndex]
+
+    member x.NoMangle = implMapRow.mappingFlags &&& 0x0001us <> 0us
+    member x.SupportsLastError = implMapRow.mappingFlags &&& 0x0040us <> 0us
+    member x.CharSet =
+        match implMapRow.mappingFlags &&& 0x0006us with
+        | 0x0000us -> CharSet.NotSpec
+        | 0x0002us -> CharSet.Ansi
+        | 0x0004us -> CharSet.Unicode
+        | 0x0006us -> CharSet.Auto
+        | v -> failwithf "unexpected charset bits 0x%X" v
+
+    member x.CallConv =
+        match implMapRow.mappingFlags &&& 0x0700us with
+        | 0x0100us -> CallConv.Platformapi
+        | 0x0200us -> CallConv.Cdecl
+        | 0x0300us -> CallConv.Stdcall
+        | 0x0400us -> CallConv.Thiscall
+        | 0x0500us -> CallConv.Fastcall
+        | v -> failwithf "unexpected callconv bits 0x%X" v
+
+    member x.ImportName = implMapRow.importName
+
+    member x.ModuleRef = new ModuleRef(assem, implMapRow.importScopeIndex)
 
 and Call(tail : bool, meth : Method) =
     member x.Tail = tail
@@ -2529,20 +2770,21 @@ and [<RequireQualifiedAccess>] AbstInst =
     | LdcI8 of int64
     | LdcR4 of single
     | LdcR8 of double
-    | LdindU1 of byte option
-    | LdindI2 of byte option
-    | LdindU2 of byte option
-    | LdindI4 of byte option
-    | LdindU4 of byte option
-    | LdindI8 of byte option
-    | LdindI of byte option
-    | LdindR4 of byte option
-    | LdindR8 of byte option
-    | LdindRef of byte option
+    | LdindI1 of byte option * bool
+    | LdindU1 of byte option * bool
+    | LdindI2 of byte option * bool
+    | LdindU2 of byte option * bool
+    | LdindI4 of byte option * bool
+    | LdindU4 of byte option * bool
+    | LdindI8 of byte option * bool
+    | LdindI of byte option * bool
+    | LdindR4 of byte option * bool
+    | LdindR8 of byte option * bool
+    | LdindRef of byte option * bool
     | Ldloc of uint16
     | Ldloca of uint16
     | Ldnull
-    | Ldobj of byte option * TypeDefRefOrSpec
+    | Ldobj of byte option * bool * TypeDefRefOrSpec
     | Ldstr of string
     | Mul
     | Neg
@@ -2558,13 +2800,13 @@ and [<RequireQualifiedAccess>] AbstInst =
     | Shr
     | ShrUn
     | Starg of uint16
-    | StindRef of byte option
-    | StindI1 of byte option
-    | StindI2 of byte option
-    | StindI4 of byte option
-    | StindI8 of byte option
-    | StindR4 of byte option
-    | StindR8 of byte option
+    | StindRef of byte option * bool
+    | StindI1 of byte option * bool
+    | StindI2 of byte option * bool
+    | StindI4 of byte option * bool
+    | StindI8 of byte option * bool
+    | StindR4 of byte option * bool
+    | StindR8 of byte option * bool
     | Stloc of uint16
     | Sub
     | Switch of int array
@@ -2574,13 +2816,13 @@ and [<RequireQualifiedAccess>] AbstInst =
     | ConvRUn
     | Unbox of TypeDefRefOrSpec
     | Throw
-    | Ldfld of byte option * FieldDefOrRef
-    | Ldflda of byte option * FieldDefOrRef
-    | Stfld of byte option * FieldDefOrRef
-    | Ldsfld of FieldDefOrRef
-    | Ldsflda of FieldDefOrRef
-    | Stsfld of FieldDefOrRef
-    | Stobj of byte option * TypeDefRefOrSpec
+    | Ldfld of byte option * bool * FieldDefOrRef
+    | Ldflda of byte option * bool * FieldDefOrRef
+    | Stfld of byte option * bool * FieldDefOrRef
+    | Ldsfld of bool * FieldDefOrRef
+    | Ldsflda of bool * FieldDefOrRef
+    | Stsfld of bool * FieldDefOrRef
+    | Stobj of byte option * bool * TypeDefRefOrSpec
     | ConvOvfI1Un
     | ConvOvfI2Un
     | ConvOvfI4Un
@@ -2642,7 +2884,7 @@ and [<RequireQualifiedAccess>] AbstInst =
     | SubOvfUn
     | Endfinally
     | Leave of int
-    | StindI of byte option
+    | StindI of byte option * bool
     | ConvU
     | Arglist
     | Ceq
@@ -2655,8 +2897,8 @@ and [<RequireQualifiedAccess>] AbstInst =
     | Localloc
     | Endfilter
     | Initobj of TypeDefRefOrSpec
-    | Cpblk
-    | Initblk of byte option
+    | Cpblk of bool
+    | Initblk of byte option * bool
     | Rethrow
     | Sizeof of TypeDefRefOrSpec
     | Refanytype
@@ -2766,22 +3008,23 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.LdcI8 c -> AbstInst.LdcI8 c
                 | RawInst.LdcR4 c -> AbstInst.LdcR4 c
                 | RawInst.LdcR8 c -> AbstInst.LdcR8 c
-                | RawInst.LdindU1 unalignedOpt -> AbstInst.LdindU1 unalignedOpt
-                | RawInst.LdindI2 unalignedOpt -> AbstInst.LdindI2 unalignedOpt
-                | RawInst.LdindU2 unalignedOpt -> AbstInst.LdindU2 unalignedOpt
-                | RawInst.LdindI4 unalignedOpt -> AbstInst.LdindI4 unalignedOpt
-                | RawInst.LdindU4 unalignedOpt -> AbstInst.LdindU4 unalignedOpt
-                | RawInst.LdindI8 unalignedOpt -> AbstInst.LdindI8 unalignedOpt
-                | RawInst.LdindI unalignedOpt -> AbstInst.LdindI unalignedOpt
-                | RawInst.LdindR4 unalignedOpt -> AbstInst.LdindR4 unalignedOpt
-                | RawInst.LdindR8 unalignedOpt -> AbstInst.LdindR8 unalignedOpt
-                | RawInst.LdindRef unalignedOpt -> AbstInst.LdindRef unalignedOpt
+                | RawInst.LdindI1 (unalignedOpt, volatilePrefix) -> AbstInst.LdindI1 (unalignedOpt, volatilePrefix)
+                | RawInst.LdindU1 (unalignedOpt, volatilePrefix) -> AbstInst.LdindU1 (unalignedOpt, volatilePrefix)
+                | RawInst.LdindI2 (unalignedOpt, volatilePrefix) -> AbstInst.LdindI2 (unalignedOpt, volatilePrefix)
+                | RawInst.LdindU2 (unalignedOpt, volatilePrefix) -> AbstInst.LdindU2 (unalignedOpt, volatilePrefix)
+                | RawInst.LdindI4 (unalignedOpt, volatilePrefix) -> AbstInst.LdindI4 (unalignedOpt, volatilePrefix)
+                | RawInst.LdindU4 (unalignedOpt, volatilePrefix) -> AbstInst.LdindU4 (unalignedOpt, volatilePrefix)
+                | RawInst.LdindI8 (unalignedOpt, volatilePrefix) -> AbstInst.LdindI8 (unalignedOpt, volatilePrefix)
+                | RawInst.LdindI (unalignedOpt, volatilePrefix) -> AbstInst.LdindI (unalignedOpt, volatilePrefix)
+                | RawInst.LdindR4 (unalignedOpt, volatilePrefix) -> AbstInst.LdindR4 (unalignedOpt, volatilePrefix)
+                | RawInst.LdindR8 (unalignedOpt, volatilePrefix) -> AbstInst.LdindR8 (unalignedOpt, volatilePrefix)
+                | RawInst.LdindRef (unalignedOpt, volatilePrefix) -> AbstInst.LdindRef (unalignedOpt, volatilePrefix)
                 | RawInst.Ldloc varIndex -> AbstInst.Ldloc varIndex
                 | RawInst.Ldloca varIndex -> AbstInst.Ldloca varIndex
                 | RawInst.Ldnull -> AbstInst.Ldnull
-                | RawInst.Ldobj (unalignedOpt, typeTok) ->
+                | RawInst.Ldobj (unalignedOpt, volatilePrefix, typeTok) ->
                     let ty = TypeDefRefOrSpec.FromMetadataToken assem typeTok
-                    AbstInst.Ldobj (unalignedOpt, ty)
+                    AbstInst.Ldobj (unalignedOpt, volatilePrefix, ty)
                 | RawInst.Ldstr strTok ->
                     match strTok with
                     | None, strIndex -> AbstInst.Ldstr (assem.ReadUSAtIndex (uint32 strIndex))
@@ -2801,13 +3044,13 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.Shr -> AbstInst.Shr
                 | RawInst.ShrUn -> AbstInst.ShrUn
                 | RawInst.Starg argIndex -> AbstInst.Starg argIndex
-                | RawInst.StindRef unalignedOpt -> AbstInst.StindRef unalignedOpt
-                | RawInst.StindI1 unalignedOpt -> AbstInst.StindI1 unalignedOpt
-                | RawInst.StindI2 unalignedOpt -> AbstInst.StindI2 unalignedOpt
-                | RawInst.StindI4 unalignedOpt -> AbstInst.StindI4 unalignedOpt
-                | RawInst.StindI8 unalignedOpt -> AbstInst.StindI8 unalignedOpt
-                | RawInst.StindR4 unalignedOpt -> AbstInst.StindR4 unalignedOpt
-                | RawInst.StindR8 unalignedOpt -> AbstInst.StindR8 unalignedOpt
+                | RawInst.StindRef (unalignedOpt, volatilePrefix) -> AbstInst.StindRef (unalignedOpt, volatilePrefix)
+                | RawInst.StindI1 (unalignedOpt, volatilePrefix) -> AbstInst.StindI1 (unalignedOpt, volatilePrefix)
+                | RawInst.StindI2 (unalignedOpt, volatilePrefix) -> AbstInst.StindI2 (unalignedOpt, volatilePrefix)
+                | RawInst.StindI4 (unalignedOpt, volatilePrefix) -> AbstInst.StindI4 (unalignedOpt, volatilePrefix)
+                | RawInst.StindI8 (unalignedOpt, volatilePrefix) -> AbstInst.StindI8 (unalignedOpt, volatilePrefix)
+                | RawInst.StindR4 (unalignedOpt, volatilePrefix) -> AbstInst.StindR4 (unalignedOpt, volatilePrefix)
+                | RawInst.StindR8 (unalignedOpt, volatilePrefix) -> AbstInst.StindR8 (unalignedOpt, volatilePrefix)
                 | RawInst.Stloc varIndex -> AbstInst.Stloc varIndex
                 | RawInst.Sub -> AbstInst.Sub
                 | RawInst.Switch tgtArray -> AbstInst.Switch (Array.map (tgtToBlkIndex instIndex) tgtArray)
@@ -2820,27 +3063,27 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.Unbox valTypeTok ->
                     AbstInst.Unbox (TypeDefRefOrSpec.FromMetadataToken assem valTypeTok)
                 | RawInst.Throw -> AbstInst.Throw
-                | RawInst.Ldfld (unalignedOpt, fieldTok) ->
+                | RawInst.Ldfld (unalignedOpt, volatilePrefix, fieldTok) ->
                     let field = FieldDefOrRef.FromMetadataToken assem fieldTok
-                    AbstInst.Ldfld (unalignedOpt, field)
-                | RawInst.Ldflda (unalignedOpt, fieldTok) ->
+                    AbstInst.Ldfld (unalignedOpt, volatilePrefix, field)
+                | RawInst.Ldflda (unalignedOpt, volatilePrefix, fieldTok) ->
                     let field = FieldDefOrRef.FromMetadataToken assem fieldTok
-                    AbstInst.Ldflda (unalignedOpt, field)
-                | RawInst.Stfld (unalignedOpt, fieldTok) ->
+                    AbstInst.Ldflda (unalignedOpt, volatilePrefix, field)
+                | RawInst.Stfld (unalignedOpt, volatilePrefix, fieldTok) ->
                     let field = FieldDefOrRef.FromMetadataToken assem fieldTok
-                    AbstInst.Stfld (unalignedOpt, field)
-                | RawInst.Ldsfld fieldTok ->
+                    AbstInst.Stfld (unalignedOpt, volatilePrefix, field)
+                | RawInst.Ldsfld (volatilePrefix, fieldTok) ->
                     let field = FieldDefOrRef.FromMetadataToken assem fieldTok
-                    AbstInst.Ldsfld field
-                | RawInst.Ldsflda fieldTok ->
+                    AbstInst.Ldsfld (volatilePrefix, field)
+                | RawInst.Ldsflda (volatilePrefix, fieldTok) ->
                     let field = FieldDefOrRef.FromMetadataToken assem fieldTok
-                    AbstInst.Ldsflda field
-                | RawInst.Stsfld fieldTok ->
+                    AbstInst.Ldsflda (volatilePrefix, field)
+                | RawInst.Stsfld (volatilePrefix, fieldTok) ->
                     let field = FieldDefOrRef.FromMetadataToken assem fieldTok
-                    AbstInst.Stsfld field
-                | RawInst.Stobj (unalignedOpt, typeTok) ->
+                    AbstInst.Stsfld (volatilePrefix, field)
+                | RawInst.Stobj (unalignedOpt, volatilePrefix, typeTok) ->
                     let ty = TypeDefRefOrSpec.FromMetadataToken assem typeTok
-                    AbstInst.Stobj (unalignedOpt, ty)
+                    AbstInst.Stobj (unalignedOpt, volatilePrefix, ty)
                 | RawInst.ConvOvfI1Un -> AbstInst.ConvOvfI1Un
                 | RawInst.ConvOvfI2Un -> AbstInst.ConvOvfI2Un
                 | RawInst.ConvOvfI4Un -> AbstInst.ConvOvfI4Un
@@ -2908,7 +3151,7 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.SubOvfUn -> AbstInst.SubOvfUn
                 | RawInst.Endfinally -> AbstInst.Endfinally
                 | RawInst.Leave tgt -> AbstInst.Leave (tgtToBlkIndex instIndex tgt)
-                | RawInst.StindI unalignedOpt -> AbstInst.StindI unalignedOpt
+                | RawInst.StindI (unalignedOpt, volatilePrefix) -> AbstInst.StindI (unalignedOpt, volatilePrefix)
                 | RawInst.ConvU -> AbstInst.ConvU
                 | RawInst.Arglist -> AbstInst.Arglist
                 | RawInst.Ceq -> AbstInst.Ceq
@@ -2922,8 +3165,8 @@ and [<RequireQualifiedAccess>] AbstInst =
                 | RawInst.Endfilter -> AbstInst.Endfilter
                 | RawInst.Initobj typeTok ->
                     AbstInst.Initobj (TypeDefRefOrSpec.FromMetadataToken assem typeTok)
-                | RawInst.Cpblk -> AbstInst.Cpblk
-                | RawInst.Initblk unalignedOpt -> AbstInst.Initblk unalignedOpt
+                | RawInst.Cpblk volatilePrefix -> AbstInst.Cpblk volatilePrefix
+                | RawInst.Initblk (unalignedOpt, volatilePrefix) -> AbstInst.Initblk (unalignedOpt, volatilePrefix)
                 | RawInst.Rethrow -> AbstInst.Rethrow
                 | RawInst.Sizeof typeTok ->
                     AbstInst.Sizeof (TypeDefRefOrSpec.FromMetadataToken assem typeTok)
@@ -2946,6 +3189,672 @@ and [<RequireQualifiedAccess>] AbstInst =
             
             instBlocks
 
+        /// The following value should have valid stack push and pop parameters
+        /// but the size in bytes for example may not correspond to the truth
+        member private x.ArchetypeOpCode : OpCode =
+            match x with
+            | Add -> OpCodes.Add
+            | And -> OpCodes.And
+            | Beq  _ -> OpCodes.Beq
+            | Bge  _ -> OpCodes.Bge
+            | Bgt _ -> OpCodes.Bgt
+            | Ble _ -> OpCodes.Ble
+            | Blt _ -> OpCodes.Blt
+            | BneUn _ -> OpCodes.Bne_Un
+            | BgeUn _ -> OpCodes.Bge_Un
+            | BgtUn _ -> OpCodes.Bgt_Un
+            | BleUn _ -> OpCodes.Ble_Un
+            | BltUn _ -> OpCodes.Blt_Un
+            | Br _ -> OpCodes.Br
+            | Break -> OpCodes.Break
+            | Brfalse _ -> OpCodes.Brfalse
+            | Brtrue _ -> OpCodes.Brtrue
+            | Call _ -> OpCodes.Call
+            | Calli _ -> OpCodes.Calli
+            | Callvirt _ -> OpCodes.Callvirt
+            | ConvI1 -> OpCodes.Conv_I1
+            | ConvI2 -> OpCodes.Conv_I2
+            | ConvI4 -> OpCodes.Conv_I4
+            | ConvI8 -> OpCodes.Conv_I8
+            | ConvR4 -> OpCodes.Conv_R4
+            | ConvR8 -> OpCodes.Conv_R8
+            | ConvU4 -> OpCodes.Conv_U4
+            | ConvU8 -> OpCodes.Conv_U8
+            | Cpobj _ -> OpCodes.Cpobj
+            | Div -> OpCodes.Div
+            | DivUn -> OpCodes.Div_Un
+            | Dup -> OpCodes.Dup
+            | Jmp _ -> OpCodes.Jmp
+            | Ldarg _ -> OpCodes.Ldarg
+            | Ldarga _ -> OpCodes.Ldarga
+            | LdcI4 _ -> OpCodes.Ldc_I4
+            | LdcI8 _ -> OpCodes.Ldc_I8
+            | LdcR4 _ -> OpCodes.Ldc_R4
+            | LdcR8 _ -> OpCodes.Ldc_R8
+            | LdindI1 _ -> OpCodes.Ldind_I1
+            | LdindU1 _ -> OpCodes.Ldind_U1
+            | LdindI2 _ -> OpCodes.Ldind_I2
+            | LdindU2 _ -> OpCodes.Ldind_U2
+            | LdindI4 _ -> OpCodes.Ldind_I4
+            | LdindU4 _ -> OpCodes.Ldind_U4
+            | LdindI8 _ -> OpCodes.Ldind_I8
+            | LdindI _ -> OpCodes.Ldind_I
+            | LdindR4 _ -> OpCodes.Ldind_R4
+            | LdindR8 _ -> OpCodes.Ldind_R8
+            | LdindRef _ -> OpCodes.Ldind_Ref
+            | Ldloc _ -> OpCodes.Ldloc
+            | Ldloca _ -> OpCodes.Ldloca
+            | Ldnull -> OpCodes.Ldnull
+            | Ldobj _ -> OpCodes.Ldobj
+            | Ldstr _ -> OpCodes.Ldstr
+            | Mul -> OpCodes.Mul
+            | Neg -> OpCodes.Neg
+            | Nop -> OpCodes.Nop
+            | Not -> OpCodes.Not
+            | Newobj _ -> OpCodes.Newobj
+            | Or -> OpCodes.Or
+            | Pop -> OpCodes.Pop
+            | Rem -> OpCodes.Rem
+            | RemUn -> OpCodes.Rem_Un
+            | Ret -> OpCodes.Ret
+            | Shl -> OpCodes.Shl
+            | Shr -> OpCodes.Shr
+            | ShrUn -> OpCodes.Shr_Un
+            | Starg _ -> OpCodes.Starg
+            | StindRef _ -> OpCodes.Stind_Ref
+            | StindI1 _ -> OpCodes.Stind_I1
+            | StindI2 _ -> OpCodes.Stind_I2
+            | StindI4 _ -> OpCodes.Stind_I4
+            | StindI8 _ -> OpCodes.Stind_I8
+            | StindR4 _ -> OpCodes.Stind_R4
+            | StindR8 _ -> OpCodes.Stind_R8
+            | Stloc _ -> OpCodes.Stloc
+            | Sub -> OpCodes.Sub
+            | Switch _ -> OpCodes.Switch
+            | Xor -> OpCodes.Xor
+            | Castclass _ -> OpCodes.Castclass
+            | Isinst _ -> OpCodes.Isinst
+            | ConvRUn -> OpCodes.Conv_R_Un
+            | Unbox _ -> OpCodes.Unbox
+            | Throw -> OpCodes.Throw
+            | Ldfld _ -> OpCodes.Ldfld
+            | Ldflda _ -> OpCodes.Ldflda
+            | Stfld _ -> OpCodes.Stfld
+            | Ldsfld _ -> OpCodes.Ldsfld
+            | Ldsflda _ -> OpCodes.Ldsflda
+            | Stsfld _ -> OpCodes.Stsfld
+            | Stobj _ -> OpCodes.Stobj
+            | ConvOvfI1Un -> OpCodes.Conv_Ovf_I1_Un
+            | ConvOvfI2Un -> OpCodes.Conv_Ovf_I2_Un
+            | ConvOvfI4Un -> OpCodes.Conv_Ovf_I4_Un
+            | ConvOvfI8Un -> OpCodes.Conv_Ovf_I8_Un
+            | ConvOvfU1Un -> OpCodes.Conv_Ovf_U1_Un
+            | ConvOvfU2Un -> OpCodes.Conv_Ovf_U2_Un
+            | ConvOvfU4Un -> OpCodes.Conv_Ovf_U4_Un
+            | ConvOvfU8Un -> OpCodes.Conv_Ovf_U8_Un
+            | ConvOvfIUn -> OpCodes.Conv_Ovf_I_Un
+            | ConvOvfUUn -> OpCodes.Conv_Ovf_U_Un
+            | Box _ -> OpCodes.Box
+            | Newarr _ -> OpCodes.Newarr
+            | Ldlen -> OpCodes.Ldlen
+            | Ldelema _ -> OpCodes.Ldelema
+            | LdelemI1 -> OpCodes.Ldelem_I1
+            | LdelemU1 -> OpCodes.Ldelem_U1
+            | LdelemI2 -> OpCodes.Ldelem_I2
+            | LdelemU2 -> OpCodes.Ldelem_U2
+            | LdelemI4 -> OpCodes.Ldelem_I4
+            | LdelemU4 -> OpCodes.Ldelem_U4
+            | LdelemI8 -> OpCodes.Ldelem_I8
+            | LdelemI -> OpCodes.Ldelem_I
+            | LdelemR4 -> OpCodes.Ldelem_R4
+            | LdelemR8 -> OpCodes.Ldelem_R8
+            | LdelemRef -> OpCodes.Ldelem_Ref
+            | StelemI -> OpCodes.Stelem_I
+            | StelemI1 -> OpCodes.Stelem_I1
+            | StelemI2 -> OpCodes.Stelem_I2
+            | StelemI4 -> OpCodes.Stelem_I4
+            | StelemI8 -> OpCodes.Stelem_I8
+            | StelemR4 -> OpCodes.Stelem_R4
+            | StelemR8 -> OpCodes.Stelem_R8
+            | StelemRef -> OpCodes.Stelem_Ref
+            | Ldelem _ -> OpCodes.Ldelem
+            | Stelem _ -> OpCodes.Stelem
+            | UnboxAny _ -> OpCodes.Unbox_Any
+            | ConvOvfI1 -> OpCodes.Conv_Ovf_I1
+            | ConvOvfU1 -> OpCodes.Conv_Ovf_U1
+            | ConvOvfI2 -> OpCodes.Conv_Ovf_I2
+            | ConvOvfU2 -> OpCodes.Conv_Ovf_U2
+            | ConvOvfI4 -> OpCodes.Conv_Ovf_I4
+            | ConvOvfU4 -> OpCodes.Conv_Ovf_U4
+            | ConvOvfI8 -> OpCodes.Conv_Ovf_I8
+            | ConvOvfU8 -> OpCodes.Conv_Ovf_U8
+            | Refanyval _ -> OpCodes.Refanyval
+            | Ckfinite -> OpCodes.Ckfinite
+            | Mkrefany _ -> OpCodes.Mkrefany
+            | Ldtoken _ -> OpCodes.Ldtoken
+            | ConvU2 -> OpCodes.Conv_U2
+            | ConvU1 -> OpCodes.Conv_U1
+            | ConvI -> OpCodes.Conv_I
+            | ConvOvfI -> OpCodes.Conv_Ovf_I
+            | ConvOvfU -> OpCodes.Conv_Ovf_U
+            | AddOvf -> OpCodes.Add_Ovf
+            | AddOvfUn -> OpCodes.Add_Ovf_Un
+            | MulOvf -> OpCodes.Mul_Ovf
+            | MulOvfUn -> OpCodes.Mul_Ovf_Un
+            | SubOvf -> OpCodes.Sub_Ovf
+            | SubOvfUn -> OpCodes.Sub_Ovf_Un
+            | Endfinally -> OpCodes.Endfinally
+            | Leave _ -> OpCodes.Leave
+            | StindI _ -> OpCodes.Stind_I
+            | ConvU -> OpCodes.Conv_U
+            | Arglist -> OpCodes.Arglist
+            | Ceq -> OpCodes.Ceq
+            | Cgt -> OpCodes.Cgt
+            | CgtUn -> OpCodes.Cgt_Un
+            | Clt -> OpCodes.Clt
+            | CltUn -> OpCodes.Clt_Un
+            | Ldftn _ -> OpCodes.Ldftn
+            | Ldvirtftn _ -> OpCodes.Ldvirtftn
+            | Localloc -> OpCodes.Localloc
+            | Endfilter -> OpCodes.Endfilter
+            | Initobj _ -> OpCodes.Initobj
+            | Cpblk _ -> OpCodes.Cpblk
+            | Initblk _ -> OpCodes.Initblk
+            | Rethrow -> OpCodes.Rethrow
+            | Sizeof _ -> OpCodes.Sizeof
+            | Refanytype -> OpCodes.Refanytype
+
+        member x.StackBehaviourPop = x.ArchetypeOpCode.StackBehaviourPop
+        member x.StackBehaviourPush = x.ArchetypeOpCode.StackBehaviourPush
+
+        member x.PopTypes (stackTypes : list<#StackTyped>) =
+            // TODO ARRG!! what about throw, rethrow, return ...
+            match x with
+            | Leave _ | Endfinally | Throw ->
+                (stackTypes, [])
+            | _ ->
+                match x.StackBehaviourPop with
+                | StackBehaviour.Pop0 ->
+                    ([], stackTypes)
+                | StackBehaviour.Pop1
+                | StackBehaviour.Popi
+                | StackBehaviour.Popref ->
+                    match stackTypes with
+                    | a :: stackTail -> ([a], stackTail)
+                    | [] -> failwith "unexpected empty stack"
+                | StackBehaviour.Pop1_pop1
+                | StackBehaviour.Popi_pop1
+                | StackBehaviour.Popi_popi
+                | StackBehaviour.Popi_popi8
+                | StackBehaviour.Popi_popr4
+                | StackBehaviour.Popi_popr8
+                | StackBehaviour.Popref_pop1
+                | StackBehaviour.Popref_popi ->
+                    match stackTypes with
+                    | a :: b :: stackTail -> ([a; b], stackTail)
+                    | _ -> failwith "expected at least two items in the stack"
+                | StackBehaviour.Popi_popi_popi
+                | StackBehaviour.Popref_popi_popi
+                | StackBehaviour.Popref_popi_popi8
+                | StackBehaviour.Popref_popi_popr4
+                | StackBehaviour.Popref_popi_popr8
+                | StackBehaviour.Popref_popi_popref ->
+                    match stackTypes with
+                    | a :: b :: c :: stackTail -> ([a; b; c], stackTail)
+                    | _ -> failwith "expected at least three items in the stack"
+                | StackBehaviour.Varpop ->
+                    let methSigPopCount (meth : Method) =
+                        let methSig = meth.Signature
+                        let paramLen = methSig.methParams.Length
+                        match methSig.thisKind with
+                        | ThisKind.HasThis ->
+                            paramLen + 1
+                        | ThisKind.ExplicitThis | ThisKind.NoThis ->
+                            paramLen
+
+                    let popCount =
+                        match x with
+                        | Call call | Calli call ->
+                            methSigPopCount call.Method
+                        | Callvirt virtCall ->
+                            methSigPopCount virtCall.Method
+                        | Newobj methRef ->
+                            // TODO double check the - 1 here
+                            methSigPopCount methRef - 1
+                        | Ret ->
+                            match stackTypes with
+                            | [] -> 0
+                            | [_] -> 1
+                            | _ -> failwith "a ret instruction should only have 0 or 1 items on the stack"
+                        | _ ->
+                            failwithf "unexpected variable pop for instruction: %A" x
+
+                    splitAt popCount stackTypes
+
+                | popB ->
+                    failwithf "unexpected pop behavior %A" popB
+
+        /// update the type stack
+        member x.TypesToPush (meth : MethodDef) (poppedTypes : list<#StackTyped>) =
+
+            let poppedTypes = [for t in poppedTypes -> t.StackType]
+
+            let badStack () = failwithf "bad stack types for %A found %A at the top of stack" x poppedTypes
+
+            match x with
+            | Add | Div | Mul | Rem | Sub ->
+
+                // binary numeric operations defined in
+                // Partition III 1.5
+                // TODO: assuming valid bytecode here
+                match poppedTypes with
+                | [Int32_ST; Int32_ST] ->
+                    Some [Int32_ST]
+                | [Float32_ST; Float32_ST] ->
+                    Some [Float32_ST]
+                | [(Float64_ST | Float32_ST); (Float64_ST | Float32_ST)] ->
+                    Some [Float64_ST]
+                | [ManagedPointer_ST; ManagedPointer_ST] ->
+                    Some [NativeInt_ST]
+                | [_; ManagedPointer_ST] | [ManagedPointer_ST; _] ->
+                    Some [ManagedPointer_ST]
+                | [_; NativeInt_ST] | [NativeInt_ST; _] ->
+                    Some [NativeInt_ST]
+                | _ ->
+                    badStack ()
+
+            | Neg | Not ->
+                Some poppedTypes
+
+            // Binary Comparison or Branch Operations
+            // Used for beq, beq.s, bge, bge.s, bge.un, bge.un.s, bgt, bgt.s,
+            // bgt.un, bgt.un.s, ble, ble.s, ble.un, ble.un.s, blt, blt.s, blt.un,
+            // blt.un.s, bne.un, bne.un.s, ceq, cgt, cgt.un, clt, clt.un
+            | Beq _ | Bge _ | Bgt _ | Ble _ | Blt _
+            | BneUn _ | BgeUn _ | BgtUn _ | BleUn _ | BltUn _ ->
+                Some []
+            | Ceq | Cgt | CgtUn | Clt | CltUn ->
+                Some [Int32_ST]
+
+            // The shl and shr instructions return the same type as their first operand
+            // and their second operand shall be of type int32 or native int
+            | Shl | Shr | ShrUn ->
+                match poppedTypes with
+                | [Int32_ST; fstOpType] | [NativeInt_ST; fstOpType] ->
+                    Some [fstOpType]
+                | _ ->
+                    badStack ()
+
+            // Integer Operations: Used for and, div.un, not, or, rem.un, xor
+            // Note: I put Not with Neg above
+            | And | DivUn | Or | RemUn | Xor ->
+                match poppedTypes with
+                | [Int32_ST; Int32_ST] ->
+                    Some [Int32_ST]
+                | [Int64_ST; Int64_ST] ->
+                    Some [Int64_ST]
+                | [NativeInt_ST; _] | [_; NativeInt_ST] ->
+                    Some [NativeInt_ST]
+                | _ ->
+                    badStack ()
+
+            // Overflow Arithmetic Operations: Used for add.ovf, add.ovf.un,
+            // mul.ovf, mul.ovf.un, sub.ovf, and sub.ovf.un
+            | AddOvf | AddOvfUn | MulOvf | MulOvfUn | SubOvf | SubOvfUn ->
+                match poppedTypes with
+                | [Int32_ST; Int32_ST] ->
+                    Some [Int32_ST]
+                | [Int64_ST; Int64_ST] ->
+                    Some [Int64_ST]
+                | [ManagedPointer_ST; ManagedPointer_ST] ->
+                    Some [NativeInt_ST]
+                | [_; ManagedPointer_ST] | [ManagedPointer_ST; _] ->
+                    Some [ManagedPointer_ST]
+                | [NativeInt_ST; _] | [_; NativeInt_ST] ->
+                    Some [NativeInt_ST]
+                | _ ->
+                    badStack ()
+
+            // data conversion
+            | ConvI1 | ConvI2 | ConvI4 | ConvU4 | ConvU2 | ConvU1
+            | ConvOvfI1 | ConvOvfU1 | ConvOvfI2 | ConvOvfU2 | ConvOvfI4 | ConvOvfU4
+            | ConvOvfI1Un | ConvOvfI2Un | ConvOvfI4Un | ConvOvfU1Un | ConvOvfU2Un | ConvOvfU4Un ->
+                Some [Int32_ST]
+            | ConvI8 | ConvU8 | ConvOvfI8Un | ConvOvfU8Un | ConvOvfI8 | ConvOvfU8 ->
+                Some [Int64_ST]
+            | ConvR4 ->
+                Some [Float32_ST]
+            | ConvR8 | ConvRUn ->
+                // TODO is it OK to use float64 for conv.r.un? I'm guessing so.
+                Some [Float64_ST]
+            | ConvI | ConvU | ConvOvfIUn | ConvOvfUUn | ConvOvfI | ConvOvfU ->
+                Some [NativeInt_ST]
+
+            | Brfalse _ | Brtrue _ ->
+                match poppedTypes with
+                | [_] -> Some []
+                | _ -> badStack ()
+
+            | Br _ ->
+                match poppedTypes with
+                | [] -> Some []
+                | _ -> badStack ()
+
+            | LdindI1 _ | LdindU1 _ | LdindI2 _ | LdindU2 _ | LdindI4 _ | LdindU4 _ ->
+                match poppedTypes with
+                | [NativeInt_ST] | [ManagedPointer_ST] -> Some [Int32_ST]
+                | _ -> badStack ()
+            | LdindI8 _ ->
+                match poppedTypes with
+                | [NativeInt_ST] | [ManagedPointer_ST] -> Some [Int64_ST]
+                | _ -> badStack ()
+            | LdindI _ ->
+                match poppedTypes with
+                | [NativeInt_ST] | [ManagedPointer_ST] -> Some [NativeInt_ST]
+                | _ -> badStack ()
+            | LdindR4 _ ->
+                match poppedTypes with
+                | [NativeInt_ST] | [ManagedPointer_ST] -> Some [Float32_ST]
+                | _ -> badStack ()
+            | LdindR8 _ ->
+                match poppedTypes with
+                | [NativeInt_ST] | [ManagedPointer_ST] -> Some [Float64_ST]
+                | _ -> badStack ()
+            | LdindRef _ ->
+                match poppedTypes with
+                | [NativeInt_ST] | [ManagedPointer_ST] -> Some [ObjectRef_ST]
+                | _ -> badStack ()
+
+            | Break | Nop ->
+                match poppedTypes with
+                | [] -> Some []
+                | _ -> badStack ()
+
+            | LdcI4 _ ->
+                match poppedTypes with
+                | [] -> Some [Int32_ST]
+                | _ -> badStack ()
+            | LdcI8 _ ->
+                match poppedTypes with
+                | [] -> Some [Int64_ST]
+                | _ -> badStack ()
+            | LdcR4 _ ->
+                match poppedTypes with
+                | [] -> Some [Float32_ST]
+                | _ -> badStack ()
+            | LdcR8 _ ->
+                match poppedTypes with
+                | [] -> Some [Float64_ST]
+                | _ -> badStack ()
+
+            | LdelemI1 | LdelemU1 | LdelemI2 | LdelemU2 | LdelemI4 | LdelemU4 ->
+                Some [Int32_ST]
+            | LdelemI8 ->
+                Some [Int64_ST]
+            | LdelemI ->
+                Some [NativeInt_ST]
+            | LdelemR4 ->
+                Some [Float32_ST]
+            | LdelemR8 ->
+                Some [Float64_ST]
+            | LdelemRef ->
+                Some [ObjectRef_ST]
+
+            | StelemI | StelemI1 | StelemI2 | StelemI4
+            | StelemI8 | StelemR4 | StelemR8 | StelemRef | Stelem _ ->
+                match poppedTypes with
+                | [_; Int32_ST; ObjectRef_ST]
+                | [_; NativeInt_ST; ObjectRef_ST] ->
+                    Some []
+                | _ ->
+                    badStack ()
+
+            | StindRef _ | StindI1 _ | StindI2 _ | StindI4 _
+            | StindI8 _ | StindR4 _ | StindR8 _ | StindI _ ->
+                Some []
+
+            | Dup ->
+                match poppedTypes with
+                | [item] -> Some [item; item]
+                | _ -> badStack ()
+
+            | Ldnull | Ldstr _ ->
+                match poppedTypes with
+                | [] -> Some [ObjectRef_ST]
+                | _ -> badStack ()
+        
+            | Starg _ | Stloc _ | Stsfld _ ->
+                match poppedTypes with
+                | [_] -> Some []
+                | _ -> badStack ()
+        
+            | Stfld _ ->
+                match poppedTypes with
+                | [_; (ObjectRef_ST | NativeInt_ST | ManagedPointer_ST)] -> Some []
+                | _ -> badStack ()
+        
+            | Stobj _ ->
+                match poppedTypes with
+                | [_; _] -> Some []
+                | _ -> badStack ()
+
+            | Ldlen ->
+                match poppedTypes with
+                | [ObjectRef_ST] -> Some [NativeInt_ST]
+                | _ -> badStack ()
+
+            | Pop ->
+                match poppedTypes with
+                | [_] -> Some []
+                | _ -> badStack ()
+
+            | Newarr _ ->
+                match poppedTypes with
+                | [Int32_ST] | [NativeInt_ST] -> Some [ObjectRef_ST]
+                | _ -> badStack ()
+
+            | Box _ ->
+                match poppedTypes with
+                | [_] -> Some [ObjectRef_ST]
+                | _ -> badStack ()
+
+            | Throw ->
+                match poppedTypes with
+                | [ObjectRef_ST] -> None
+                | _ -> badStack ()
+        
+            | Jmp _ ->
+                match poppedTypes with
+                | [] -> None
+                | _ -> badStack ()
+
+            | Ret ->
+                match poppedTypes with
+                | [] | [_] -> None
+                | _ -> badStack ()
+
+            | Leave _ -> None
+
+            | Ckfinite -> Some poppedTypes
+
+            | Endfinally -> None
+        
+            | Ldftn _ -> Some [NativeInt_ST]
+
+            | Call call | Calli call ->
+                let retTy = call.Method.Signature.retType
+                match retTy.rType with
+                | RetTypeKind.Void -> Some []
+                | _ -> Some [retTy.AsIntermediateType()]
+
+            | Callvirt virtCall ->
+                let retTy = virtCall.Method.Signature.retType
+                match retTy.rType with
+                | RetTypeKind.Void -> Some []
+                | _ -> Some [retTy.AsIntermediateType()]
+
+            | Newobj methodRef ->
+                let decTy = methodRef.Resolve().DeclaringType
+                Some [decTy.AsIntermediateType()]
+
+            | Cpobj _ ->
+                match poppedTypes with
+                | [(NativeInt_ST | ManagedPointer_ST); (NativeInt_ST | ManagedPointer_ST)] ->
+                    None
+                | _ ->
+                    badStack ()
+
+            | Ldarga _ | Ldloca _ ->
+                Some [ManagedPointer_ST]
+        
+            | Ldflda _ ->
+                match poppedTypes with
+                | [(ObjectRef_ST | ManagedPointer_ST)] ->
+                    Some [ManagedPointer_ST]
+                | [NativeInt_ST] ->
+                    Some [NativeInt_ST]
+                | _ ->
+                    badStack ()
+
+            | Ldelema _ ->
+                match poppedTypes with
+                | [(Int32_ST | NativeInt_ST); ObjectRef_ST] ->
+                    Some [ManagedPointer_ST]
+                | _ ->
+                    badStack ()
+
+            | Ldelem ty ->
+                match poppedTypes with
+                | [(Int32_ST | NativeInt_ST); ObjectRef_ST] ->
+                    Some [ty.AsIntermediateType()]
+                | _ ->
+                    badStack ()
+
+            | Ldarg i ->
+                match poppedTypes with
+                | [] ->
+                    let param = meth.AllParameters.[int i]
+                    Some [param.Type.AsIntermediateType()]
+                | _ -> badStack ()
+
+            | Ldloc i ->
+                match poppedTypes with
+                | [] ->
+                    let local = meth.Locals.[int i]
+                    Some [local.AsIntermediateType()]
+                | _ -> badStack ()
+
+        
+            | Ldobj (_, _, ty) ->
+                match poppedTypes with
+                | [NativeInt_ST | ManagedPointer_ST] ->
+                    Some [ty.AsIntermediateType()]
+                | _ -> badStack ()
+
+            | Switch _ ->
+                Some []
+
+            | Isinst _ | Castclass _ ->
+                match poppedTypes with
+                | [ObjectRef_ST] -> Some [ObjectRef_ST]
+                | _ -> badStack ()
+
+            | Ldfld (_, _, field) ->
+                match poppedTypes with
+                | [ObjectRef_ST | ManagedPointer_ST | NativeInt_ST] ->
+                    Some [field.Signature.fType.AsIntermediateType()]
+                | _ ->
+                    badStack ()
+
+            | Ldsfld (_, field) ->
+                match poppedTypes with
+                | [] -> Some [field.Signature.fType.AsIntermediateType()]
+                | _ -> badStack ()
+
+            | Unbox ty ->
+                match poppedTypes with
+                | [ObjectRef_ST] -> Some [ty.AsIntermediateType()]
+                | _ -> badStack ()
+
+            | UnboxAny ty ->
+                match poppedTypes with
+                | [ObjectRef_ST] -> Some [ty.AsIntermediateType()]
+                | _ -> badStack ()
+
+            | Mkrefany _ ->
+                match poppedTypes with
+                | [ManagedPointer_ST | NativeInt_ST] -> Some [ObjectRef_ST]
+                | _ -> badStack ()
+
+            | Refanyval ty ->
+                // Correct CIL ensures that typedRef is a valid typed reference (created by a previous call to mkrefany).
+                match poppedTypes with
+                | [ObjectRef_ST] -> Some [ManagedPointer_ST]
+                | _ -> badStack ()
+
+            | Refanytype ->
+                match poppedTypes with
+                | [ObjectRef_ST] -> Some [ObjectRef_ST]
+                | _ -> badStack ()
+
+            | Ldtoken _ ->
+                match poppedTypes with
+                | [] -> Some [ObjectRef_ST]
+                | _ -> badStack ()
+
+            | Arglist ->
+                match poppedTypes with
+                | [] -> Some [ObjectRef_ST]
+                | _ -> badStack ()
+
+            | Ldvirtftn _ ->
+                match poppedTypes with
+                | [ObjectRef_ST] -> Some [NativeInt_ST]
+                | _ -> badStack ()
+            
+            | Localloc ->
+                // TODO verify: correct CIL requires that the evaluation stack be
+                // empty, apart from the size item
+                match poppedTypes with
+                | [NativeInt_ST | Int32_ST] -> Some [NativeInt_ST]
+                | _ -> badStack ()
+
+            | Endfilter ->
+                match poppedTypes with
+                | [Int32_ST] -> Some []
+                | _ -> badStack ()
+
+            | Initobj _ ->
+                match poppedTypes with
+                | [ManagedPointer_ST | NativeInt_ST] -> Some []
+                | _ -> badStack ()
+
+            | Cpblk _ | Initblk _ ->
+                match poppedTypes with
+                | [Int32_ST; (ManagedPointer_ST | NativeInt_ST); (ManagedPointer_ST | NativeInt_ST)] ->
+                    Some []
+                | _ ->
+                    badStack ()
+
+            | Rethrow ->
+                match poppedTypes with
+                | [] -> Some []
+                | _ -> badStack ()
+
+            | Sizeof _ ->
+                match poppedTypes with
+                | [] -> Some [Int32_ST]
+                | _ -> badStack ()
+
+            | Ldsflda (_, field) ->
+                match poppedTypes with
+                | [] ->
+                    match field.Resolve().FieldRVA with
+                    | None -> Some [ManagedPointer_ST]
+                    | Some _ -> Some [NativeInt_ST]
+                | _ ->
+                    badStack ()
+
 //
 // BLOB PARSING
 //
@@ -2959,6 +3868,12 @@ and LocalVarSig =
     | SpecifiedType of SpecifiedLocalVar
     | TypedByRef
     with
+        member x.AsIntermediateType() =
+            match x with
+            | TypedByRef -> failwithf "intermediate type not supported for %A" x
+            | SpecifiedType specLocalVar ->
+                specLocalVar.mayByRefType.AsIntermediateType()
+
         static member FromBlob (assem : Assembly) (blob : byte list ref) =
             let unexpEnd() = failwith "unexpected end of blob while reading LocalVarSig"
             match listRead blob with
@@ -3195,6 +4110,45 @@ and [<RequireQualifiedAccess>] TypeBlob =
     // GenericInst bool isClass with false indicating valuetype
     | GenericInst of GenericTypeInst
     with
+        /// see Partition I: 8.7
+        member x.AsIntermediateType() : StackType =
+    
+            let iHaveNoClue () =
+                failwithf "I have no clue what to do with %A" x
+    
+            let fromManagedPtr (pointeeType : TypeBlob) =
+                match pointeeType with
+                | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 -> Int32_ST
+                | I8 | U8 -> Int64_ST
+                | R4 -> Float32_ST
+                | R8 -> Float64_ST
+                | I | U -> NativeInt_ST
+                | _ -> ManagedPointer_ST
+
+            match x with
+            | Ptr (custMods, tyOpt) ->
+                match tyOpt with
+                | None -> iHaveNoClue()
+                | Some ty -> fromManagedPtr ty
+            | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 -> Int32_ST
+            | I8 | U8 -> Int64_ST
+            | R4 -> Float32_ST
+            | R8 -> Float64_ST
+            | I | U -> NativeInt_ST
+            | Object | String -> ObjectRef_ST
+            | ValueType _ ->
+                // TODO I think this is probably completely bogus
+                ObjectRef_ST
+            | Class _ ->
+                // TODO understand difference between object and class
+                // I think Object means the base object type
+                ObjectRef_ST
+            | Var _ -> iHaveNoClue ()
+            | Array _ | SzArray _ -> ObjectRef_ST
+            | GenericInst _ -> iHaveNoClue ()
+            | FnPtr _ -> iHaveNoClue ()
+            | MVar _ -> iHaveNoClue ()
+
         static member TypesMatch (ty1 : TypeBlob) (ty2 : TypeBlob) =
             match ty1, ty2 with
             | TypeBlob.Class ty1, TypeBlob.Class ty2
@@ -3295,6 +4249,22 @@ and [<RequireQualifiedAccess>] TypeBlob =
             | _ ->
                 None
 
+        member x.IsPrimitive =
+            match x with
+            | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 | I8 | U8 | R4 | R8 | I | U ->
+                true
+            | _ ->
+                // TODO what about Ptr and FnPtr? What about when generic types take on primitives?
+                false
+
+        member x.IsValType =
+            if x.IsPrimitive then
+                true
+            else
+                match x with
+                | ValueType _ -> true
+                | _ -> false
+
         static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeBlob =
             match !blob with
             | [] -> failwith "unexpected end of blob while reading type"
@@ -3335,6 +4305,13 @@ and [<RequireQualifiedAccess>] TypeBlob =
 
 and MaybeByRefType = {isByRef : bool; ty : TypeBlob}
 with
+    /// see Partition I: 8.7
+    member x.AsIntermediateType() =
+        if x.isByRef then
+            ManagedPointer_ST
+        else
+            x.ty.AsIntermediateType()
+
     static member FromBlob (assem : Assembly) (blob : byte list ref) =
         match !blob with
         | [] -> failwith "unexpected end of blob while reading MaybeByRefType"
@@ -3469,6 +4446,12 @@ and Param = {
     pType : ParamType
 }
 with
+    /// see Partition I: 8.7
+    member x.AsIntermediateType() =
+        match x.pType with
+        | ParamType.MayByRefTy mayByRef -> mayByRef.AsIntermediateType()
+        | ParamType.TypedByRef -> failwith "TODO TypedByRef doesn't work for AsIntermediateType"
+
     static member FromBlob (assem : Assembly) (blob : byte list ref) : Param =
         let custMods = CustomModBlob.ManyFromBlob assem blob
         match !blob with
@@ -3497,6 +4480,13 @@ and RetType = {
     rType : RetTypeKind
 }
 with
+    /// see Partition I: 8.7
+    member x.AsIntermediateType() : StackType =
+        match x.rType with
+        | RetTypeKind.MayByRefTy mayByRef -> mayByRef.AsIntermediateType()
+        | RetTypeKind.TypedByRef -> failwith "TODO TypedByRef doesn't work for AsIntermediateType"
+        | RetTypeKind.Void -> failwith "TODO TypedByRef doesn't work for Void"
+
     member x.CilId(assemCtxt:AssemblyBase) =
         if x.customMods.Length >= 1 then
             failwith "TODO need to deal with custmods in return type"
@@ -3507,6 +4497,11 @@ with
             if mayByRefTy.isByRef then
                 failwith "TODO not yet dealing with by ref return type"
             mayByRefTy.ty.CilId(assemCtxt)
+
+    member x.IsVoid =
+        match x.rType with
+        | RetTypeKind.Void -> true
+        | _ -> false
 
     static member FromBlob (assem : Assembly) (blob : byte list ref) : RetType =
         let custMods = CustomModBlob.ManyFromBlob assem blob
@@ -3582,7 +4577,20 @@ and [<RequireQualifiedAccess>] TypeSpecBlob =
     | MVar of uint32
     | Var of uint32
     with
-        static member FromBlob (assem : Assembly) (blob : byte list ref) =
+        member x.AsTypeBlob() : TypeBlob =
+            match x with
+            | Ptr (custMods, tyOpt) -> TypeBlob.Ptr (custMods, tyOpt) //of List<CustomModBlob> * Option<TypeBlob>
+            | FnPtr meth -> TypeBlob.FnPtr meth //of MethodDefOrRefSig
+            | Array (ty, shape) -> TypeBlob.Array (ty, shape) //of TypeBlob * ArrayShape
+            | SzArray (custMods, ty) -> TypeBlob.SzArray (custMods, ty) //of List<CustomModBlob> * TypeBlob
+            | GenericInst gInst -> TypeBlob.GenericInst gInst // of GenericTypeInst
+
+            // TODO VAR and MVAR are not in the spec but they do seem to show up in assemblies (well
+            // at least MVAR does. I haven't yet confirmed that VAR does)
+            | MVar i -> TypeBlob.MVar i //of uint32
+            | Var i -> TypeBlob.Var i //of uint32
+
+        static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeSpecBlob =
             match listRead blob with
             | None ->  failwith "cannot parse a type spec from an empty blob"
             | Some b ->

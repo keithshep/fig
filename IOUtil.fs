@@ -3,9 +3,6 @@ module Fig.IOUtil
 open System.IO
 open System.Text
 
-let rotL (x : uint32) (numBits : int) =
-    (x <<< numBits) ||| (x >>> 32 - numBits)
-
 let private indentStr = "  "
 
 // an indented version of the fprintfn function

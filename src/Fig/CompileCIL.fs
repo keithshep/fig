@@ -1,7 +1,9 @@
-open Fig.CecilExt
-open Fig.LLVMCodeGen
+open System.IO
 
-open Mono.Cecil
+open Fig.AssemblyParser
+open Fig.AssemblyResolution
+open Fig.IOUtil
+open Fig.LLVMCodeGen
 
 open LLVM.Generated.Core
 open LLVM.Core
@@ -15,7 +17,10 @@ open LLVM.BitReader
 let main args =
     match args with
     | [| inAssemFile; outBitcodeFile |] ->
-        let assem = AssemblyDefinition.ReadAssembly inAssemFile
+        use r = new PosStackBinaryReader(new FileStream(inAssemFile, FileMode.Open))
+        let assem =
+            let gacPaths = [|"/Library/Frameworks/Mono.framework/Versions/2.10.5/lib/mono/gac/"|]
+            new Assembly(r, new MonoAssemblyResolution(gacPaths))
         //let llvmModuleRef = moduleCreateWithName "module"
         let llvmModuleRef =
             createMemoryBufferWithContentsOfFile "build/fig_runtime.bc"
