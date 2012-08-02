@@ -300,7 +300,7 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
         // AsIntermediateType functions
         new StackItem(bldr, valueRef, fSig.fType.AsIntermediateType(), Some fSig.fType)
 
-    member x.AsInt(asSigned:bool, asSize:PrimSizeBytes) : LGC.ValueRef =
+    member x.AsInt (asSigned:bool) (asSize:PrimSizeBytes) : LGC.ValueRef =
         let size = sizeOfStackType stackType
         match stackType with
         | FAP.Int_ST ->
@@ -318,9 +318,9 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
         | _ ->
             failwithf "TODO implement int conversion for %A" stackType
 
-    member x.AsNativeInt(asSigned:bool) = x.AsInt (asSigned, nativeIntSize)
+    member x.AsNativeInt (asSigned:bool) = x.AsInt asSigned nativeIntSize
 
-    member x.AsFloat(fromSigned:bool, asDouble:bool) : LGC.ValueRef =
+    member x.AsFloat (fromSigned:bool) (asDouble:bool) : LGC.ValueRef =
         let asTy = if asDouble then doubleTy else floatTy
         match stackType with
         | FAP.Float32_ST ->
@@ -338,14 +338,14 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
             else LGC.buildUIToFP bldr valueRef asTy "convVal"
         | _ -> failwithf "implicit cast from %A to float32 is not allowed" stackType
 
-    member x.AsStackType(asTy:StackType) : LGC.ValueRef =
+    member x.AsStackType (asTy:StackType) : LGC.ValueRef =
         let cantConv() = failwithf "StackItem.AsStackType: cannot convert %A to %A" stackType asTy
         match asTy with
-        | StackType.Int32_ST -> x.AsInt (false, PrimSizeBytes.Four)
-        | StackType.Int64_ST -> x.AsInt (false, PrimSizeBytes.Eight)
-        | StackType.NativeInt_ST -> x.AsNativeInt(false)
-        | StackType.Float32_ST -> x.AsFloat(true, false)
-        | StackType.Float64_ST -> x.AsFloat(true, true)
+        | StackType.Int32_ST -> x.AsInt false PrimSizeBytes.Four
+        | StackType.Int64_ST -> x.AsInt false PrimSizeBytes.Eight
+        | StackType.NativeInt_ST -> x.AsNativeInt false
+        | StackType.Float32_ST -> x.AsFloat true false
+        | StackType.Float64_ST -> x.AsFloat true true
         | StackType.ObjectRef_ST ->
             cantConv()
             (*
@@ -361,7 +361,7 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
             | _ -> cantConv ()
             *)
 
-    member x.AsType(assemGen:AssemGen, asTy:FAP.TypeDefRefOrSpec) : LGC.ValueRef =
+    member x.AsType (assemGen:AssemGen) (asTy:FAP.TypeDefRefOrSpec) : LGC.ValueRef =
         let noImpl() =
             failwithf "StackItem.AsType: cannot convert %A to %s" typeBlobOpt (asTy.CilId(false, assemGen.Assembly))
         match typeBlobOpt with
@@ -374,9 +374,9 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
 
             match asTy.AsTypeBlob() with
             | None -> noImpl()
-            | Some asTy -> x.AsTypeBlob(assemGen, asTy)
+            | Some asTy -> x.AsTypeBlob assemGen asTy
 
-    member x.AsTypeBlob(assemGen:AssemGen, tyBlob:TyBlob) : LGC.ValueRef =
+    member x.AsTypeBlob (assemGen:AssemGen) (tyBlob:TyBlob) : LGC.ValueRef =
         // TODO we should have more checks here. Especially where we return the naked value ref.
         let noImpl() = failwithf "StackItem.AsTypeBlob: no implementation for: %A -> %A" typeBlobOpt tyBlob
 
@@ -404,17 +404,17 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
                     noImpl()
 
         match tyBlob with
-        | TyBlob.Boolean | TyBlob.U1 -> x.AsInt(false, PrimSizeBytes.One)
-        | TyBlob.Char -> x.AsInt(false, PrimSizeBytes.Two)
-        | TyBlob.U2 -> x.AsInt(false, PrimSizeBytes.Two)
-        | TyBlob.I1 -> x.AsInt(true, PrimSizeBytes.One)
-        | TyBlob.I2 -> x.AsInt(true, PrimSizeBytes.Two)
-        | TyBlob.I4 -> x.AsInt(true, PrimSizeBytes.Four)
-        | TyBlob.U4 -> x.AsInt(false, PrimSizeBytes.Four)
-        | TyBlob.I8 -> x.AsInt(true, PrimSizeBytes.Eight)
-        | TyBlob.U8 -> x.AsInt(false, PrimSizeBytes.Eight)
-        | TyBlob.R4 -> x.AsFloat(true, false)
-        | TyBlob.R8 -> x.AsFloat(true, true)
+        | TyBlob.Boolean | TyBlob.U1 -> x.AsInt false PrimSizeBytes.One
+        | TyBlob.Char -> x.AsInt false PrimSizeBytes.Two
+        | TyBlob.U2 -> x.AsInt false PrimSizeBytes.Two
+        | TyBlob.I1 -> x.AsInt true PrimSizeBytes.One
+        | TyBlob.I2 -> x.AsInt true PrimSizeBytes.Two
+        | TyBlob.I4 -> x.AsInt true PrimSizeBytes.Four
+        | TyBlob.U4 -> x.AsInt false PrimSizeBytes.Four
+        | TyBlob.I8 -> x.AsInt true PrimSizeBytes.Eight
+        | TyBlob.U8 -> x.AsInt false PrimSizeBytes.Eight
+        | TyBlob.R4 -> x.AsFloat true false
+        | TyBlob.R8 -> x.AsFloat true true
         | TyBlob.String -> noImpl()
         | TyBlob.Ptr _ -> valueRef
         | TyBlob.ValueType _ -> noImpl()
@@ -432,7 +432,7 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
                 noImpl()
             valueRef
 
-    member x.AsReturnType(assemGen:AssemGen, retTy:FAP.RetType) : LGC.ValueRef =
+    member x.AsReturnType (assemGen:AssemGen) (retTy:FAP.RetType) : LGC.ValueRef =
         let noImpl() = failwithf "StackItem.AsReturnType: no implementation for: %A" retTy
         if not retTy.customMods.IsEmpty then
             noImpl()
@@ -443,9 +443,9 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
         | FAP.RetTypeKind.MayByRefTy mayByRefTy ->
             if mayByRefTy.isByRef then
                 noImpl()
-            x.AsTypeBlob(assemGen, mayByRefTy.ty)
+            x.AsTypeBlob assemGen mayByRefTy.ty
 
-    member x.AsParam(assemGen:AssemGen, param:FAP.Param) : LGC.ValueRef =
+    member x.AsParam (assemGen:AssemGen) (param:FAP.Param) : LGC.ValueRef =
         let noImpl() = failwithf "StackItem.AsParam: no implementation for: %A" param
         if not param.customMods.IsEmpty then
             noImpl()
@@ -455,16 +455,16 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
         | FAP.ParamType.MayByRefTy mayByRefTy ->
             if mayByRefTy.isByRef then
                 noImpl()
-            x.AsTypeBlob(assemGen, mayByRefTy.ty)
+            x.AsTypeBlob assemGen mayByRefTy.ty
 
-    member x.AsLocal(assemGen:AssemGen, local:FAP.LocalVarSig) : LGC.ValueRef =
+    member x.AsLocal (assemGen:AssemGen) (local:FAP.LocalVarSig) : LGC.ValueRef =
         let noImpl() = failwithf "StackItem.AsLocal: no implementation for: %A" local
         match local with
         | FAP.LocalVarSig.TypedByRef -> noImpl()
         | FAP.LocalVarSig.SpecifiedType specLocalVar ->
             if specLocalVar.pinned || specLocalVar.mayByRefType.isByRef || specLocalVar.custMods.Length <> 0 then
                 noImpl()
-            x.AsTypeBlob(assemGen, specLocalVar.mayByRefType.ty)
+            x.AsTypeBlob assemGen specLocalVar.mayByRefType.ty
 
     member x.AsField (assemGen:AssemGen) (field:FAP.FieldDef) : LGC.ValueRef =
         let fSig = field.Signature
@@ -472,7 +472,7 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
         if not fSig.customMods.IsEmpty then
             noImpl()
 
-        x.AsTypeBlob(assemGen, fSig.fType)
+        x.AsTypeBlob assemGen fSig.fType
 
 and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
     let assemGen = typeRep.AssemGen
@@ -493,7 +493,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
             
             let allParams = ctor.AllParameters
             let stackItemToArg (i:int) (item:StackItem) =
-                item.AsParam(assemGen, allParams.[i].Type)
+                item.AsParam assemGen allParams.[i].Type
             let args = newObj :: List.mapi stackItemToArg args
             LC.buildCall bldr ctorRef (Array.ofList args) "" |> ignore
             
@@ -573,7 +573,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
                 match poppedStack with
                 | [value] ->
                     // TODO would be more efficient to have custom test per size
-                    let valToTest = value.AsInt(false, PrimSizeBytes.Eight)
+                    let valToTest = value.AsInt false PrimSizeBytes.Eight
                     let zero = LGC.constInt (LGC.int64Type()) 0uL false
                     let isZero = LGC.buildICmp bldr LGC.IntPredicate.IntEQ valToTest zero "isZero"
                     let nonZeroBlk = llvmBlocks.[nonZeroBB]
@@ -664,7 +664,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
 
                 let allParams = methDef.AllParameters
                 let stackItemToArg (i:int) (item:StackItem) =
-                    item.AsParam(assemGen, allParams.[i].Type)
+                    item.AsParam assemGen allParams.[i].Type
                 let args = List.mapi stackItemToArg (List.rev poppedStack)
                 let resultName = if pushTypes.IsEmpty then "" else "callResult"
                 let callResult = LC.buildCall bldr funRef (Array.ofList args) resultName
@@ -681,14 +681,14 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
             | Inst.ConvI2 -> noImpl()
             | Inst.ConvI4 ->
                 match poppedStack with
-                | [value] -> goNextValRef (value.AsInt(true, PrimSizeBytes.Four))
+                | [value] -> goNextValRef (value.AsInt true PrimSizeBytes.Four)
                 | _ -> unexpPop()
 
             | Inst.ConvI8 -> noImpl()
             | Inst.ConvR4 -> noImpl()
             | Inst.ConvR8 ->
                 match poppedStack with
-                | [value] -> goNextValRef (value.AsFloat(true, true))
+                | [value] -> goNextValRef (value.AsFloat true true)
                 | _ -> noImpl()
 
             | Inst.ConvU4 -> noImpl()
@@ -806,7 +806,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
                         failwith "expected a void return type"
                     LGC.buildRetVoid bldr |> ignore
                 | [stackHead] ->
-                    let retItem = stackHead.AsReturnType(assemGen, methDef.ReturnType)
+                    let retItem = stackHead.AsReturnType assemGen methDef.ReturnType
                     LGC.buildRet bldr retItem |> ignore
                 | _ ->
                     unexpPop()
@@ -819,7 +819,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
                 | [stackHead] ->
                     let argIndex = int argIndex
                     let param = methDef.AllParameters.[argIndex].Type
-                    let valRef = stackHead.AsParam(assemGen, param)
+                    let valRef = stackHead.AsParam assemGen param
                     LGC.buildStore bldr valRef args.[argIndex] |> ignore
                     goNext stackTail
                 | _ -> unexpPop()
@@ -836,7 +836,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
                 | [stackHead] ->
                     let locIndex = int locIndex
                     let local = methDef.Locals.[locIndex]
-                    let valRef = stackHead.AsLocal(assemGen, local)
+                    let valRef = stackHead.AsLocal assemGen local
 
                     LGC.buildStore bldr valRef locals.[locIndex] |> ignore
                     goNext stackTail
@@ -873,7 +873,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
                         [|for i in 0 .. blockIndexes.Length - 1 ->
                             LGC.constInt int32Ty (uint64 i) false|]
                     let caseBlocks = [|for b in blockIndexes -> llvmBlocks.[b]|]
-                    let target = value.AsInt(false, PrimSizeBytes.Four)
+                    let target = value.AsInt false PrimSizeBytes.Four
                     let fallthroughBlock = llvmBlocks.[blockIndex + 1]
                     LC.buildSwitchWithCases bldr target (Array.zip caseInts caseBlocks) fallthroughBlock
                 | _ ->
@@ -1022,7 +1022,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
                     let arrPtr = LGC.buildLoad bldr arrPtrAddr "arrPtr"
                     // TODO: make sure that index.Value is good here... will work for all native ints or int32's
                     let elemAddr = LC.buildGEP bldr arrPtr [|index.ValueRef|] "elemAddr"
-                    LGC.buildStore bldr (value.AsType(assemGen, elemTyRef)) elemAddr |> ignore
+                    LGC.buildStore bldr (value.AsType assemGen elemTyRef) elemAddr |> ignore
 
                     goNext stackTail
                 | _ ->
@@ -1155,7 +1155,7 @@ and TypeRep (modRef : LGC.ModuleRef, typeDef : FAP.TypeDef, assemGen : AssemGen)
     member x.InstanceVarsType = instanceRef.Value
     member x.StaticVarsType = staticRef.Value
     member x.StaticVarsGlobal = staticVarsGlobal.Force()
-    member x.GetMethRep(md : FAP.MethodDef) : MethodRep =
+    member x.GetMethRep (md : FAP.MethodDef) : MethodRep =
         if methRepMap.ContainsKey md then
             methRepMap.[md]
         else
@@ -1176,7 +1176,7 @@ and AssemGen (modRef : LGC.ModuleRef, assembly : FAP.Assembly) =
     member x.Assembly : FAP.Assembly = assembly
     member x.ObjectTypeDef : FAP.TypeDef = objectTypeDef.Value
     member x.ModuleRef : LGC.ModuleRef = modRef
-    member x.GetTypeRep(ty : FAP.TypeDefRefOrSpec) : TypeRep =
+    member x.GetTypeRep (ty:FAP.TypeDefRefOrSpec) : TypeRep =
         match ty with
         | :? FAP.TypeDefOrRef as ty ->
             let ty = ty.Resolve()
