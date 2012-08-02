@@ -19,8 +19,8 @@ let main args =
     | [| inAssemFile; outBitcodeFile |] ->
         use r = new PosStackBinaryReader(new FileStream(inAssemFile, FileMode.Open))
         let assem =
-            let gacPaths = [|"/Library/Frameworks/Mono.framework/Versions/2.10.5/lib/mono/gac/"|]
-            new Assembly(r, new MonoAssemblyResolution(gacPaths))
+            let gacPaths = [|"/Library/Frameworks/Mono.framework/Versions/2.10.9/lib/mono/gac/"|]
+            new Assembly(r, new MonoAssemblyResolution(gacPaths, 4us, 0us, 0us, 0us))
         //let llvmModuleRef = moduleCreateWithName "module"
         let llvmModuleRef =
             createMemoryBufferWithContentsOfFile "build/fig_runtime.bc"

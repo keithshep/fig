@@ -425,6 +425,7 @@ type MetadataTables = {
     typeSpecs : TypeSpecRow array}
 
 type IAssemblyResolution =
+    abstract Mscorlib : Assembly with get
     abstract ResolveAssembly : AssemblyRef -> Assembly
     abstract RegisterAssembly : Assembly -> unit
 
@@ -1535,7 +1536,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
             new Module(x, i)
     |]
 
-    member x.TypeDefNamed (tyNamespace : string option) (tyName : string) =
+    member x.TypeDefNamed (tyNamespace : string option) (tyName : string) : TypeDef option =
         let rec go i =
             if i < metadataTables.typeDefs.Length then
                 let currTyDef = metadataTables.typeDefs.[i]
@@ -1571,10 +1572,10 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
         | tok ->
             failwithf "implement entry point for %A" tok
 
-and AssemblyRef(assem : Assembly, selfIndex : int) =
+and AssemblyRef(assem : Assembly, rowIndex : int) =
     inherit AssemblyBase()
     let mt = assem.MetadataTables
-    let assemRefRow = mt.assemblyRefs.[selfIndex]
+    let assemRefRow = mt.assemblyRefs.[rowIndex]
 
     let isFlagSet mask = assemRefRow.flags &&& mask <> 0u
 
@@ -1640,9 +1641,9 @@ and [<AbstractClass>] AssemblyBase() =
         && assem1.RevisionNumber = assem2.RevisionNumber
         && assem1.BuildNumber = assem2.BuildNumber
 
-and Module(assem : Assembly, selfIndex : int) =
+and Module(assem : Assembly, rowIndex : int) =
     let mt = assem.MetadataTables
-    let moduleRow = mt.modules.[selfIndex]
+    let moduleRow = mt.modules.[rowIndex]
 
     member x.TypeDefs =
         // TODO and how does this work with
@@ -1660,8 +1661,8 @@ and Module(assem : Assembly, selfIndex : int) =
 
     member x.Assembly = assem
 
-and ModuleRef(assem:Assembly, selfIndex:int) =
-    let moduleRefRow = assem.MetadataTables.moduleRefs.[selfIndex]
+and ModuleRef(assem:Assembly, rowIndex:int) =
+    let moduleRefRow = assem.MetadataTables.moduleRefs.[rowIndex]
 
     member x.Name = moduleRefRow.name
 
@@ -1682,11 +1683,11 @@ and [<AbstractClass>] FieldDefOrRef() =
         | Some tableKind, i -> FieldDefOrRef.FromKindAndIndex assem tableKind i
         | None, _ -> failwith "failed to convert token into a field"
 
-and FieldRef(assem : Assembly, selfIndex : int) =
+and FieldRef(assem : Assembly, rowIndex : int) =
     inherit FieldDefOrRef()
 
     let mt = assem.MetadataTables
-    let frRow = mt.memberRefs.[selfIndex]
+    let frRow = mt.memberRefs.[rowIndex]
 
     override x.Name = frRow.name
     override x.Resolve() =
@@ -1716,14 +1717,14 @@ and FieldRef(assem : Assembly, selfIndex : int) =
         FieldSig.FromBlob assem blob
     override x.CilId(assemCtxt:AssemblyBase) = x.Resolve().CilId(assemCtxt)
 
-and FieldDef(assem : Assembly, selfIndex : int) =
+and FieldDef(assem : Assembly, rowIndex : int) =
     inherit FieldDefOrRef()
 
     let mt = assem.MetadataTables
-    let fRow = mt.fields.[selfIndex]
+    let fRow = mt.fields.[rowIndex]
     let isFlagSet mask = fRow.fieldAttrFlags &&& mask <> 0us
 
-    member private x.SelfIndex = selfIndex
+    member private x.RowIndex = rowIndex
     member private x.Assembly = assem
 
     override x.Name = fRow.name
@@ -1740,11 +1741,11 @@ and FieldDef(assem : Assembly, selfIndex : int) =
             yield x.DeclaringType.FullName + "::" + x.Name
         |]
 
-    override x.GetHashCode() = selfIndex ^^^ assem.GetHashCode()
+    override x.GetHashCode() = rowIndex ^^^ assem.GetHashCode()
     override x.Equals otherObj =
         match otherObj with
         | :? FieldDef as otherField ->
-            selfIndex = otherField.SelfIndex && assem = otherField.Assembly
+            rowIndex = otherField.RowIndex && assem = otherField.Assembly
         | _ ->
             false
 
@@ -1753,7 +1754,7 @@ and FieldDef(assem : Assembly, selfIndex : int) =
         let rec findDecTy (currIndex : int) =
             let foundType =
                 currIndex = tdRows.Length - 1
-                || selfIndex < tdRows.[currIndex + 1].fieldsIndex
+                || rowIndex < tdRows.[currIndex + 1].fieldsIndex
             if foundType then
                 new TypeDef(assem, currIndex)
             else
@@ -1777,7 +1778,7 @@ and FieldDef(assem : Assembly, selfIndex : int) =
             if i < consts.Length then
                 let currConst = consts.[i]
                 match currConst.parentKind with
-                | MetadataTableKind.FieldKind when currConst.parentIndex = selfIndex ->
+                | MetadataTableKind.FieldKind when currConst.parentIndex = rowIndex ->
                     Some(new Constant(assem, i))
                 | _ ->
                     getConst(i + 1)
@@ -1790,7 +1791,7 @@ and FieldDef(assem : Assembly, selfIndex : int) =
         let layouts = mt.fieldLayouts
         let rec getOffset(i : int) =
             if i < layouts.Length then
-                if layouts.[i].fieldIndex = selfIndex then
+                if layouts.[i].fieldIndex = rowIndex then
                     Some layouts.[i].offset
                 else
                     getOffset(i + 1)
@@ -1803,7 +1804,7 @@ and FieldDef(assem : Assembly, selfIndex : int) =
         if isFlagSet 0x0100us then
             let rvas = mt.fieldRVAs
             let rec getRVA (i : int) =
-                if rvas.[i].fieldIndex = selfIndex then
+                if rvas.[i].fieldIndex = rowIndex then
                     rvas.[i].rva
                 else getRVA (i + 1)
             Some (getRVA 0)
@@ -1822,9 +1823,9 @@ and FieldDef(assem : Assembly, selfIndex : int) =
                 r.BaseStream.Seek(pos, SeekOrigin.Begin) |> ignore
                 Some (r.ReadBytes size)
 
-and Constant(assem:Assembly, selfIndex:int) =
+and Constant(assem:Assembly, rowIndex:int) =
     let mt = assem.MetadataTables
-    let constRow = mt.constants.[selfIndex]
+    let constRow = mt.constants.[rowIndex]
 
     member x.Type = constRow.typeVal
 
@@ -1832,10 +1833,9 @@ and Constant(assem:Assembly, selfIndex:int) =
 
 and [<AbstractClass>] TypeDefRefOrSpec() =
     abstract CilId : typeKindReq:bool * assemCtxt:AssemblyBase -> string
-
     abstract SizeBytes : int option with get
-
     abstract AsIntermediateType : unit -> StackType
+    abstract AsTypeBlob : unit -> TypeBlob option
 
     static member FromKindAndIndex (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefRefOrSpec =
         match mt with
@@ -1887,11 +1887,11 @@ and [<AbstractClass>] TypeDefOrRef() =
         | None -> x.Name
         | Some ns -> ns + "." + x.Name
 
-and TypeSpec(assem : Assembly, selfIndex : int) =
+and TypeSpec(assem : Assembly, rowIndex : int) =
     inherit TypeDefRefOrSpec()
 
     let mt = assem.MetadataTables
-    let typeSpecRow = mt.typeSpecs.[selfIndex]
+    let typeSpecRow = mt.typeSpecs.[rowIndex]
 
     let typeSpecBlob =
         let blob = ref(assem.ReadBlobAtIndex typeSpecRow.sigIndex |> List.ofArray)
@@ -1928,14 +1928,14 @@ and TypeSpec(assem : Assembly, selfIndex : int) =
             "TODO deal with var types"
     *)
 
-    override x.AsIntermediateType() : StackType =
-        typeSpecBlob.AsTypeBlob().AsIntermediateType()
+    override x.AsIntermediateType() : StackType = typeSpecBlob.AsTypeBlob().AsIntermediateType()
+    override x.AsTypeBlob() : TypeBlob option = Some (typeSpecBlob.AsTypeBlob())
 
-and TypeRef(assem : Assembly, selfIndex : int) =
+and TypeRef(assem : Assembly, rowIndex : int) =
     inherit TypeDefOrRef()
 
     let mt = assem.MetadataTables
-    let typeRefRow = mt.typeRefs.[selfIndex]
+    let typeRefRow = mt.typeRefs.[rowIndex]
 
     override x.Namespace = typeRefRow.typeNamespace
     override x.Name = typeRefRow.typeName
@@ -1959,10 +1959,9 @@ and TypeRef(assem : Assembly, selfIndex : int) =
 
     override x.CilId(typeKindReq:bool, assemCtxt:AssemblyBase) =
         x.Resolve().CilId(typeKindReq, assemCtxt)
-
     override x.SizeBytes = x.Resolve().SizeBytes
-
     override x.AsIntermediateType() = x.Resolve().AsIntermediateType()
+    override x.AsTypeBlob() : TypeBlob option = x.Resolve().AsTypeBlob()
 
 and [<RequireQualifiedAccess>] TypeVisibilityAttr =
     | NotPublic
@@ -1978,11 +1977,11 @@ and [<RequireQualifiedAccess>] ClassLayoutAttr = Auto | Sequential | Explicit
 and [<RequireQualifiedAccess>] StringFmtAttr = Ansi | Unicode | Auto | Custom
 and [<RequireQualifiedAccess>] TypeKind = Interface | Class | Valuetype | Enum | Delegate
 
-and TypeDef(assem : Assembly, selfIndex : int) =
+and TypeDef(assem : Assembly, rowIndex : int) =
     inherit TypeDefOrRef()
 
     let mt = assem.MetadataTables
-    let typeDefRow = mt.typeDefs.[selfIndex]
+    let typeDefRow = mt.typeDefs.[rowIndex]
     
     let isFlagSet mask = typeDefRow.flags &&& mask <> 0u
 
@@ -2006,16 +2005,16 @@ and TypeDef(assem : Assembly, selfIndex : int) =
         else
             fullName()
 
-    override x.GetHashCode() = selfIndex ^^^ assem.GetHashCode()
+    override x.GetHashCode() = rowIndex ^^^ assem.GetHashCode()
     override x.Equals otherObj =
         match otherObj with
         | :? TypeDef as otherTy ->
-            selfIndex = otherTy.SelfIndex && assem = otherTy.Assembly
+            rowIndex = otherTy.RowIndex && assem = otherTy.Assembly
         | _ ->
             false
 
     member x.Assembly = assem
-    member x.SelfIndex = selfIndex
+    member x.RowIndex = rowIndex
     member x.Module = assem.Modules.[0] // TODO what is the right way to do this
 
     member x.TypeVisibilityAttr =
@@ -2040,7 +2039,7 @@ and TypeDef(assem : Assembly, selfIndex : int) =
         | v -> failwithf "unexpected class layout flag: %X" v
 
     member x.ClassLayout : ClassLayoutRow option =
-        Array.tryFind (fun cl -> cl.parentIndex = selfIndex) mt.classLayouts
+        Array.tryFind (fun cl -> cl.parentIndex = rowIndex) mt.classLayouts
 
     member x.IsInterface    = isFlagSet 0x00000020u
     member x.IsAbstract     = isFlagSet 0x00000080u
@@ -2068,7 +2067,7 @@ and TypeDef(assem : Assembly, selfIndex : int) =
             let isMatch =
                 gpRow.ownerKind = MetadataTableKind.TypeDefKind
                 &&
-                gpRow.ownerIndex = selfIndex
+                gpRow.ownerIndex = rowIndex
             if isMatch then
                 yield new GenericParam(assem, i)
     }
@@ -2076,45 +2075,66 @@ and TypeDef(assem : Assembly, selfIndex : int) =
     member x.Extends : TypeDefRefOrSpec option =
         TypeDefRefOrSpec.FromKindAndIndexOpt assem typeDefRow.extendsKind typeDefRow.extendsIndex
 
+    member x.InheritanceChain : TypeDefRefOrSpec list =
+        let rec go (tyOpt : TypeDefRefOrSpec option) : TypeDefRefOrSpec list =
+            match tyOpt with
+            | None -> []
+            | Some (:? TypeDefOrRef as ty) ->
+                upcast ty :: go (ty.Resolve().Extends)
+            | _ ->
+                failwith "TypeDef.InheritanceChain: not yet implemented for typespecs"
+
+        go x.Extends
+
     member x.Implements = [|
         for iImpl in mt.interfaceImpls do
-            if iImpl.classIndex = selfIndex then
+            if iImpl.classIndex = rowIndex then
                 yield TypeDefRefOrSpec.FromKindAndIndex assem iImpl.ifaceKind iImpl.ifaceIndex
     |]
 
     member x.NestedTypes = [|
         for ncRow in mt.nestedClasses do
-            if ncRow.enclosingClassIndex = selfIndex then
+            if ncRow.enclosingClassIndex = rowIndex then
                 yield new TypeDef(assem, ncRow.nestedClassIndex)
     |]
 
     member x.Fields : FieldDef array =
         let lastFieldIndex =
-            let isLastTypeDef = selfIndex = mt.typeDefs.Length - 1
+            let isLastTypeDef = rowIndex = mt.typeDefs.Length - 1
             if isLastTypeDef then
                 mt.fields.Length - 1
             else
-                mt.typeDefs.[selfIndex + 1].fieldsIndex - 1
+                mt.typeDefs.[rowIndex + 1].fieldsIndex - 1
 
         [|for i in typeDefRow.fieldsIndex .. lastFieldIndex -> new FieldDef(assem, i)|]
 
-    member x.InstanceFields =  Array.filter (fun (f : FieldDef) -> not f.IsStatic) x.Fields
+    member x.InstanceFields = Array.filter (fun (f : FieldDef) -> not f.IsStatic) x.Fields
+    member x.InheritedInstanceFields = [|
+        for ty in List.rev x.InheritanceChain do
+            match ty with
+            | :? TypeDefOrRef as ty ->
+                yield! ty.Resolve().InstanceFields
+            | _ ->
+                failwith "TypeDef.AllInstanceFields: not implemented for TypeSpec in inheritence chain"
+    |]
+    member x.AllInstanceFields : FieldDef array =
+        Array.append x.InheritedInstanceFields x.InstanceFields
 
     member x.StaticFields = Array.filter (fun (f : FieldDef) -> f.IsStatic) x.Fields
 
     member x.Methods =
         let lastMethodIndex =
-            let isLastTypeDef = selfIndex = mt.typeDefs.Length - 1
+            let isLastTypeDef = rowIndex = mt.typeDefs.Length - 1
             if isLastTypeDef then
                 mt.methodDefs.Length - 1
             else
-                mt.typeDefs.[selfIndex + 1].methodsIndex - 1
+                mt.typeDefs.[rowIndex + 1].methodsIndex - 1
 
         [|for i in typeDefRow.methodsIndex .. lastMethodIndex -> new MethodDef(assem, i)|]
 
     member x.Properties =
         let propMaps = mt.propertyMaps
-        let propMapRowMatch (pmRow:PropertyMapRow) = pmRow.parentIndex = selfIndex
+        let propMapRowMatch (pmRow:PropertyMapRow) = pmRow.parentIndex = rowIndex
         match Array.tryFindIndex propMapRowMatch propMaps with
         | None -> [||]
         | Some propMapIndex ->
@@ -2176,6 +2196,11 @@ and TypeDef(assem : Assembly, selfIndex : int) =
                     TypeKind.Class
                 | None -> failwith "we should never reach this error"
 
+    member x.IsValueType =
+        match x.TypeKind with
+        | TypeKind.Valuetype | TypeKind.Enum -> true
+        | _ -> false
+
     override x.SizeBytes =
         match x.ClassLayout with
         | Some {ClassLayoutRow.classSize = s} -> Some (int s)
@@ -2191,7 +2216,7 @@ and TypeDef(assem : Assembly, selfIndex : int) =
 
             accumSum 0 0
 
-    member x.AsTypeBlob() =
+    override x.AsTypeBlob() : TypeBlob option =
         let asClassOrVal() =
             match x.TypeKind with
             | TypeKind.Interface ->
@@ -2230,12 +2255,12 @@ and TypeDef(assem : Assembly, selfIndex : int) =
 
     override x.AsIntermediateType() = x.AsTypeBlob().Value.AsIntermediateType()
 
-and Property(assem:Assembly, selfIndex) =
+and Property(assem:Assembly, rowIndex) =
     let mt = assem.MetadataTables
-    let propRow = mt.properties.[selfIndex]
+    let propRow = mt.properties.[rowIndex]
     let methSems =
         let methSemMatch (msRow:MethodSemanticsRow) =
-            msRow.assocIndex = selfIndex
+            msRow.assocIndex = rowIndex
             && msRow.assocKind = MetadataTableKind.PropertyKind
         [|for i = 0 to mt.methodSemantics.Length - 1 do
             if methSemMatch mt.methodSemantics.[i] then
@@ -2247,8 +2272,8 @@ and Property(assem:Assembly, selfIndex) =
         let blob = ref(assem.ReadBlobAtIndex propRow.typeIndex |> List.ofArray)
         PropertySig.FromBlob assem blob
 
-and PropertyMethodSemantics(assem:Assembly, selfIndex:int) =
-    let msRow = assem.MetadataTables.methodSemantics.[selfIndex]
+and PropertyMethodSemantics(assem:Assembly, rowIndex:int) =
+    let msRow = assem.MetadataTables.methodSemantics.[rowIndex]
 
     member x.PropKind = PropKind.FromFlags msRow.semanticsFlags
     member x.Method = new MethodDef(assem, msRow.methodIndex)
@@ -2270,9 +2295,9 @@ and [<RequireQualifiedAccess>] SpecialConstraint =
     | NotNullableValueType
     | DefaultConstructor
 
-and GenericParam(assem : Assembly, selfIndex : int) =
+and GenericParam(assem : Assembly, rowIndex : int) =
     let mt = assem.MetadataTables
-    let gpRow = mt.genericParams.[selfIndex]
+    let gpRow = mt.genericParams.[rowIndex]
 
     let isFlagSet mask = gpRow.flags &&& mask <> 0us
 
@@ -2292,7 +2317,7 @@ and GenericParam(assem : Assembly, selfIndex : int) =
 
     member x.Constraints : seq<TypeDefRefOrSpec> = seq {
         for gpc in mt.genericParamConstraints do
-            if gpc.ownerIndex = selfIndex then
+            if gpc.ownerIndex = rowIndex then
                 yield
                     match gpc.constraintKind with
                     | MetadataTableKind.TypeDefKind ->
@@ -2383,11 +2408,11 @@ and [<AbstractClass>] Method() =
 
             paramsMatch sig1.methParams sig2.methParams
 
-and MethodSpec (assem : Assembly, selfIndex : int) =
+and MethodSpec (assem : Assembly, rowIndex : int) =
     inherit Method()
 
     let mt = assem.MetadataTables
-    let msRow = mt.methodSpecs.[selfIndex]
+    let msRow = mt.methodSpecs.[rowIndex]
     let meth = Method.FromKindAndIndex assem msRow.methodKind msRow.methodIndex
 
     override x.Name = meth.Name
@@ -2395,11 +2420,11 @@ and MethodSpec (assem : Assembly, selfIndex : int) =
     override x.Signature = meth.Signature
     override x.CilId(assemCtxt : AssemblyBase) = "TODO implement CilId for MethodSpec"
 
-and MethodRef (assem : Assembly, selfIndex : int) =
+and MethodRef (assem : Assembly, rowIndex : int) =
     inherit Method()
 
     let mt = assem.MetadataTables
-    let mrRow = mt.memberRefs.[selfIndex]
+    let mrRow = mt.memberRefs.[rowIndex]
 
     override x.Name = mrRow.name
     override x.Resolve() =
@@ -2429,11 +2454,11 @@ and MethodRef (assem : Assembly, selfIndex : int) =
         MethodDefOrRefSig.FromBlob assem blob
     override x.CilId(assemCtxt : AssemblyBase) = x.Resolve().CilId(assemCtxt)
 
-and MethodDef (assem : Assembly, selfIndex : int) =
+and MethodDef (assem : Assembly, rowIndex : int) =
     inherit Method()
 
     let mt = assem.MetadataTables
-    let mdRow = mt.methodDefs.[selfIndex]
+    let mdRow = mt.methodDefs.[rowIndex]
     let isFlagSet mask = mdRow.flags &&& mask <> 0us
     let isImplFlagSet mask = mdRow.implFlags &&& mask <> 0us
 
@@ -2508,6 +2533,14 @@ and MethodDef (assem : Assembly, selfIndex : int) =
             MethodDefOrRefSig.FromBlob assem blob
         )
 
+    override x.GetHashCode() = rowIndex ^^^ assem.GetHashCode()
+    override x.Equals otherObj =
+        match otherObj with
+        | :? MethodDef as otherMeth ->
+            rowIndex = otherMeth.RowIndex && assem = otherMeth.Assembly
+        | _ ->
+            false
+
     override x.Name = mdRow.name
     override x.Resolve() = x
     override x.Signature = signature.Value
@@ -2533,7 +2566,7 @@ and MethodDef (assem : Assembly, selfIndex : int) =
         |]
 
     member x.Assembly   = assem
-    member x.RowIndex   = selfIndex
+    member x.RowIndex   = rowIndex
 
     member x.TableRow   = mdRow
     member x.IsCtor     = mdRow.name = ".ctor"
@@ -2580,11 +2613,11 @@ and MethodDef (assem : Assembly, selfIndex : int) =
 
     member x.Parameters =
         let lastParamIndex =
-            let isLastMethodDef = selfIndex = mt.methodDefs.Length - 1
+            let isLastMethodDef = rowIndex = mt.methodDefs.Length - 1
             if isLastMethodDef then
                 mt.paramRows.Length - 1
             else
-                mt.methodDefs.[selfIndex + 1].paramIndex - 1
+                mt.methodDefs.[rowIndex + 1].paramIndex - 1
         let r = assem.Reader
         let methParamBlobs = x.Signature.methParams
         if methParamBlobs.Length <> 1 + lastParamIndex - mdRow.paramIndex then
@@ -2593,8 +2626,8 @@ and MethodDef (assem : Assembly, selfIndex : int) =
                 methParamBlobs.Length
                 (1 + lastParamIndex - mdRow.paramIndex)
         [|
-            for i in mdRow.paramIndex .. lastParamIndex ->
-                new Parameter(mt.paramRows.[i], methParamBlobs.[i])
+            for i in 0 .. methParamBlobs.Length - 1 ->
+                new Parameter(mt.paramRows.[mdRow.paramIndex + i], methParamBlobs.[i])
         |]
 
     member x.ReturnType = x.Signature.retType
@@ -2626,7 +2659,7 @@ and MethodDef (assem : Assembly, selfIndex : int) =
         let rec findDecTy (currIndex : int) =
             let foundType =
                 currIndex = tdRows.Length - 1
-                || selfIndex < tdRows.[currIndex + 1].methodsIndex
+                || rowIndex < tdRows.[currIndex + 1].methodsIndex
             if foundType then
                 new TypeDef(assem, currIndex)
             else
@@ -2697,9 +2730,9 @@ and MethodBody = {
 
 and [<RequireQualifiedAccess>] CharSet = NotSpec | Ansi | Unicode | Auto
 and [<RequireQualifiedAccess>] CallConv = Platformapi | Cdecl | Stdcall | Thiscall | Fastcall
-and PInvokeInfo(assem:Assembly, selfIndex:int) =
+and PInvokeInfo(assem:Assembly, rowIndex:int) =
     let mt = assem.MetadataTables
-    let implMapRow = mt.implMaps.[selfIndex]
+    let implMapRow = mt.implMaps.[rowIndex]
 
     member x.NoMangle = implMapRow.mappingFlags &&& 0x0001us <> 0us
     member x.SupportsLastError = implMapRow.mappingFlags &&& 0x0040us <> 0us
@@ -2928,26 +2961,26 @@ and [<RequireQualifiedAccess>] AbstInst =
                     failwithf "bad instruction position: %i, valid positions are: %A" absTgtPos instPositions
 
             // calculate block starts
+            // TODO what about throws/rethrows etc. Should they end blocks?
             let blockStarts = ref (Set.singleton 0)
             for instIndex = 0 to insts.Length - 1 do
+                let addNextInst() =
+                    if instIndex + 1 < insts.Length then
+                        blockStarts := (!blockStarts).Add(instIndex + 1)
                 let addTgt (relTgt : int) =
-                    blockStarts := (!blockStarts).Add (tgtToInstIndex instIndex relTgt)
+                    blockStarts := (!blockStarts).Add(tgtToInstIndex instIndex relTgt)
                 match insts.[instIndex] with
-                | RawInst.Beq tgt
-                | RawInst.Bge tgt
-                | RawInst.Bgt tgt
-                | RawInst.Ble tgt
-                | RawInst.Blt tgt
-                | RawInst.BneUn tgt
-                | RawInst.BgeUn tgt
-                | RawInst.BgtUn tgt
-                | RawInst.BleUn tgt
-                | RawInst.BltUn tgt
-                | RawInst.Br tgt
-                | RawInst.Brfalse tgt
-                | RawInst.Brtrue tgt
-                | RawInst.Leave tgt -> addTgt tgt
-                | RawInst.Switch tgtArray -> Array.iter addTgt tgtArray
+                | RawInst.Beq tgt | RawInst.Bge tgt | RawInst.Bgt tgt | RawInst.Ble tgt
+                | RawInst.Blt tgt | RawInst.BneUn tgt | RawInst.BgeUn tgt | RawInst.BgtUn tgt
+                | RawInst.BleUn tgt | RawInst.BltUn tgt | RawInst.Br tgt | RawInst.Brfalse tgt
+                | RawInst.Brtrue tgt | RawInst.Leave tgt ->
+                    addNextInst()
+                    addTgt tgt
+                | RawInst.Switch tgtArray ->
+                    addNextInst()
+                    Array.iter addTgt tgtArray
+                | RawInst.Ret ->
+                    addNextInst()
                 | _ -> ()
             let blockStarts = Array.sort (Array.ofSeq !blockStarts)
 
@@ -2963,7 +2996,7 @@ and [<RequireQualifiedAccess>] AbstInst =
                 match insts.[instIndex] with
                 | RawInst.Add -> AbstInst.Add
                 | RawInst.And -> AbstInst.And
-                | RawInst.Beq tgt -> AbstInst.Beq (tgtToBlkIndex instIndex tgt) // TODO change target to a block for all of the branches
+                | RawInst.Beq tgt -> AbstInst.Beq (tgtToBlkIndex instIndex tgt)
                 | RawInst.Bge tgt -> AbstInst.Bge (tgtToBlkIndex instIndex tgt)
                 | RawInst.Bgt tgt -> AbstInst.Bgt (tgtToBlkIndex instIndex tgt)
                 | RawInst.Ble tgt -> AbstInst.Ble (tgtToBlkIndex instIndex tgt)
@@ -3189,6 +3222,16 @@ and [<RequireQualifiedAccess>] AbstInst =
             
             instBlocks
 
+        /// true iff this type of instruction terminates a basic block
+        member x.IsTerminal =
+            match x with
+            | Beq _ | Bge _ | Bgt _ | Ble _ | Blt _ | BneUn _ | BgeUn _ | BgtUn _
+            | BleUn _ | BltUn _ | Br _ | Brfalse _ | Brtrue _ | Leave _
+            | Switch _ | Ret ->
+                true
+            | _ ->
+                false
+
         /// The following value should have valid stack push and pop parameters
         /// but the size in bytes for example may not correspond to the truth
         member private x.ArchetypeOpCode : OpCode =
@@ -3395,6 +3438,7 @@ and [<RequireQualifiedAccess>] AbstInst =
                     | _ -> failwith "expected at least two items in the stack"
                 | StackBehaviour.Popi_popi_popi
                 | StackBehaviour.Popref_popi_popi
+                | StackBehaviour.Popref_popi_pop1
                 | StackBehaviour.Popref_popi_popi8
                 | StackBehaviour.Popref_popi_popr4
                 | StackBehaviour.Popref_popi_popr8
@@ -4149,7 +4193,9 @@ and [<RequireQualifiedAccess>] TypeBlob =
             | FnPtr _ -> iHaveNoClue ()
             | MVar _ -> iHaveNoClue ()
 
-        static member TypesMatch (ty1 : TypeBlob) (ty2 : TypeBlob) =
+        static member PtrTo (ty:TypeBlob) : TypeBlob = Ptr([], Some ty)
+
+        static member TypesMatch (ty1 : TypeBlob) (ty2 : TypeBlob) : bool =
             match ty1, ty2 with
             | TypeBlob.Class ty1, TypeBlob.Class ty2
             | TypeBlob.ValueType ty1, TypeBlob.ValueType ty2 ->
@@ -4579,16 +4625,16 @@ and [<RequireQualifiedAccess>] TypeSpecBlob =
     with
         member x.AsTypeBlob() : TypeBlob =
             match x with
-            | Ptr (custMods, tyOpt) -> TypeBlob.Ptr (custMods, tyOpt) //of List<CustomModBlob> * Option<TypeBlob>
-            | FnPtr meth -> TypeBlob.FnPtr meth //of MethodDefOrRefSig
-            | Array (ty, shape) -> TypeBlob.Array (ty, shape) //of TypeBlob * ArrayShape
-            | SzArray (custMods, ty) -> TypeBlob.SzArray (custMods, ty) //of List<CustomModBlob> * TypeBlob
-            | GenericInst gInst -> TypeBlob.GenericInst gInst // of GenericTypeInst
+            | Ptr (custMods, tyOpt) -> TypeBlob.Ptr (custMods, tyOpt)
+            | FnPtr meth -> TypeBlob.FnPtr meth
+            | Array (ty, shape) -> TypeBlob.Array (ty, shape)
+            | SzArray (custMods, ty) -> TypeBlob.SzArray (custMods, ty)
+            | GenericInst gInst -> TypeBlob.GenericInst gInst
 
             // TODO VAR and MVAR are not in the spec but they do seem to show up in assemblies (well
             // at least MVAR does. I haven't yet confirmed that VAR does)
-            | MVar i -> TypeBlob.MVar i //of uint32
-            | Var i -> TypeBlob.Var i //of uint32
+            | MVar i -> TypeBlob.MVar i
+            | Var i -> TypeBlob.Var i
 
         static member FromBlob (assem : Assembly) (blob : byte list ref) : TypeSpecBlob =
             match listRead blob with
