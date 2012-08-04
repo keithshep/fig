@@ -229,31 +229,55 @@ type TypeUtil =
 /// the CIL sequence included an appropriate conv instruction.
 
 // TODO we need a way to incapsulate interface info here!!!! Interfaces will return None type blobs
-and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackType, typeBlobOpt:option<TyBlob>) =
+and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackType, typeBlobOpt:option<TyBlob>) =
     interface FAP.StackTyped with member x.StackType = stackType
 
     member x.ValueRef = valueRef
+
+    static member FromStackType
+            (bldr : LGC.BuilderRef)
+            (valueRef : LGC.ValueRef)
+            (stackType : FAP.StackType)
+            : StackItem =
+        new StackItem(bldr, valueRef, stackType, None)
+
+    static member FromTypeBlob
+            (bldr : LGC.BuilderRef)
+            (valueRef : LGC.ValueRef)
+            (tyBlob : TyBlob)
+            : StackItem =
+        let valueRef =
+            match tyBlob with
+            | TyBlob.Boolean | TyBlob.Char | TyBlob.U1 | TyBlob.U2 ->
+                LGC.buildZExt bldr valueRef int32Ty "zExtInt"
+            | TyBlob.I1 | TyBlob.I2 ->
+                LGC.buildSExt bldr valueRef int32Ty "sExtInt"
+            | _ ->
+                valueRef
+        new StackItem(bldr, valueRef, tyBlob.AsIntermediateType(), Some tyBlob)
 
     static member FromType
             (bldr : LGC.BuilderRef)
             (valueRef : LGC.ValueRef)
             (ty : FAP.TypeDefRefOrSpec)
             : StackItem =
-        new StackItem(bldr, valueRef, ty.AsIntermediateType(), ty.AsTypeBlob())
+        let noImpl() = failwithf "StackItem.FromType: no implementation yet for %A" ty
+        match ty.AsTypeBlob() with
+        | None -> noImpl()
+        | Some tyBlob -> StackItem.FromTypeBlob bldr valueRef tyBlob
 
     static member FromParameter
             (bldr : LGC.BuilderRef)
             (value : LGC.ValueRef)
             (param : FAP.Parameter)
             : StackItem =
-
-        let noImpl() = failwithf "StackItem.StackItemFromParameter: no implementation yet for %A" param
+        let noImpl() = failwithf "StackItem.FromParameter: no implementation yet for %A" param
         match param.Type.pType with
         | FAP.ParamType.TypedByRef -> noImpl()
         | FAP.ParamType.MayByRefTy mayByRefTy ->
             if mayByRefTy.isByRef then
                 noImpl()
-            new StackItem(bldr, value, param.Type.AsIntermediateType(), Some mayByRefTy.ty)
+            StackItem.FromTypeBlob bldr value mayByRefTy.ty
 
     static member FromLocal
             (bldr : LGC.BuilderRef)
@@ -267,7 +291,7 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
         | FAP.LocalVarSig.SpecifiedType specLocalVar ->
             if specLocalVar.pinned || specLocalVar.mayByRefType.isByRef || specLocalVar.custMods.Length <> 0 then
                 noImpl()
-            new StackItem(bldr, value, local.AsIntermediateType(), Some specLocalVar.mayByRefType.ty)
+            StackItem.FromTypeBlob bldr value specLocalVar.mayByRefType.ty
 
     static member FromReturnType
             (bldr : LGC.BuilderRef)
@@ -284,7 +308,7 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
         | FAP.RetTypeKind.MayByRefTy mayByRefTy ->
             if mayByRefTy.isByRef then
                 noImpl()
-            new StackItem(bldr, valueRef, retTy.AsIntermediateType(), Some mayByRefTy.ty)
+            StackItem.FromTypeBlob bldr valueRef mayByRefTy.ty
 
     static member FromField
             (bldr : LGC.BuilderRef)
@@ -296,9 +320,7 @@ and StackItem(bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP.StackTyp
         let noImpl() = failwithf "StackItem.FromField: no implementation for: %A" fSig
         if not fSig.customMods.IsEmpty then
             noImpl()
-        // TODO if we add a second StackItem constructors we can probably get rid of all of these
-        // AsIntermediateType functions
-        new StackItem(bldr, valueRef, fSig.fType.AsIntermediateType(), Some fSig.fType)
+        StackItem.FromTypeBlob bldr valueRef fSig.fType
 
     member x.AsInt (asSigned:bool) (asSize:PrimSizeBytes) : LGC.ValueRef =
         let size = sizeOfStackType stackType
@@ -506,10 +528,12 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
                         TyBlob.PtrTo ty
                     else
                         ty
-            new StackItem(bldr, newObj, ty.AsIntermediateType(), Some ty)
+
+            StackItem.FromTypeBlob bldr newObj ty
 
     let declareMethod() : LGC.ValueRef =
 
+        // TODO there are many more method properties that we can and should be looking at
         let nameFunParam (fn : LGC.ValueRef) (i : int) (p : FAP.Parameter) : unit =
             let llvmParam = LGC.getParam fn (uint32 i)
             LGC.setValueName llvmParam p.Name
@@ -526,12 +550,28 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
                     methDef.DeclaringType.FullName + "::" + methDef.Name
 
             let fn = LGC.addFunction moduleRef fnName funcTy
-        
             Array.iteri (nameFunParam fn) methDef.AllParameters
         
             fn
         | None ->
-            failwith "implement declareMethod with None body"
+            match methDef.CodeType, methDef.PInvokeInfo with
+            // TODO why is this IL and not native???
+            | FAP.CodeType.IL, Some pInv ->
+                // TODO for now assuming that we don't need to use "dlopen"
+                if pInv.ModuleRef.Name <> "libc.dll" then
+                    failwith "sorry! only works with libc for now. No dlopen etc."
+
+                let paramTys = [|for p in methDef.AllParameters -> TypeUtil.LLVMVarTypeOfParam assemGen p.Type|]
+                let retTy = TypeUtil.LLVMVarTypeOfRetType assemGen methDef.ReturnType
+                let funcTy = LC.functionType retTy paramTys
+                let fn = LGC.addFunction moduleRef pInv.ImportName funcTy
+                LGC.setLinkage fn LGC.Linkage.ExternalLinkage
+
+                Seq.iteri (nameFunParam fn) methDef.Parameters
+
+                fn
+            | ctPi ->
+                failwithf "no impl yet for empty body with (code_type, pInvokeInfo) = %A" ctPi
 
     let rec genBlockInsts
             (bldr : LGC.BuilderRef)
@@ -546,7 +586,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
         match insts with
         | [] -> ()
         | inst :: instTail ->
-            printfn "Inst: %A" inst
+            //printfn "Inst: %A" inst
 
             let poppedStack, stackTail = inst.PopTypes stackVals
             let pushTypes =
@@ -563,7 +603,7 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
             let goNextStackItem (si : StackItem) =
                 goNext (si :: stackTail)
             let goNextValRef (value : LGC.ValueRef) =
-                goNextStackItem (new StackItem(bldr, value, pushType(), None))
+                goNextStackItem (StackItem.FromStackType bldr value (pushType()))
 
             let noImpl() = failwithf "instruction <<%A>> not implemented" inst
             let unexpPush() = failwithf "unexpected push types <<%A>> for instruction <<%A>>" pushType inst
@@ -667,6 +707,13 @@ and MethodRep(typeRep : TypeRep, methDef : FAP.MethodDef) =
                     item.AsParam assemGen allParams.[i].Type
                 let args = List.mapi stackItemToArg (List.rev poppedStack)
                 let resultName = if pushTypes.IsEmpty then "" else "callResult"
+                (*
+                printfn "building call for <<%s>>" (call.Method.CilId assemGen.Assembly)
+                printfn "arg types:"
+                for arg in args do
+                    printfn "  %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf arg))
+                printfn "funRef type = %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf funRef))
+                *)
                 let callResult = LC.buildCall bldr funRef (Array.ofList args) resultName
 
                 if call.Tail then LGC.setTailCall callResult true
@@ -1191,10 +1238,61 @@ and AssemGen (modRef : LGC.ModuleRef, assembly : FAP.Assembly) =
 
 let genMainFunction
         (assemGen : AssemGen)
-        (methDef : FAP.MethodDef)
+        (entryPointDef : FAP.MethodDef)
         (llvmModuleRef : LGC.ModuleRef)
         : unit =
-    failwith "impl main fun generation"
+    let argcTy = int32Ty
+    let argvTy = LGC.pointerType (LGC.pointerType int8Ty 0u) 0u
+    let cMainFnTy = LC.functionType int32Ty [|argcTy; argvTy|]
+    let cMainFn = LGC.addFunction llvmModuleRef "main" cMainFnTy
+    LGC.setValueName (LGC.getParam cMainFn 0u) "argc"
+    LGC.setValueName (LGC.getParam cMainFn 1u) "argv"
+
+    use bldr = new LC.Builder(LGC.appendBasicBlock cMainFn "entry")
+    let callResult =
+        let resultName = if entryPointDef.ReturnType.IsVoid then "" else "result"
+        match entryPointDef.AllParameters with
+        | [||] ->
+            let valRef = assemGen.GetTypeRep(entryPointDef.DeclaringType).GetMethRep(entryPointDef).ValueRef
+            LC.buildCall bldr valRef [||] resultName
+        | [|cmdLineArgs|] ->
+            let badType () =
+                failwithf "main function should take no arguments or String[] but instead found %A" cmdLineArgs
+            if not cmdLineArgs.CustomMods.IsEmpty then
+                failwith "no impl yet for custom mods in main function params"
+            match cmdLineArgs.Type.pType with
+            | FAP.ParamType.TypedByRef -> badType()
+            | FAP.ParamType.MayByRefTy mayByRef ->
+                if mayByRef.isByRef then
+                    badType()
+                match mayByRef.ty with
+                | TyBlob.SzArray (custMods, elemTy) ->
+                    if not custMods.IsEmpty then
+                        failwith "no impl yet for custom mods in main function param elem type"
+                    match elemTy with
+                    | TyBlob.String ->
+                        failwith "main taking string array not yet implemented"
+                    | _ ->
+                        badType()
+                | _ ->
+                    badType()
+        | ps -> failwithf "expected main method to have zero or one argument but found %i arguments" ps.Length
+
+    let retTy = entryPointDef.ReturnType
+    let noRetTyImpl() =
+        failwith "no implementation yet for main function return type: %A" retTy
+    if not retTy.customMods.IsEmpty then
+        noRetTyImpl()
+
+    match retTy.rType with
+    | FAP.RetTypeKind.Void -> LGC.buildRet bldr (LGC.constInt int32Ty 0uL false) |> ignore
+    | FAP.RetTypeKind.TypedByRef -> noRetTyImpl()
+    | FAP.RetTypeKind.MayByRefTy mayByRef ->
+        if mayByRef.isByRef then
+            noRetTyImpl()
+        match mayByRef.ty with
+        | TyBlob.I4 -> LGC.buildRet bldr callResult |> ignore
+        | _ -> noRetTyImpl()
 
 let genTypeDefs (llvmModuleRef : LGC.ModuleRef) (assem : FAP.Assembly) : unit =
     let assemGen = new AssemGen(llvmModuleRef, assem)

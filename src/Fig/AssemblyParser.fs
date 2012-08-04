@@ -2632,6 +2632,7 @@ and MethodDef (assem : Assembly, rowIndex : int) =
 
     member x.ReturnType = x.Signature.retType
 
+    member x.HasMethodBody = mdRow.rva <> 0u
     member x.MethodBody =
         if mdRow.rva = 0u then
             // Section 22.26 item 33. If RVA = 0, then either:
@@ -2684,9 +2685,27 @@ and MethodDef (assem : Assembly, rowIndex : int) =
         else
             None
 
+    member x.HasThis =
+        // TODO figure out what explicit this means
+        
+        // TODO this is strange. understand why it isn't good enough to just look
+        // at x.Signature.thisKind
+        let simpleCheck() =
+            match x.Signature.thisKind with
+            | ThisKind.HasThis -> true
+            | _ -> false
+
+        if x.HasMethodBody then
+            simpleCheck()
+        else
+            match x.CodeType, x.HasPInvokeImpl with
+            | CodeType.IL, true -> false
+            | (ct, hasPI) ->
+                failwithf "no impl yet for HasThis where CodeType=%A and HasPInvokeImpl=%b" ct hasPI
+
+
     member x.ThisParam : Parameter option =
-        match x.Signature.thisKind with
-        | ThisKind.HasThis ->
+        if x.HasThis then
             let thisTy =
                 match x.DeclaringType.AsTypeBlob() with
                 | None -> failwith "expected a valid \"this\" type blob"
@@ -2702,18 +2721,16 @@ and MethodDef (assem : Assembly, rowIndex : int) =
             }
 
             Some (new Parameter("this", -1, pType))
-        | _ ->
-            // TODO figure out what explicit this means
+        else
             None
 
-    member x.AllParameters =
-        [|
-            match x.ThisParam with
-            | Some tp -> yield tp
-            | None -> ()
+    member x.AllParameters = [|
+        match x.ThisParam with
+        | Some tp -> yield tp
+        | None -> ()
 
-            yield! x.Parameters
-        |]
+        yield! x.Parameters
+    |]
 
     member x.Locals =
         match x.MethodBody with
