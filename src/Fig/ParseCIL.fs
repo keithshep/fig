@@ -12,8 +12,8 @@ let main args =
 
         use r = new PosStackBinaryReader(new FileStream(inFile, FileMode.Open))
         let assem =
-            let gacPaths = [|"/Library/Frameworks/Mono.framework/Versions/2.10.5/lib/mono/gac/"|]
-            new Assembly(r, new MonoAssemblyResolution(gacPaths))
+            let gacPaths = [|"/Library/Frameworks/Mono.framework/Versions/2.10.9/lib/mono/gac/"|]
+            new Assembly(r, new MonoAssemblyResolution(gacPaths, 4us, 0us, 0us, 0us))
         disassemble System.Console.Out assem
 
     | _ -> failwith (sprintf "bad options %A" args)

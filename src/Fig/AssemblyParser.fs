@@ -4285,7 +4285,7 @@ and [<RequireQualifiedAccess>] TypeBlob =
                 tyBlob.CilId(assemCtxt) + "[" + arrShape.ToString() + "]"
             | TypeBlob.SzArray (custMods, tyBlob) ->
                 spaceSepStrs [|
-                    yield tyBlob.CilId(assemCtxt)
+                    yield tyBlob.CilId(assemCtxt) + "[]"
                     for cm in custMods do
                         yield cm.CilId(assemCtxt)
                 |]

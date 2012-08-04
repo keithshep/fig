@@ -71,10 +71,18 @@ let disInst
             |]
         pr instStr
 
-    let maybePrependUnaligned (unalignedOpt : byte option) (s : string) =
-        match unalignedOpt with
-        | None -> s
-        | Some unaligned -> "unaligned. " + string unaligned + " " + s
+    let maybePrependUnalignedVolatile (unalignedOpt : byte option) (isVolatile : bool) (s : string) =
+        let s =
+            match unalignedOpt with
+            | None -> s
+            | Some unaligned -> "unaligned. " + string unaligned + " " + s
+        if isVolatile then
+            "volatile. " + s
+        else
+            s
+
+    let maybePrependVolatile (vol:bool) (s:string) =
+        maybePrependUnalignedVolatile None vol s
 
     match inst with
     | AbstInst.Add -> "add" |> pr
@@ -117,22 +125,22 @@ let disInst
     | AbstInst.LdcI8 i -> "ldc.i8 " + string i |> pr
     | AbstInst.LdcR4 r -> "ldc.r4 " + string r |> pr
     | AbstInst.LdcR8 r -> "ldc.r8 " + string r |> pr
-    | AbstInst.LdindU1 alignOpt -> maybePrependUnaligned alignOpt "ldind.u1" |> pr
-    | AbstInst.LdindI2 alignOpt -> maybePrependUnaligned alignOpt "ldind.i2" |> pr
-    | AbstInst.LdindU2 alignOpt -> maybePrependUnaligned alignOpt "ldind.u2" |> pr
-    | AbstInst.LdindI4 alignOpt -> maybePrependUnaligned alignOpt "ldind.i4" |> pr
-    | AbstInst.LdindU4 alignOpt -> maybePrependUnaligned alignOpt "ldind.u4" |> pr
-    | AbstInst.LdindI8 alignOpt -> maybePrependUnaligned alignOpt "ldind.i8" |> pr
-    | AbstInst.LdindI alignOpt -> maybePrependUnaligned alignOpt "ldind.i" |> pr
-    | AbstInst.LdindR4 alignOpt -> maybePrependUnaligned alignOpt "ldind.r4" |> pr
-    | AbstInst.LdindR8 alignOpt -> maybePrependUnaligned alignOpt "ldind.r8" |> pr
-    | AbstInst.LdindRef alignOpt -> maybePrependUnaligned alignOpt "ldind.ref" |> pr
+    | AbstInst.LdindU1 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.u1" |> pr
+    | AbstInst.LdindI2 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.i2" |> pr
+    | AbstInst.LdindU2 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.u2" |> pr
+    | AbstInst.LdindI4 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.i4" |> pr
+    | AbstInst.LdindU4 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.u4" |> pr
+    | AbstInst.LdindI8 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.i8" |> pr
+    | AbstInst.LdindI (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.i" |> pr
+    | AbstInst.LdindR4 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.r4" |> pr
+    | AbstInst.LdindR8 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.r8" |> pr
+    | AbstInst.LdindRef (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.ref" |> pr
     | AbstInst.Ldloc i -> "ldloc " + string i |> pr
     | AbstInst.Ldloca i -> "ldloca " + string i |> pr
     | AbstInst.Ldnull -> "ldnull" |> pr
-    | AbstInst.Ldobj (alignOpt, ty) ->
+    | AbstInst.Ldobj (alignOpt, vol, ty) ->
         let instStr = "ldobj " + ty.CilId(false, assemCtxt)
-        maybePrependUnaligned alignOpt instStr |> pr
+        maybePrependUnalignedVolatile alignOpt vol instStr |> pr
     | AbstInst.Ldstr s -> "ldstr " + asStringLitteral s |> pr
     | AbstInst.Mul -> "mul" |> pr
     | AbstInst.Neg -> "neg" |> pr
@@ -148,13 +156,13 @@ let disInst
     | AbstInst.Shr -> "shr" |> pr
     | AbstInst.ShrUn -> "shr.un" |> pr
     | AbstInst.Starg i -> "starg " + string i |> pr
-    | AbstInst.StindRef alignOpt -> maybePrependUnaligned alignOpt "stind.ref" |> pr
-    | AbstInst.StindI1 alignOpt -> maybePrependUnaligned alignOpt "stind.i1" |> pr
-    | AbstInst.StindI2 alignOpt -> maybePrependUnaligned alignOpt "stind.i2" |> pr
-    | AbstInst.StindI4 alignOpt -> maybePrependUnaligned alignOpt "stind.i4" |> pr
-    | AbstInst.StindI8 alignOpt -> maybePrependUnaligned alignOpt "stind.i8" |> pr
-    | AbstInst.StindR4 alignOpt -> maybePrependUnaligned alignOpt "stind.r4" |> pr
-    | AbstInst.StindR8 alignOpt -> maybePrependUnaligned alignOpt "stind.r8" |> pr
+    | AbstInst.StindRef (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "stind.ref" |> pr
+    | AbstInst.StindI1 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "stind.i1" |> pr
+    | AbstInst.StindI2 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "stind.i2" |> pr
+    | AbstInst.StindI4 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "stind.i4" |> pr
+    | AbstInst.StindI8 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "stind.i8" |> pr
+    | AbstInst.StindR4 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "stind.r4" |> pr
+    | AbstInst.StindR8 (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "stind.r8" |> pr
     | AbstInst.Stloc i -> "stloc " + string i |> pr
     | AbstInst.Sub -> "sub" |> pr
     | AbstInst.Switch tgts ->
@@ -168,18 +176,24 @@ let disInst
     | AbstInst.ConvRUn -> "conv.r.un" |> pr
     | AbstInst.Unbox ty -> "unbox " + ty.CilId(false, assemCtxt) |> pr
     | AbstInst.Throw -> "throw" |> pr
-    | AbstInst.Ldfld (alignOpt, fld) ->
-        maybePrependUnaligned alignOpt ("ldfld " + fld.CilId(assemCtxt)) |> pr
-    | AbstInst.Ldflda (alignOpt, fld) ->
-        maybePrependUnaligned alignOpt ("ldflda " + fld.CilId(assemCtxt)) |> pr
-    | AbstInst.Stfld (alignOpt, fld) ->
-        maybePrependUnaligned alignOpt ("stfld " + fld.CilId(assemCtxt)) |> pr
-    | AbstInst.Ldsfld fld -> "ldsfld " + fld.CilId(assemCtxt) |> pr
-    | AbstInst.Ldsflda fld -> "ldsflda " + fld.CilId(assemCtxt) |> pr
-    | AbstInst.Stsfld fld -> "stsfld " + fld.CilId(assemCtxt) |> pr
-    | AbstInst.Stobj (alignOpt, ty) ->
+    | AbstInst.Ldfld (alignOpt, vol, fld) ->
+        maybePrependUnalignedVolatile alignOpt vol ("ldfld " + fld.CilId(assemCtxt)) |> pr
+    | AbstInst.Ldflda (alignOpt, vol, fld) ->
+        maybePrependUnalignedVolatile alignOpt vol ("ldflda " + fld.CilId(assemCtxt)) |> pr
+    | AbstInst.Stfld (alignOpt, vol, fld) ->
+        maybePrependUnalignedVolatile alignOpt vol ("stfld " + fld.CilId(assemCtxt)) |> pr
+    | AbstInst.Ldsfld (vol, fld) ->
+        let instStr = "ldsfld " + fld.CilId(assemCtxt)
+        maybePrependVolatile vol instStr |> pr
+    | AbstInst.Ldsflda (vol, fld) ->
+        let instStr = "ldsflda " + fld.CilId(assemCtxt)
+        maybePrependVolatile vol instStr |> pr
+    | AbstInst.Stsfld (vol, fld) ->
+        let instStr = "stsfld " + fld.CilId(assemCtxt)
+        maybePrependVolatile vol instStr |> pr
+    | AbstInst.Stobj (alignOpt, vol, ty) ->
         let instStr = "stobj " + ty.CilId(false, assemCtxt)
-        maybePrependUnaligned alignOpt instStr |> pr
+        maybePrependUnalignedVolatile alignOpt vol instStr |> pr
     | AbstInst.ConvOvfI1Un -> "conv.ovf.i1.un" |> pr
     | AbstInst.ConvOvfI2Un -> "conv.ovf.i2.un" |> pr
     | AbstInst.ConvOvfI4Un -> "conv.ovf.i4.un" |> pr
@@ -245,7 +259,7 @@ let disInst
     | AbstInst.SubOvfUn -> "sub.ovf.un" |> pr
     | AbstInst.Endfinally -> "endfinally" |> pr
     | AbstInst.Leave tgt -> "leave " + blockLabels.[tgt] |> pr
-    | AbstInst.StindI alignOpt -> maybePrependUnaligned alignOpt "ldind.i" |> pr
+    | AbstInst.StindI (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "ldind.i" |> pr
     | AbstInst.ConvU -> "conv.u" |> pr
     | AbstInst.Arglist -> "arglist" |> pr
     | AbstInst.Ceq -> "ceq" |> pr
@@ -258,8 +272,8 @@ let disInst
     | AbstInst.Localloc -> "localloc" |> pr
     | AbstInst.Endfilter -> "endfilter" |> pr
     | AbstInst.Initobj ty -> "initobj " + ty.CilId(false, assemCtxt) |> pr
-    | AbstInst.Cpblk -> "cpblk" |> pr
-    | AbstInst.Initblk alignOpt -> maybePrependUnaligned alignOpt "initblk" |> pr
+    | AbstInst.Cpblk vol -> maybePrependVolatile vol "cpblk" |> pr
+    | AbstInst.Initblk (alignOpt, vol) -> maybePrependUnalignedVolatile alignOpt vol "initblk" |> pr
     | AbstInst.Rethrow -> "rethrow" |> pr
     | AbstInst.Sizeof ty -> "sizeof " + ty.CilId(false, assemCtxt) |> pr
     | AbstInst.Refanytype -> "refanytype" |> pr
