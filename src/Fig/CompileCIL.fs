@@ -26,15 +26,23 @@ let main args =
             createMemoryBufferWithContentsOfFile "build/fig_runtime.bc"
             |> parseBitcode
         
-        genTypeDefs llvmModuleRef assem
+        try
+            genTypeDefs llvmModuleRef assem
         
-        // for debug only
-        //dumpModule llvmModuleRef
-        
-        writeBitcodeToFile llvmModuleRef outBitcodeFile |> ignore
+            // for debug only
+            //dumpModule llvmModuleRef
+            
+            writeBitcodeToFile llvmModuleRef outBitcodeFile |> ignore
+
+            // exit success
+            0
+        with ex ->
+            // try to dump as much info as possible before quitting
+            printfn "%A" ex
+            writeBitcodeToFile llvmModuleRef outBitcodeFile |> ignore
+
+            // exit failure
+            1
 
     | _ -> failwith (sprintf "bad options %A" args)
-
-    // exit success
-    0
 

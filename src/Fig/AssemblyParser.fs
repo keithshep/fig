@@ -17,7 +17,10 @@ let rec splitAt i xs =
             (x :: splitFst, splitSnd)
 
 /// for keeping track of what types will be on the stack
-/// See EMCA 335: Partition VI C.2, Partition III 1.5, Partition III 1.1
+/// See EMCA 335:
+/// - Partition I 12.3.2.1: The Evaluation Stack
+/// - Partition III 1.1: Data Types
+/// - Partition III 1.5: Operant Type Table
 type StackType =
     | Int32_ST
     | Int64_ST
@@ -40,6 +43,7 @@ let (|Int_ST|Float_ST|Managed_ST|) = function
         Managed_ST
 let (|STyped|) (st : #StackTyped) = STyped st.StackType
 
+/// See Partition VI C.2: CIL OpCode Descriptions (contains push/pop behaviors of each inst)
 type InstPopKind =
     | Pop0 | Pop1 | Pop1Pop1 | PopI | PopIPop1
     | PopIPopI | PopIPopIPopI | PopI8Pop8 | PopIPopR4
@@ -1738,8 +1742,9 @@ and FieldDef(assem : Assembly, rowIndex : int) =
             for cm in mySig.customMods do
                 yield cm.CilId(assemCtxt)
             yield mySig.fType.CilId(assemCtxt)
-            yield x.DeclaringType.FullName + "::" + x.Name
+            yield x.FullName
         |]
+    override x.ToString() = "FieldDef(" + x.CilId assem + ")"
 
     override x.GetHashCode() = rowIndex ^^^ assem.GetHashCode()
     override x.Equals otherObj =
@@ -1760,6 +1765,8 @@ and FieldDef(assem : Assembly, rowIndex : int) =
             else
                 findDecTy (currIndex + 1)
         findDecTy 0
+    
+    member x.FullName = x.DeclaringType.FullName + "::" + x.Name
 
     member x.MemberAccess = MemberAccess.FromUShort fRow.fieldAttrFlags
 
@@ -2004,6 +2011,7 @@ and TypeDef(assem : Assembly, rowIndex : int) =
             tkStr + " " + fullName()
         else
             fullName()
+    override x.ToString() = "TypeDef(" + x.CilId(false, assem) + ")"
 
     override x.GetHashCode() = rowIndex ^^^ assem.GetHashCode()
     override x.Equals otherObj =
@@ -2553,7 +2561,7 @@ and MethodDef (assem : Assembly, rowIndex : int) =
         spaceSepStrs [|
             if not x.IsStatic then yield "instance"
             yield x.Signature.retType.CilId(assemCtxt)
-            yield x.DeclaringType.CilId(true, assemCtxt)  + "::" + maybeQuotedName + "("
+            yield x.DeclaringType.CilId(true, assemCtxt) + "::" + maybeQuotedName + "("
             yield commaSepStrs [|
                 for p in x.Signature.methParams do
                     yield spaceSepStrs [|
@@ -2564,6 +2572,9 @@ and MethodDef (assem : Assembly, rowIndex : int) =
             |]
             yield ")"
         |]
+    override x.ToString() = "FieldDef(" + x.CilId assem + ")"
+    
+    member x.FullName = x.DeclaringType.FullName + "::" + x.Name
 
     member x.Assembly   = assem
     member x.RowIndex   = rowIndex
@@ -4154,6 +4165,7 @@ with
             b = byte ElementType.CmodOpt || b = byte ElementType.CmodReqd
         readBlobWhile notEndOfCustMods (CustomModBlob.FromBlob assem) blob
 
+// defined at Partition II: 23.2.12
 and [<RequireQualifiedAccess>] TypeBlob =
     | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 | I8 | U8 | R4 | R8 | I | U
     | Class of TypeDefRefOrSpec
@@ -4179,17 +4191,19 @@ and [<RequireQualifiedAccess>] TypeBlob =
     
             let fromManagedPtr (pointeeType : TypeBlob) =
                 match pointeeType with
-                | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 -> Int32_ST
-                | I8 | U8 -> Int64_ST
-                | R4 -> Float32_ST
-                | R8 -> Float64_ST
-                | I | U -> NativeInt_ST
+                | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 -> iHaveNoClue() //Int32_ST
+                | I8 | U8 -> iHaveNoClue() //Int64_ST
+                | R4 -> iHaveNoClue() //Float32_ST
+                | R8 -> iHaveNoClue() //Float64_ST
+                | I | U -> iHaveNoClue() //NativeInt_ST
                 | _ -> ManagedPointer_ST
 
             match x with
             | Ptr (custMods, tyOpt) ->
                 match tyOpt with
-                | None -> iHaveNoClue()
+                | None ->
+                    // None corresponds to a void* as in: ldfld void* System.IntPtr::m_value
+                    NativeInt_ST
                 | Some ty -> fromManagedPtr ty
             | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 -> Int32_ST
             | I8 | U8 -> Int64_ST
