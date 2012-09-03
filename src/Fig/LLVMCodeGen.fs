@@ -7,11 +7,13 @@ module LC = LLVM.Core
 module LGC = LLVM.Generated.Core
 
 type Dict<'k, 'v> = System.Collections.Generic.Dictionary<'k, 'v>
+type WorkQueue = System.Collections.Generic.Queue<unit -> unit>
+
 type Inst = FAP.AbstInst
 type TyBlob = FAP.TypeBlob
 type StackType = FAP.StackType
 
-type [<AbstractClass>] DefAndImpl<'T> () =
+type [<AbstractClass>] DefAndImpl<'T> (?wq:WorkQueue) =
     let mutable valueOpt = None : 'T option
 
     abstract member Define : unit -> 'T
@@ -23,7 +25,13 @@ type [<AbstractClass>] DefAndImpl<'T> () =
         | None ->
             let value = x.Define()
             valueOpt <- Some value
-            x.Implement value
+
+            match wq with
+            | None ->
+                x.Implement value
+            | Some wq ->
+                wq.Enqueue (fun () -> x.Implement value)
+
             value
 
 type PrimSizeBytes = One = 1 | Two = 2 | Four = 4 | Eight = 8
@@ -131,7 +139,7 @@ type TypeUtil =
 
         match ty with
         | :? FAP.TypeDefOrRef as ty ->
-            match ty.AsTypeBlob() with
+            match ty.AsTypeBlob() (*false*) with
             | Some tyBlob -> TypeUtil.LLVMVarTypeOfTypeBlob assemGen tyBlob
             | None -> noImpl()
         | _ -> noImpl()
@@ -243,6 +251,7 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
     interface FAP.StackTyped with member x.StackType = stackType
 
     member x.ValueRef = valueRef
+    member x.TypeBlobOpt = typeBlobOpt
 
     static member FromStackType
             (bldr : LGC.BuilderRef)
@@ -272,7 +281,7 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
             (ty : FAP.TypeDefRefOrSpec)
             : StackItem =
         let noImpl() = failwithf "StackItem.FromType: no implementation yet for %A" ty
-        match ty.AsTypeBlob() with
+        match ty.AsTypeBlob( (*false*) ) with
         | None -> noImpl()
         | Some tyBlob -> StackItem.FromTypeBlob bldr valueRef tyBlob
 
@@ -404,7 +413,7 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
                 | :? FAP.TypeDefOrRef as asTy -> asTy.Resolve()
                 | _ -> noImpl()
 
-            match asTy.AsTypeBlob() with
+            match asTy.AsTypeBlob( (*false*) ) with
             | None -> noImpl()
             | Some asTy -> x.AsTypeBlob assemGen asTy
 
@@ -412,7 +421,7 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
         // TODO we should have more checks here. Especially where we return the naked value ref.
         let noImpl() = failwithf "StackItem.AsTypeBlob: no implementation for: %A -> %A" typeBlobOpt tyBlob
 
-        let asClass (asTy : FAP.TypeDefRefOrSpec) =
+        let asClassOrValuetype (asTy:FAP.TypeDefRefOrSpec) =
             match typeBlobOpt with
             | None -> valueRef
             | Some fromTyBlob ->
@@ -420,6 +429,9 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
                     match asTy with
                     | :? FAP.TypeDefOrRef as asTy -> asTy.Resolve()
                     | _ -> noImpl()
+                let bitCastAsPtrToAsTy() =
+                    let ptrTy = LGC.pointerType (assemGen.GetTypeRep(asTy).InstanceVarsType) 0u
+                    LGC.buildBitCast bldr valueRef ptrTy ""
                 match fromTyBlob with
                 | TyBlob.Class fromTy ->
                     match fromTy with
@@ -428,9 +440,23 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
                         if fromTy = asTy then
                             valueRef
                         else
-                            let ptrTy = LGC.pointerType (assemGen.GetTypeRep(asTy).InstanceVarsType) 0u
-                            LGC.buildBitCast bldr valueRef ptrTy ""
+                            bitCastAsPtrToAsTy()
                     | _ ->
+                        noImpl()
+                | TyBlob.ValueType fromTy ->
+                    match fromTy with
+                    | :? FAP.TypeDefOrRef as fromTy ->
+                        let fromTy = fromTy.Resolve()
+                        if fromTy = asTy then
+                            valueRef
+                        else
+                            noImpl()
+                    | _ ->
+                        noImpl()
+                | TyBlob.SzArray (custMods, elemTy) ->
+                    if asTy = assemGen.SysArrayTypeDef then
+                        bitCastAsPtrToAsTy()
+                    else
                         noImpl()
                 | _ ->
                     noImpl()
@@ -449,9 +475,9 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
         | TyBlob.R8 -> x.AsFloat true true
         | TyBlob.String -> noImpl()
         | TyBlob.Ptr _ -> valueRef
-        | TyBlob.ValueType _ -> noImpl()
-        | TyBlob.Object -> asClass assemGen.ObjectTypeDef
-        | TyBlob.Class ty -> asClass ty
+        | TyBlob.ValueType ty -> asClassOrValuetype ty
+        | TyBlob.Object -> asClassOrValuetype assemGen.ObjectTypeDef
+        | TyBlob.Class ty -> asClassOrValuetype ty
         | TyBlob.Var _ -> noImpl ()
         | TyBlob.Array _ -> noImpl()
         | TyBlob.GenericInst _ -> noImpl()
@@ -544,11 +570,13 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             
             // TODO is this type valid? it was cut-and-paste from my old code
             let ty : TyBlob =
-                match decTy.AsTypeBlob() with
+                match decTy.AsTypeBlob( (*false*) ) with
                 | None -> failwith "cannot build a constructor for an interface!"
                 | Some ty ->
                     if decTy.IsValueType then
-                        TyBlob.PtrTo ty
+                        // TODO I have no idea what the heck I'm going here
+                        ty
+                        //TyBlob.PtrTo ty
                     else
                         ty
 
@@ -728,15 +756,19 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                 let allParams = methDef.AllParameters
                 let stackItemToArg (i:int) (item:StackItem) =
                     item.AsParam assemGen allParams.[i].Type
-                let args = List.mapi stackItemToArg (List.rev poppedStack)
+                let argStack = List.rev poppedStack
+                let args = List.mapi stackItemToArg argStack
                 let resultName = if pushTypes.IsEmpty then "" else "callResult"
-                (*
-                printfn "building call for <<%s>>" (call.Method.CilId assemGen.Assembly)
-                printfn "arg types:"
-                for arg in args do
-                    printfn "  %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf arg))
-                printfn "funRef type = %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf funRef))
-                *)
+
+                if methDef.Name = "InitializeArray" then
+                    printfn "arg types:"
+                    //for arg in args do
+                    //    printfn "  %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf arg))
+                    for i in 0 .. args.Length - 1 do
+                        printfn "  LLVM Ty %i: %s" i (LLVM.Extra.typeToString moduleRef (LGC.typeOf args.[i]))
+                        printfn "  Stack Ty %i: %A" i argStack.[i].TypeBlobOpt
+                    printfn "funRef type = %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf funRef))
+
                 let callResult = LC.buildCall bldr funRef (Array.ofList args) resultName
 
                 if call.Tail then LGC.setTailCall callResult true
@@ -962,25 +994,40 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             | Inst.Throw -> noImpl()
             | Inst.Ldfld (unalignedOpt, volatilePrefix, field) ->
                 match poppedStack with
-                | [selfPtr] ->
+                | [obj] ->
+                    // Partition III 4.10 says:
+                    //
+                    // The ldfld instruction pushes onto the stack the value of a field of obj.
+                    // obj shall be an object (type O), a managed pointer (type &),
+                    // an unmanaged pointer (type native int), or an instance of a value type.
+                    // The use of an unmanaged pointer is not permitted in verifiable code.
+                    // field is a metadata token (a fieldref or fielddef see Partition II)
+                    // that shall refer to a field member. The return type is that associated
+                    // with field. ldfld pops the object reference off the stack and pushes
+                    // the value for the field in its place. The field can be either an instance
+                    // field (in which case obj shall not be null) or a static field.
                     let field = field.Resolve()
                     
-                    if unalignedOpt.IsSome || volatilePrefix then
+                    if unalignedOpt.IsSome || volatilePrefix || field.IsStatic then
                         noImpl()
 
                     let decTy = field.DeclaringType
+
                     let fieldIndex = Array.findIndex (fun f -> f = field) decTy.InstanceFields
                     let fieldIndex = fieldIndex + decTy.InheritedInstanceFields.Length
 
                     // OK now we need to load the field
                     // TODO this doesn't seem to work. Figure out why
-                    //let selfPtrVal = selfPtr.AsPointerTo(assemGen, decTy)
-                    //let selfPtrVal = selfPtr.ValueRef
                     printfn "$$$$$$$$$$$$$$$$$$$$$$$$"
-                    let selfPtrVal = selfPtr.AsType assemGen decTy
+                    let objPtrVal =
+                        // TODO !!!! this seems suspect. Note wording of "instance of a value type" above
+                        if decTy.IsValueType then
+                            obj.AsTypeBlob assemGen (TyBlob.PtrTo (decTy.AsTypeBlob( (*false*) ).Value))
+                        else
+                            obj.AsType assemGen decTy
                     printfn "------------------------"
                     let fieldName = field.Name
-                    let fieldPtr = LGC.buildStructGEP bldr selfPtrVal (uint32 fieldIndex) (fieldName + "Ptr")
+                    let fieldPtr = LGC.buildStructGEP bldr objPtrVal (uint32 fieldIndex) (fieldName + "Ptr")
                     let fieldValue = LGC.buildLoad bldr fieldPtr (fieldName + "Value")
                     let fieldStackItem = StackItem.FromField bldr fieldValue field
                     goNextStackItem fieldStackItem
@@ -1083,7 +1130,15 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                     LGC.buildStore bldr newArr arrPtrAddr |> ignore
 
                     // TODO "None" may be the wrong thing to do here
-                    goNextValRef newArrObj
+                    //goNextValRef newArrObj
+                    
+                    let arrTy =
+                        match elemTypeRef.AsTypeBlob() with
+                        | None -> failwith "failed to convert array element type into a type"
+                        | Some ty -> TyBlob.SzArrayOf ty
+                    let arrStackItem = StackItem.FromTypeBlob bldr newArrObj arrTy
+
+                    goNextStackItem arrStackItem
                 | _ ->
                     unexpPop()
 
@@ -1202,6 +1257,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                                     | FAP.ParamType.MayByRefTy mayByRef ->
                                         mayByRef.ty = TyBlob.I
                                     | FAP.ParamType.TypedByRef ->
+
                                         false
                                 | _ ->
                                     false
@@ -1265,7 +1321,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
         match methDef.MethodBody with
         | None -> ()
         | Some methBody ->
-            printfn "generating method body for: %s" methDef.FullName
+            printfn "== generating method body for: %s ==" (methDef.CilId assemGen.Assembly)
             
             // create the entry block
             use bldr = new LC.Builder(LGC.appendBasicBlock methodVal "entry")
@@ -1306,7 +1362,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                     LGC.buildBr bldr blockDecs.[i + 1] |> ignore
 
     let valueRefDefAndImpl = {
-        new DefAndImpl<LGC.ValueRef>() with
+        new DefAndImpl<LGC.ValueRef>(typeRep.WorkQueue) with
             member x.Define() = declareMethod()
             member x.Implement vr = maybeGenMethodBody vr
     }
@@ -1357,6 +1413,7 @@ and TypeRep(typeDef:FAP.TypeDef, assemGen:AssemGen) =
                 LC.structSetBody vr instanceFields false
     }
     
+    member x.WorkQueue : WorkQueue = assemGen.WorkQueue
     member x.AssemGen : AssemGen = assemGen
     member x.InstanceVarsType = instanceRef.Value
     member x.StaticVarsType = staticVarsType.Value
@@ -1376,7 +1433,7 @@ and TypeRep(typeDef:FAP.TypeDef, assemGen:AssemGen) =
             fieldRepMap.[fd] <- fr
             fr
 
-and AssemGen (modRef : LGC.ModuleRef, assembly : FAP.Assembly) =
+and AssemGen (modRef:LGC.ModuleRef, assembly:FAP.Assembly, workQueue:WorkQueue) =
     let typeRepMap = new Dict<FAP.TypeDef, TypeRep>()
 
     let mscorlibTypeDef (tyNamespaceOpt:option<string>) (tyName:string) =
@@ -1384,12 +1441,17 @@ and AssemGen (modRef : LGC.ModuleRef, assembly : FAP.Assembly) =
         match mscorlib.TypeDefNamed tyNamespaceOpt tyName with
         | None -> failwith "failed to located System.Object type definition"
         | Some td -> td
+    let lazySysTyDef (tyName:string) =
+        lazy (mscorlibTypeDef (Some "System") tyName)
+    let objectTypeDef               = lazySysTyDef "Object"
+    let runtimeFieldHandleTypeDef   = lazySysTyDef "RuntimeFieldHandle"
+    let sysArrayTypeDef             = lazySysTyDef "Array"
 
-    let objectTypeDef = lazy (mscorlibTypeDef (Some "System") "Object")
-    let runtimeFieldHandleTypeDef = lazy (mscorlibTypeDef (Some "System") "RuntimeFieldHandle")
+    member x.WorkQueue = workQueue
 
     member x.ObjectTypeDef : FAP.TypeDef = objectTypeDef.Value
     member x.RuntimeFieldHandleTypeDef : FAP.TypeDef = runtimeFieldHandleTypeDef.Value
+    member x.SysArrayTypeDef : FAP.TypeDef = sysArrayTypeDef.Value
 
     member x.Assembly : FAP.Assembly = assembly
     member x.ModuleRef : LGC.ModuleRef = modRef
@@ -1465,7 +1527,8 @@ let genMainFunction
         | _ -> noRetTyImpl()
 
 let genTypeDefs (llvmModuleRef : LGC.ModuleRef) (assem : FAP.Assembly) : unit =
-    let assemGen = new AssemGen(llvmModuleRef, assem)
+    let workQueue = new WorkQueue()
+    let assemGen = new AssemGen(llvmModuleRef, assem, workQueue)
 
     // force evaluation of all module types
     let rec goTypeDef (td : FAP.TypeDef) =
@@ -1478,3 +1541,7 @@ let genTypeDefs (llvmModuleRef : LGC.ModuleRef) (assem : FAP.Assembly) : unit =
     match assem.EntryPoint with
     | None -> ()
     | Some methDef -> genMainFunction assemGen methDef llvmModuleRef
+
+    while workQueue.Count > 0 do
+        let workItem = workQueue.Dequeue()
+        workItem()

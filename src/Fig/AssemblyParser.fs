@@ -530,11 +530,11 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                 readShortEq r 0us "SubSys Minor"
                 readIntEq r 0u "reserved"
                 let imageSize = r.ReadUInt32 ()
-                if imageSize % sectionAlignment <> 0u then
-                    debugfn "image size expected to be a multiple of section alignment"
+                (*if imageSize % sectionAlignment <> 0u then
+                    debugfn "image size expected to be a multiple of section alignment"*)
                 let headerSize = r.ReadUInt32 ()
-                if headerSize % fileAlignment <> 0u then
-                    debugfn "header size expected to be a multiple of file alignment"
+                (*if headerSize % fileAlignment <> 0u then
+                    debugfn "header size expected to be a multiple of file alignment"*)
                 readIntEq r 0u "file checksum"
                 let subSystem =
                     match r.ReadUInt16 () with
@@ -690,7 +690,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
             let metaDataSize = r.ReadUInt32 ()
             let flags = r.ReadUInt32 ()
             let entryPointTok = r.ReadUInt32 ()
-            debugfn "entry point tok: %i" entryPointTok
+            //debugfn "entry point tok: %i" entryPointTok
             let resourcesRVA = r.ReadUInt32 ()
             let resourcesSize = r.ReadUInt32 ()
             let strongNameSig = r.ReadUInt64 ()
@@ -730,16 +730,16 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
         readIntEq r 0u "reserved"
         let versionStrLen = r.ReadUInt32 ()
         let tempPos = r.BaseStream.Position
-        debugfn "version string: \"%s\", alloc: %i" (readASCII r) versionStrLen
+        //debugfn "version string: \"%s\", alloc: %i" (readASCII r) versionStrLen
         r.BaseStream.Seek (tempPos + int64 versionStrLen, SeekOrigin.Begin) |> ignore
         readShortEq r 0us "meta data flags"
         let numStreams = r.ReadUInt16 ()
-        debugfn "num streams %i" numStreams
+        //debugfn "num streams %i" numStreams
     
         Map.ofList
             [for _ in 1us .. numStreams do
                 let offset, size, name = readStreamHeader()
-                debugfn "offset = %i, size = %i, name = \"%s\"" offset size name
+                //debugfn "offset = %i, size = %i, name = \"%s\"" offset size name
                 yield (name, (offset, size))]
 
     let sortedTableEnums =
@@ -909,7 +909,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
         let mutable typeSpecs = ([||] : TypeSpecRow array)
 
         for kv in rowCounts do
-            debugfn "MetadataTableKind=%A" kv.Key
+            //debugfn "MetadataTableKind=%A" kv.Key
             let rowCount = kv.Value
             let noImpl () = failwithf "no implementation for %A" kv.Key
             match kv.Key with
@@ -926,7 +926,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let name = readHeapString ()
                         let culture = readHeapString ()
                         
-                        debugfn "Assembly: name=\"%s\", culture=\"%s\"" name culture
+                        //debugfn "Assembly: name=\"%s\", culture=\"%s\"" name culture
 
                         yield {
                             AssemblyRow.hashAlgId = hashAlgId
@@ -939,11 +939,11 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                             name = name
                             culture = culture}|]
             | MetadataTableKind.AssemblyOSKind ->
-                debugfn "AssemblyOS: skipping %i rows..." rowCount
+                //debugfn "AssemblyOS: skipping %i rows..." rowCount
                 let tableSize = 4L * 3L
                 r.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
             | MetadataTableKind.AssemblyProcessorKind ->
-                debugfn "AssemblyProcessorKind: skipping %i rows..." rowCount
+                //debugfn "AssemblyProcessorKind: skipping %i rows..." rowCount
                 let tableSize = 4L
                 r.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
             | MetadataTableKind.AssemblyRefKind ->
@@ -959,7 +959,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let culture = readHeapString ()
                         let hashValueIndex = readBlobHeapIndex ()
                         
-                        debugfn "AssemblyRefKind: name=\"%s\", culture=\"%s\"" name culture
+                        //debugfn "AssemblyRefKind: name=\"%s\", culture=\"%s\"" name culture
 
                         yield {
                             AssemblyRefRow.majorVersion = majorVersion
@@ -972,11 +972,11 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                             culture = culture
                             hashValueIndex = hashValueIndex}|]
             | MetadataTableKind.AssemblyRefOSKind ->
-                debugfn "AssemblyRefOSKind: skipping %i rows..." rowCount
+                //debugfn "AssemblyRefOSKind: skipping %i rows..." rowCount
                 let tableSize = 4L * 3L + tableIndexWidth MetadataTableKind.AssemblyRefKind
                 r.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
             | MetadataTableKind.AssemblyRefProcessorKind ->
-                debugfn "AssemblyRefProcessorKind: skipping %i rows..." rowCount
+                //debugfn "AssemblyRefProcessorKind: skipping %i rows..." rowCount
                 let tableSize = 4L + tableIndexWidth MetadataTableKind.AssemblyRefKind
                 r.BaseStream.Seek (tableSize * int64 rowCount, SeekOrigin.Current) |> ignore
             | MetadataTableKind.ClassLayoutKind ->
@@ -986,7 +986,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let classSize = r.ReadUInt32 ()
                         let parentIndex = readTableIndex MetadataTableKind.TypeDefKind
 
-                        debugfn "ClassLayoutKind: packingSize=%i, classSize=%i, parent=%i" packingSize classSize parentIndex
+                        //debugfn "ClassLayoutKind: packingSize=%i, classSize=%i, parent=%i" packingSize classSize parentIndex
 
                         yield {
                             ClassLayoutRow.packingSize = packingSize
@@ -1000,7 +1000,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let parentKind, parentIndex = readCodedIndex CodedIndexKind.HasConstant
                         let valueIndex = readBlobHeapIndex ()
 
-                        debugfn "ConstantKind: type=0x0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
+                        //debugfn "ConstantKind: type=0x0x%X, parent=(%A, %i), value=%i" typeVal parentKind parentIndex valueIndex
 
                         yield {
                             ConstantRow.typeVal = enum<ElementType>(int typeVal)
@@ -1018,13 +1018,13 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let typeKind, typeIndex = readCodedIndex CodedIndexKind.CustomAttributeType
                         let valueIndex = readBlobHeapIndex ()
 
-                        debugfn
+                        (*debugfn
                             "CustomAttributeKind: parent=(%A, %i), type=(%A, %i), valueIndex=%i"
                             parentKind
                             parentIndex
                             typeKind
                             typeIndex
-                            valueIndex
+                            valueIndex*)
 
                         yield {
                             CustomAttributeRow.parentKind = parentKind
@@ -1039,12 +1039,12 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let parentKind, parentIndex = readCodedIndex CodedIndexKind.HasDeclSecurity
                         let permissionSetIndex = readBlobHeapIndex ()
 
-                        debugfn
+                        (*debugfn
                             "DeclSecurityKind: action=%i, parent=(%A, %i), permissionSet=%i"
                             action
                             parentKind
                             parentIndex
-                            permissionSetIndex
+                            permissionSetIndex*)
 
                         yield {
                             DeclSecurityRow.action = action
@@ -1057,10 +1057,10 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let parentTypeDefIndex = readTableIndex MetadataTableKind.TypeDefKind
                         let eventStartIndex = readTableIndex MetadataTableKind.EventKind
 
-                        debugfn
+                        (*debugfn
                             "EventMapKind: parent=%i, eventStart=%i"
                             parentTypeDefIndex
-                            eventStartIndex
+                            eventStartIndex*)
 
                         yield {
                             EventMapRow.parentTypeDefIndex = parentTypeDefIndex
@@ -1072,12 +1072,12 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let name = readHeapString()
                         let eventTypeKind, eventTypeIndex = readCodedIndex CodedIndexKind.TypeDefOrRef
 
-                        debugfn
+                        (*debugfn
                             "EventKind: flags=0x%X, name=%s, eventType=(%A, %i)"
                             eventFlags
                             name
                             eventTypeKind
-                            eventTypeIndex
+                            eventTypeIndex*)
 
                         yield {
                             EventRow.eventFlags = eventFlags
@@ -1093,14 +1093,14 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let typeNamespace = readHeapStringOpt()
                         let implKind, implIndex = readCodedIndex CodedIndexKind.Implementation
 
-                        debugfn
+                        (*debugfn
                             "ExportedTypeKind: flags=0x%X, typeDefId=%i, typeName=%s, typeNamespace=%A, impl=(%A, %i)"
                             flags
                             typeDefId
                             typeName
                             typeNamespace
                             implKind
-                            implIndex
+                            implIndex*)
 
                         yield {
                             ExportedTypeRow.flags = flags
@@ -1118,7 +1118,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let name = readHeapString ()
                         let signatureIndex = readBlobHeapIndex ()
 
-                        debugfn "FieldKind: flags=0x%X, name=\"%s\", sigindex=%i" fieldAttrFlags name signatureIndex
+                        //debugfn "FieldKind: flags=0x%X, name=\"%s\", sigindex=%i" fieldAttrFlags name signatureIndex
 
                         yield {
                             FieldRow.fieldAttrFlags = fieldAttrFlags
@@ -1130,7 +1130,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let offset = r.ReadUInt32()
                         let fieldIndex = readTableIndex MetadataTableKind.FieldKind
 
-                        debugfn "FieldLayout: offset=%i, fieldIndex=%i" offset fieldIndex
+                        //debugfn "FieldLayout: offset=%i, fieldIndex=%i" offset fieldIndex
 
                         yield {
                             FieldLayoutRow.offset = offset
@@ -1141,7 +1141,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let parentKind, parentIndex = readCodedIndex CodedIndexKind.HasFieldMarshall
                         let nativeTypeIndex = readBlobHeapIndex ()
 
-                        debugfn "FieldMarshalKind: parent=(%A, %i), nativeType=%i" parentKind parentIndex nativeTypeIndex
+                        //debugfn "FieldMarshalKind: parent=(%A, %i), nativeType=%i" parentKind parentIndex nativeTypeIndex
 
                         yield {
                             FieldMarshalRow.parentKind = parentKind
@@ -1153,7 +1153,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let rva = r.ReadUInt32 ()
                         let fieldIndex = readTableIndex MetadataTableKind.FieldKind
 
-                        debugfn "FieldRVAKind: RVA=%i, fieldIndex=%i" rva fieldIndex
+                        //debugfn "FieldRVAKind: RVA=%i, fieldIndex=%i" rva fieldIndex
 
                         yield {
                             FieldRVARow.rva = rva
@@ -1167,13 +1167,13 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let ownerKind, ownerIndex = readCodedIndex CodedIndexKind.TypeOrMethodDef
                         let name = readHeapString ()
 
-                        debugfn
+                        (*debugfn
                             "GenericParamKind: number=%i, flags=0x%X, owner=(%A, %i), name=\"%s\""
                             number
                             flags
                             ownerKind
                             ownerIndex
-                            name
+                            name*)
 
                         yield {
                             GenericParamRow.number = number
@@ -1187,11 +1187,11 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let ownerIndex = readTableIndex MetadataTableKind.GenericParamKind
                         let constraintKind, constraintIndex = readCodedIndex CodedIndexKind.TypeDefOrRef
 
-                        debugfn
+                        (*debugfn
                             "GenericParamConstraintKind: owner=%i, constraint=(%A, %i)"
                             ownerIndex
                             constraintKind
-                            constraintIndex
+                            constraintIndex*)
 
                         yield {
                             GenericParamConstraintRow.ownerIndex = ownerIndex
@@ -1206,12 +1206,12 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let importName = readHeapString ()
                         let importScopeIndex = readTableIndex MetadataTableKind.ModuleRefKind
 
-                        debugfn
+                        (*debugfn
                             "ImplMapKind: forwarded=(%A, %i), importName=\"%s\", importScopeIndex=%i"
                             memberForwardedKind
                             memberForwardedIndex
                             importName
-                            importScopeIndex
+                            importScopeIndex*)
 
                         yield {
                             ImplMapRow.mappingFlags = mappingFlags
@@ -1225,7 +1225,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let classIndex = readTableIndex MetadataTableKind.TypeDefKind
                         let ifaceKind, ifaceIndex = readCodedIndex CodedIndexKind.TypeDefOrRef
 
-                        debugfn "InterfaceImplKind: class=%i, interface=(%A, %i)" classIndex ifaceKind ifaceIndex
+                        //debugfn "InterfaceImplKind: class=%i, interface=(%A, %i)" classIndex ifaceKind ifaceIndex
 
                         yield {
                             InterfaceImplRow.classIndex = classIndex
@@ -1239,7 +1239,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let name = readHeapString ()
                         let implKind, implIndex = readCodedIndex CodedIndexKind.Implementation
 
-                        debugfn "ManifestResourceKind: name=\"%s\", impl=(%A, %i)" name implKind implIndex
+                        //debugfn "ManifestResourceKind: name=\"%s\", impl=(%A, %i)" name implKind implIndex
 
                         yield {
                             ManifestResourceRow.offset = offset
@@ -1254,7 +1254,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let name = readHeapString ()
                         let signatureIndex = readBlobHeapIndex ()
                         
-                        debugfn "MemberRefKind: class=(%A, %i) name=\"%s\", sigIndex=%i" classKind classIndex name signatureIndex
+                        //debugfn "MemberRefKind: class=(%A, %i) name=\"%s\", sigIndex=%i" classKind classIndex name signatureIndex
 
                         yield {
                             MemberRefRow.classKind = classKind
@@ -1271,7 +1271,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let signatureIndex = readBlobHeapIndex ()
                         let paramIndex = readTableIndex MetadataTableKind.ParamKind
 
-                        debugfn "MethodDefKind: name=\"%s\", sigIndex=%i, paramIndex=%i" name signatureIndex paramIndex
+                        //debugfn "MethodDefKind: name=\"%s\", sigIndex=%i, paramIndex=%i" name signatureIndex paramIndex
 
                         yield {
                             MethodDefRow.rva = rva
@@ -1287,13 +1287,13 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let methodBodyKind, methodBodyIndex = readCodedIndex CodedIndexKind.MethodDefOrRef
                         let methodDecKind, methodDecIndex = readCodedIndex CodedIndexKind.MethodDefOrRef
 
-                        debugfn
+                        (*debugfn
                             "MethodImplKind: class=%i, body=(%A, %i), declaration=(%A, %i)"
                             classIndex
                             methodBodyKind
                             methodBodyIndex
                             methodDecKind
-                            methodDecIndex
+                            methodDecIndex*)
 
                         yield {
                             MethodImplRow.classIndex = classIndex
@@ -1308,12 +1308,12 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let methodIndex = readTableIndex MetadataTableKind.MethodDefKind
                         let assocKind, assocIndex = readCodedIndex CodedIndexKind.HasSemantics
 
-                        debugfn
+                        (*debugfn
                             "MethodSemanticsKind: semantics=0x%X, methodIndex=%i, assoc=(%A, %i)"
                             semanticsFlags
                             methodIndex
                             assocKind
-                            assocIndex
+                            assocIndex*)
 
                         yield {
                             MethodSemanticsRow.semanticsFlags = semanticsFlags
@@ -1326,7 +1326,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let methodKind, methodIndex = readCodedIndex CodedIndexKind.MethodDefOrRef
                         let instIndex = readBlobHeapIndex ()
 
-                        debugfn "MethodSpecKind: method=(%A, %i), instantiation=%i" methodKind methodIndex instIndex
+                        //debugfn "MethodSpecKind: method=(%A, %i), instantiation=%i" methodKind methodIndex instIndex
 
                         yield {
                             MethodSpecRow.methodKind = methodKind
@@ -1341,7 +1341,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let encIDIndex = readGUIDHeapIndex ()
                         let encBaseIdIndex = readGUIDHeapIndex ()
                         
-                        debugfn "module name=\"%s\"" name
+                        //debugfn "module name=\"%s\"" name
 
                         yield {
                             ModuleRow.name = name
@@ -1353,7 +1353,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                     [|for _ in 1u .. rowCount do
                         let name = readHeapString ()
 
-                        debugfn "ModuleRefKind: \"%s\"" name
+                        //debugfn "ModuleRefKind: \"%s\"" name
 
                         yield {ModuleRefRow.name = name}|]
             | MetadataTableKind.NestedClassKind ->
@@ -1362,10 +1362,10 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let nestedClassIndex = readTableIndex MetadataTableKind.TypeDefKind
                         let enclosingClassIndex = readTableIndex MetadataTableKind.TypeDefKind
 
-                        debugfn
+                        (*debugfn
                             "NestedClassKind: nestedClass=%i, enclosingClass=%i"
                             nestedClassIndex
-                            enclosingClassIndex
+                            enclosingClassIndex*)
 
                         yield {
                             NestedClassRow.nestedClassIndex = nestedClassIndex
@@ -1377,7 +1377,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let sequence = r.ReadUInt16 ()
                         let name = readHeapString ()
                         
-                        debugfn "ParamKind: name=\"%s\", seq=%i" name sequence
+                        //debugfn "ParamKind: name=\"%s\", seq=%i" name sequence
 
                         yield {
                             ParamRow.flags = flags
@@ -1393,7 +1393,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         // signature in the Blob heap of the Property
                         let typeIndex = readBlobHeapIndex ()
 
-                        debugfn "PropertyKind: name=\"%s\", type=%i" name typeIndex
+                        //debugfn "PropertyKind: name=\"%s\", type=%i" name typeIndex
 
                         yield {
                             PropertyRow.flags = flags
@@ -1405,7 +1405,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let parentIndex = readTableIndex MetadataTableKind.TypeDefKind
                         let propertyListIndex = readTableIndex MetadataTableKind.PropertyKind
 
-                        debugfn "PropertyMapKind: parent=%i, propertyList=%i" parentIndex propertyListIndex
+                        //debugfn "PropertyMapKind: parent=%i, propertyList=%i" parentIndex propertyListIndex
 
                         yield {
                             PropertyMapRow.parentIndex = parentIndex
@@ -1414,7 +1414,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                 standAloneSigs <-
                     [|for _ in 1u .. rowCount do
                         let signatureIndex = readBlobHeapIndex ()
-                        debugfn "StandAloneSigKind: sigIndex=%i" signatureIndex
+                        //debugfn "StandAloneSigKind: sigIndex=%i" signatureIndex
 
                         yield {StandAloneSigRow.signatureIndex = signatureIndex}|]
             | MetadataTableKind.TypeDefKind ->
@@ -1427,7 +1427,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let fieldsIndex = readTableIndex MetadataTableKind.FieldKind
                         let methodsIndex = readTableIndex MetadataTableKind.MethodDefKind
 
-                        debugfn "TypeDefKind: typeName=\"%s\", typeNamespace=\"%A\"" typeName typeNamespace
+                        //debugfn "TypeDefKind: typeName=\"%s\", typeNamespace=\"%A\"" typeName typeNamespace
 
                         yield {
                             TypeDefRow.flags = flags
@@ -1444,12 +1444,12 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                         let typeName = readHeapString ()
                         let typeNamespace = readHeapStringOpt()
 
-                        debugfn
+                        (*debugfn
                             "TypeRefKind: resolutionScope=(%A, %i), typeName=\"%s\", typeNamespace=\"%A\""
                             resolutionScopeKind
                             resolutionScopeIndex
                             typeName
-                            typeNamespace
+                            typeNamespace*)
 
                         yield {
                             TypeRefRow.resolutionScopeKind = resolutionScopeKind
@@ -1460,7 +1460,7 @@ and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
                 typeSpecs <-
                     [|for _ in 1u .. rowCount do
                         let sigIndex = readBlobHeapIndex ()
-                        debugfn "TypeSpecKind: %i" sigIndex
+                        //debugfn "TypeSpecKind: %i" sigIndex
 
                         yield {TypeSpecRow.sigIndex = sigIndex}|]
             | _ -> noImpl ()
@@ -1842,7 +1842,7 @@ and [<AbstractClass>] TypeDefRefOrSpec() =
     abstract CilId : typeKindReq:bool * assemCtxt:AssemblyBase -> string
     abstract SizeBytes : int option with get
     abstract AsIntermediateType : unit -> StackType
-    abstract AsTypeBlob : unit -> TypeBlob option
+    abstract AsTypeBlob : (*bool*) unit -> TypeBlob option
 
     static member FromKindAndIndex (assem : Assembly) (mt : MetadataTableKind) (rowIndex : int) : TypeDefRefOrSpec =
         match mt with
@@ -1966,9 +1966,10 @@ and TypeRef(assem : Assembly, rowIndex : int) =
 
     override x.CilId(typeKindReq:bool, assemCtxt:AssemblyBase) =
         x.Resolve().CilId(typeKindReq, assemCtxt)
+    override x.ToString() = "TypeRef(" + x.CilId(false, assem) + ")"
     override x.SizeBytes = x.Resolve().SizeBytes
     override x.AsIntermediateType() = x.Resolve().AsIntermediateType()
-    override x.AsTypeBlob() : TypeBlob option = x.Resolve().AsTypeBlob()
+    override x.AsTypeBlob ( (*unbox:bool*) ) : TypeBlob option = x.Resolve().AsTypeBlob( (*unbox*) )
 
 and [<RequireQualifiedAccess>] TypeVisibilityAttr =
     | NotPublic
@@ -2224,7 +2225,7 @@ and TypeDef(assem : Assembly, rowIndex : int) =
 
             accumSum 0 0
 
-    override x.AsTypeBlob() : TypeBlob option =
+    override x.AsTypeBlob ( (*unbox:bool*) ) : TypeBlob option =
         let asClassOrVal() =
             match x.TypeKind with
             | TypeKind.Interface ->
@@ -2233,6 +2234,7 @@ and TypeDef(assem : Assembly, rowIndex : int) =
                 Some (TypeBlob.Class x)
             | TypeKind.Valuetype | TypeKind.Enum ->
                 Some (TypeBlob.ValueType x)
+        //if unbox then
         match x.Namespace with
         | Some "System" ->
             match x.Name with
@@ -2255,13 +2257,15 @@ and TypeDef(assem : Assembly, rowIndex : int) =
             | _                 -> asClassOrVal()
         | _ ->
             asClassOrVal()
+        //else
+        //    asClassOrVal()
 
     member x.IsPrimitive =
-        match x.AsTypeBlob() with
+        match x.AsTypeBlob() (*true*) with
         | Some tb -> tb.IsPrimitive
         | None -> false
 
-    override x.AsIntermediateType() = x.AsTypeBlob().Value.AsIntermediateType()
+    override x.AsIntermediateType() = x.AsTypeBlob( (*false*) ).Value.AsIntermediateType()
 
 and Property(assem:Assembly, rowIndex) =
     let mt = assem.MetadataTables
@@ -2461,6 +2465,7 @@ and MethodRef (assem : Assembly, rowIndex : int) =
         let blob = ref(assem.ReadBlobAtIndex mrRow.signatureIndex |> List.ofArray)
         MethodDefOrRefSig.FromBlob assem blob
     override x.CilId(assemCtxt : AssemblyBase) = x.Resolve().CilId(assemCtxt)
+    override x.ToString() = "MethodRef(" + x.CilId assem + ")"
 
 and MethodDef (assem : Assembly, rowIndex : int) =
     inherit Method()
@@ -2495,7 +2500,7 @@ and MethodDef (assem : Assembly, rowIndex : int) =
 
         if isTinyFmt then
             let mbSize = fstByte >>> 2
-            debugfn "tiny header: size=%i" mbSize
+            //debugfn "tiny header: size=%i" mbSize
 
             {
                 MethodBody.maxStack = 8us
@@ -2514,14 +2519,14 @@ and MethodDef (assem : Assembly, rowIndex : int) =
             let codeSize = r.ReadUInt32 ()
             let localVarSigTok = r.ReadUInt32 ()
 
-            debugfn
+            (*debugfn
                 "fat header: moreSects=%b, initLocals=%b, headerSize=%i, maxStack=%i, codeSize=%i, localVarSigTok=%i"
                 moreSects
                 initLocals
                 headerSize
                 maxStack
                 codeSize
-                localVarSigTok
+                localVarSigTok*)
 
             let insts = readInsts r codeSize
             let exceptionSecs = ExceptionClause.ReadExceptionSections r moreSects codeSize
@@ -2572,7 +2577,7 @@ and MethodDef (assem : Assembly, rowIndex : int) =
             |]
             yield ")"
         |]
-    override x.ToString() = "FieldDef(" + x.CilId assem + ")"
+    override x.ToString() = "MethodDef(" + x.CilId assem + ")"
     
     member x.FullName = x.DeclaringType.FullName + "::" + x.Name
 
@@ -2718,7 +2723,7 @@ and MethodDef (assem : Assembly, rowIndex : int) =
     member x.ThisParam : Parameter option =
         if x.HasThis then
             let thisTy =
-                match x.DeclaringType.AsTypeBlob() with
+                match x.DeclaringType.AsTypeBlob( (*false*) ) with
                 | None -> failwith "expected a valid \"this\" type blob"
                 | Some declTy ->
                     if declTy.IsValType then
@@ -2788,9 +2793,21 @@ and PInvokeInfo(assem:Assembly, rowIndex:int) =
 and Call(tail : bool, meth : Method) =
     member x.Tail = tail
     member x.Method = meth
+    override x.ToString() =
+        let methStr = meth.ToString()
+        if tail then
+            "TailCall(" + methStr + ")"
+        else
+            "Call(" + methStr + ")"
 and VirtCall(thisType : TypeDefRefOrSpec option, tail : bool, meth : Method) =
     inherit Call(tail, meth)
     member x.ThisType = thisType
+    override x.ToString() =
+        let methStr = meth.ToString()
+        if tail then
+            "TailVirtCall(" + methStr + ")"
+        else
+            "VirtCall(" + methStr + ")"
 
 and [<RequireQualifiedAccess>] AbstInst =
     | Add
@@ -4037,7 +4054,7 @@ and ExceptionClause =
     
             // See 25.4.6 reading fat clauses
             [|for _ in 1u .. numClauses ->
-                debugfn "reading fat clause"
+                //debugfn "reading fat clause"
                 let eFlags = r.ReadUInt32 ()
                 let tryOffset = r.ReadUInt32 ()
                 let tryLen = r.ReadUInt32 ()
@@ -4045,14 +4062,14 @@ and ExceptionClause =
                 let handlerLen = r.ReadUInt32 ()
                 let offsetOrClassTok = r.ReadUInt32 ()
 
-                debugfn
+                (*debugfn
                     "eFlags=0x%X, tryOffset=%i, tryLen=%i, handlerOffset=%i, handlerLen=%i, offsetOrClassTok=%i"
                     eFlags
                     tryOffset
                     tryLen
                     handlerOffset
                     handlerLen
-                    offsetOrClassTok
+                    offsetOrClassTok*)
 
                 ExceptionClause.ToExceptionClause
                     eFlags
@@ -4073,7 +4090,7 @@ and ExceptionClause =
     
             // See 25.4.6 reading small clauses
             [|for _ in 1uy .. numClauses ->
-                debugfn "reading small clause"
+                //debugfn "reading small clause"
                 let eFlags = r.ReadUInt16 () |> uint32
                 let tryOffset = r.ReadUInt16 () |> uint32
                 let tryLen = r.ReadByte () |> uint32
@@ -4081,14 +4098,14 @@ and ExceptionClause =
                 let handlerLen = r.ReadByte () |> uint32
                 let offsetOrClassTok = r.ReadUInt32 ()
 
-                debugfn
+                (*debugfn
                     "eFlags=0x%X, tryOffset=%i, tryLen=%i, handlerOffset=%i, handlerLen=%i, offsetOrClassTok=%i"
                     eFlags
                     tryOffset
                     tryLen
                     handlerOffset
                     handlerLen
-                    offsetOrClassTok
+                    offsetOrClassTok*)
 
                 ExceptionClause.ToExceptionClause
                     eFlags
@@ -4101,7 +4118,7 @@ and ExceptionClause =
         static member ReadExceptionSections (r : BinaryReader) (moreSects : bool) (codeSize : uint32) =
             let moreSects = ref moreSects
             [|while !moreSects do
-                debugfn "reading exception section"
+                //debugfn "reading exception section"
         
                 // the method data sits on a 4-byte boundary. Seek past
                 // boundary bytes
@@ -4120,7 +4137,7 @@ and ExceptionClause =
                 let isFatFormat = kindFlags &&& 0x40uy <> 0uy
                 moreSects := kindFlags &&& 0x80uy <> 0uy
 
-                debugfn "exception is fat: %b" isFatFormat
+                //debugfn "exception is fat: %b" isFatFormat
 
                 yield
                     if isFatFormat then
@@ -4225,6 +4242,7 @@ and [<RequireQualifiedAccess>] TypeBlob =
             | MVar _ -> iHaveNoClue ()
 
         static member PtrTo (ty:TypeBlob) : TypeBlob = Ptr([], Some ty)
+        static member SzArrayOf (ty:TypeBlob) : TypeBlob = SzArray([], ty)
 
         static member TypesMatch (ty1 : TypeBlob) (ty2 : TypeBlob) : bool =
             match ty1, ty2 with

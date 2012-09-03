@@ -26,7 +26,7 @@ type MonoAssemblyResolution(gacPaths:string array,
                 | 4us, _ -> "4.0"
                 | maj, rev -> failwithf "unsupported mscorlib major-version=%i, revision-number=%i" maj rev
             let fullPath = Path.Combine(gacPaths.[i], "..", monoVersionDir, "mscorlib.dll")
-            debugfn "checking for mscorlib at: %s" fullPath
+            //debugfn "checking for mscorlib at: %s" fullPath
             if File.Exists fullPath then
                 assemFromPath fullPath
             else
@@ -65,7 +65,7 @@ type MonoAssemblyResolution(gacPaths:string array,
                                     assemName,
                                     gacSubFolder,
                                     assemName + ".dll")
-                            debugfn "checking for assembly %s at: %s" assemName fullPath
+                            //debugfn "checking for assembly %s at: %s" assemName fullPath
                             if File.Exists fullPath then
                                 assemFromPath fullPath
                             else
