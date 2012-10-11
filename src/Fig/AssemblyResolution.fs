@@ -13,11 +13,10 @@ type MonoAssemblyResolution(gacPaths:string array,
                             mscorBuild:uint16) as x =
     let assemKey (assemBase : AssemblyBase) = assemBase.Name, assemBase.Version
     let assemCache = new Dictionary<string * string, Assembly>()
-    let assemFromPath (path : string) =
-        let r = new PosStackBinaryReader(new FileStream(path, FileMode.Open))
-        new Assembly(r, x)
+    let newPSBReader (path : string) =
+        new PosStackBinaryReader(new FileStream(path, FileMode.Open))
     let mscorlib = lazy (
-        let rec go (i : int) : Assembly =
+        let rec go (i : int) : MscorlibAssembly =
             let monoVersionDir =
                 match mscorMajor, mscorRevision with
                 | 1us, _ -> "1.0"
@@ -28,7 +27,7 @@ type MonoAssemblyResolution(gacPaths:string array,
             let fullPath = Path.Combine(gacPaths.[i], "..", monoVersionDir, "mscorlib.dll")
             //debugfn "checking for mscorlib at: %s" fullPath
             if File.Exists fullPath then
-                assemFromPath fullPath
+                new MscorlibAssembly(newPSBReader fullPath, x)
             else
                 go (i + 1)
         go 0
@@ -54,7 +53,7 @@ type MonoAssemblyResolution(gacPaths:string array,
                         || mscorl.RevisionNumber <> mscorRevision || mscorl.BuildNumber <> mscorBuild
                     if badVersion() then
                         failwith "unexpected mscorlib version: %s" mscorl.Version
-                    mscorl
+                    upcast mscorl
                 | assemName ->
                     let rec go (i : int) =
                         let notFound() = failwithf "Failed to find gac for %s" assemName
@@ -67,7 +66,7 @@ type MonoAssemblyResolution(gacPaths:string array,
                                     assemName + ".dll")
                             //debugfn "checking for assembly %s at: %s" assemName fullPath
                             if File.Exists fullPath then
-                                assemFromPath fullPath
+                                new Assembly(newPSBReader fullPath, x)
                             else
                                 go (i + 1)
                         else
@@ -78,4 +77,4 @@ type MonoAssemblyResolution(gacPaths:string array,
         member x.RegisterAssembly (assem : Assembly) =
             assemCache.[assemKey assem] <- assem
 
-        member x.Mscorlib : Assembly = mscorlib.Value
+        member x.Mscorlib : MscorlibAssembly = mscorlib.Value

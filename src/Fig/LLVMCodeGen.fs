@@ -19,7 +19,7 @@ type [<AbstractClass>] DefAndImpl<'T> (?wq:WorkQueue) =
     abstract member Define : unit -> 'T
     abstract member Implement : 'T -> unit
 
-    member x.Value =
+    member x.Value : 'T =
         match valueOpt with
         | Some value -> value
         | None ->
@@ -84,6 +84,8 @@ let simpleTypeName (ty : FAP.TypeDefRefOrSpec) =
 type TypeUtil =
     static member LLVMVarTypeOfTypeBlob (assemGen : AssemGen) (tyBlob : TyBlob) : LGC.TypeRef =
         let noImpl() = failwithf "LLVMVarTypeOfTypeBlob: no impl for %A type yet" tyBlob
+        let ptrTo (ty:FAP.TypeDefRefOrSpec) : LGC.TypeRef =
+            LGC.pointerType (assemGen.GetTypeRep(ty).InstanceVarsType) 0u
 
         match tyBlob with
         | FAP.TypeBlob.Boolean -> int8Ty
@@ -95,15 +97,10 @@ type TypeUtil =
         | FAP.TypeBlob.R4 -> noImpl()
         | FAP.TypeBlob.R8 -> doubleTy
         | FAP.TypeBlob.I | FAP.TypeBlob.U -> llvmIntTypeSized nativeIntSize
-        | FAP.TypeBlob.Class ty ->
-            LGC.pointerType (assemGen.GetTypeRep(ty).InstanceVarsType) 0u
+        | FAP.TypeBlob.Class ty | FAP.TypeBlob.ValueType ty -> ptrTo ty
         | FAP.TypeBlob.MVar _ -> noImpl()
-        | FAP.TypeBlob.Object ->
-            LGC.pointerType (assemGen.GetTypeRep(assemGen.ObjectTypeDef).InstanceVarsType) 0u
-        | FAP.TypeBlob.String -> noImpl()
-        | FAP.TypeBlob.ValueType ty ->
-            // TODO is this always the right answer for value types??
-            assemGen.GetTypeRep(ty).InstanceVarsType
+        | FAP.TypeBlob.Object -> ptrTo assemGen.Mscorlib.ObjectTypeDef
+        | FAP.TypeBlob.String -> ptrTo assemGen.Mscorlib.StringTypeDef
         | FAP.TypeBlob.Var _ -> noImpl()
 
         // the following are also in type spec
@@ -113,8 +110,13 @@ type TypeUtil =
             match tyOpt with
             | None -> noImpl()
             | Some ty ->
-                //printfn "the Ptr type is %s" (ty.CilId assemGen.Assembly)
-                LGC.pointerType (TypeUtil.LLVMVarTypeOfTypeBlob assemGen ty) 0u
+                let llvmTyOfPointee = TypeUtil.LLVMVarTypeOfTypeBlob assemGen ty
+                match ty with
+                | TyBlob.Object | TyBlob.Class _ | TyBlob.ValueType _ ->
+                    // objects and complex valuetypes are implemented as pointers already
+                    llvmTyOfPointee
+                | _ ->
+                    LGC.pointerType llvmTyOfPointee 0u
         | FAP.TypeBlob.FnPtr _ -> noImpl()
         | FAP.TypeBlob.Array (ty, arrShape) -> noImpl()
         | FAP.TypeBlob.SzArray (custMods, elemTyBlob) ->
@@ -387,20 +389,8 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
         | StackType.NativeInt_ST -> x.AsNativeInt false
         | StackType.Float32_ST -> x.AsFloat true false
         | StackType.Float64_ST -> x.AsFloat true true
-        | StackType.ObjectRef_ST ->
-            cantConv()
-            (*
-            match ty with
-            | StackType.ObjectRef_ST -> value
-            | _ -> cantConv ()
-            *)
-        | StackType.ManagedPointer_ST ->
-            cantConv()
-            (*
-            match ty with
-            | StackType.ManagedPointer_ST -> value
-            | _ -> cantConv ()
-            *)
+        | StackType.ObjectRef_ST -> cantConv()
+        | StackType.ManagedPointer_ST -> cantConv()
 
     member x.AsType (assemGen:AssemGen) (asTy:FAP.TypeDefRefOrSpec) : LGC.ValueRef =
         let noImpl() =
@@ -432,8 +422,7 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
                 let bitCastAsPtrToAsTy() =
                     let ptrTy = LGC.pointerType (assemGen.GetTypeRep(asTy).InstanceVarsType) 0u
                     LGC.buildBitCast bldr valueRef ptrTy ""
-                match fromTyBlob with
-                | TyBlob.Class fromTy ->
+                let handleBasicCase (fromTy:FAP.TypeDefRefOrSpec) =
                     match fromTy with
                     | :? FAP.TypeDefOrRef as fromTy ->
                         let fromTy = fromTy.Resolve()
@@ -443,21 +432,25 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
                             bitCastAsPtrToAsTy()
                     | _ ->
                         noImpl()
-                | TyBlob.ValueType fromTy ->
-                    match fromTy with
-                    | :? FAP.TypeDefOrRef as fromTy ->
-                        let fromTy = fromTy.Resolve()
-                        if fromTy = asTy then
-                            valueRef
-                        else
-                            noImpl()
-                    | _ ->
-                        noImpl()
+                match fromTyBlob with
+                | TyBlob.Class fromTy | TyBlob.ValueType fromTy ->
+                    handleBasicCase fromTy
+                | TyBlob.String ->
+                    handleBasicCase assemGen.Mscorlib.StringTypeDef
                 | TyBlob.SzArray (custMods, elemTy) ->
-                    if asTy = assemGen.SysArrayTypeDef then
+                    if not custMods.IsEmpty then
+                        noImpl()
+                    if asTy = assemGen.Mscorlib.SysArrayTypeDef then
                         bitCastAsPtrToAsTy()
                     else
                         noImpl()
+                | TyBlob.Ptr (custMods, pointeeTyOpt) ->
+                    if not custMods.IsEmpty then
+                        noImpl()
+                    match pointeeTyOpt with
+                    | None -> noImpl()
+                    | Some pointeeTy ->
+                        bitCastAsPtrToAsTy()
                 | _ ->
                     noImpl()
 
@@ -473,11 +466,11 @@ and StackItem private (bldr:LGC.BuilderRef, valueRef:LGC.ValueRef, stackType:FAP
         | TyBlob.U8 -> x.AsInt false PrimSizeBytes.Eight
         | TyBlob.R4 -> x.AsFloat true false
         | TyBlob.R8 -> x.AsFloat true true
-        | TyBlob.String -> noImpl()
+        | TyBlob.String -> asClassOrValuetype assemGen.Mscorlib.StringTypeDef
         | TyBlob.Ptr _ -> valueRef
-        | TyBlob.ValueType ty -> asClassOrValuetype ty
-        | TyBlob.Object -> asClassOrValuetype assemGen.ObjectTypeDef
-        | TyBlob.Class ty -> asClassOrValuetype ty
+        | TyBlob.ValueType ty | TyBlob.Class ty -> asClassOrValuetype ty
+        | TyBlob.Object -> asClassOrValuetype assemGen.Mscorlib.ObjectTypeDef
+        //| TyBlob.Class ty -> asClassOrValuetype ty
         | TyBlob.Var _ -> noImpl ()
         | TyBlob.Array _ -> noImpl()
         | TyBlob.GenericInst _ -> noImpl()
@@ -536,7 +529,46 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
     let assemGen = typeRep.AssemGen
     let moduleRef = assemGen.ModuleRef
 
-    let makeNewObj (bldr : LGC.BuilderRef) (ctor : FAP.Method) (args : StackItem list) =
+    // corresponds to instruction stelem
+    let storeArrayElem (bldr:LGC.BuilderRef) (value:LGC.ValueRef) (index:LGC.ValueRef) (arrObj:LGC.ValueRef) =
+        let arrPtrAddr = LGC.buildStructGEP bldr arrObj 1u "arrPtrAddr"
+        let arrPtr = LGC.buildLoad bldr arrPtrAddr "arrPtr"
+        let elemAddr = LC.buildGEP bldr arrPtr [|index|] "elemAddr"
+        LGC.buildStore bldr value elemAddr |> ignore
+
+    let makeNewArray (bldr:LGC.BuilderRef) (elemTypeRef:FAP.TypeDefRefOrSpec) (numElemsValRef:LGC.ValueRef) =
+        // TODO should this be changed to signed??? I think not
+        //let numElemsValRef = numElems.AsNativeInt false
+
+        // allocate the array to the heap
+        // TODO it seems pretty lame to have this code here. need to think
+        // about how this should really be structured
+        let elemTy = TypeUtil.LLVMVarTypeOf assemGen elemTypeRef
+        // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
+        let elemTypeName = simpleTypeName elemTypeRef
+        let newArr = LGC.buildArrayMalloc bldr elemTy numElemsValRef ("new" + elemTypeName + "Arr")
+
+        // TODO I think we have to initialize the arrays
+
+        let basicArrTy = LGC.pointerType elemTy 0u
+        let arrObjTy = LC.structType [|nativeIntTy; basicArrTy|] false
+        let newArrObj = LGC.buildMalloc bldr arrObjTy ("new" + elemTypeName + "ArrObj")
+
+        // fill in the array object
+        let lenAddr = LGC.buildStructGEP bldr newArrObj 0u "lenAddr"
+        LGC.buildStore bldr numElemsValRef lenAddr |> ignore
+        let arrPtrAddr = LGC.buildStructGEP bldr newArrObj 1u "arrPtrAddr"
+        LGC.buildStore bldr newArr arrPtrAddr |> ignore
+
+        let arrTy =
+            match elemTypeRef.AsTypeBlob() with
+            | None -> failwith "failed to convert array element type into a type"
+            | Some ty -> TyBlob.SzArrayOf ty
+
+        //StackItem.FromTypeBlob bldr newArrObj arrTy
+        (arrTy, newArrObj)
+
+    let makeNewObj (bldr:LGC.BuilderRef) (ctor:FAP.Method) (args:StackItem list) =
         // TODO implement GC along with object/class initialization code
         // FIXME naming is all screwed up! fix it
         let ctor = ctor.Resolve()
@@ -558,12 +590,8 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             printfn "building ctor call for <<%s>>" (ctor.CilId assemGen.Assembly)
             printfn "args:"
             for i = 0 to args.Length - 1 do
-                //printfn "  %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf arg))
-                printfn "== arg #%i ==" i
-                LGC.dumpValue args.[i]
-            //printfn "ctorRef type = %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf ctorRef))
-            printfn "Dumping ctorRef"
-            LGC.dumpValue ctorRef
+                printfn "  %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf args.[i]))
+            printfn "ctorRef type = %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf ctorRef))
             *)
 
             LC.buildCall bldr ctorRef (Array.ofList args) "" |> ignore
@@ -572,13 +600,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             let ty : TyBlob =
                 match decTy.AsTypeBlob( (*false*) ) with
                 | None -> failwith "cannot build a constructor for an interface!"
-                | Some ty ->
-                    if decTy.IsValueType then
-                        // TODO I have no idea what the heck I'm going here
-                        ty
-                        //TyBlob.PtrTo ty
-                    else
-                        ty
+                | Some ty -> ty
 
             StackItem.FromTypeBlob bldr newObj ty
 
@@ -622,7 +644,19 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
 
                 fn
             | ctPi ->
-                failwithf "no impl yet for empty body with (code_type, pInvokeInfo) = %A" ctPi
+                if methDef.IsInternalCall then
+                    // TODO implement internal call for real!
+                    let paramTys = [|for p in methDef.AllParameters -> TypeUtil.LLVMVarTypeOfParam assemGen p.Type|]
+                    let retTy = TypeUtil.LLVMVarTypeOfRetType assemGen methDef.ReturnType
+                    let funcTy = LC.functionType retTy paramTys
+                    let fn = LGC.addFunction moduleRef methDef.Name funcTy
+                    LGC.setLinkage fn LGC.Linkage.ExternalLinkage
+
+                    Seq.iteri (nameFunParam fn) methDef.Parameters
+
+                    fn
+                else
+                    failwithf "bad function with no body %A" methDef
 
     let rec genBlockInsts
             (bldr : LGC.BuilderRef)
@@ -760,15 +794,6 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                 let args = List.mapi stackItemToArg argStack
                 let resultName = if pushTypes.IsEmpty then "" else "callResult"
 
-                if methDef.Name = "InitializeArray" then
-                    printfn "arg types:"
-                    //for arg in args do
-                    //    printfn "  %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf arg))
-                    for i in 0 .. args.Length - 1 do
-                        printfn "  LLVM Ty %i: %s" i (LLVM.Extra.typeToString moduleRef (LGC.typeOf args.[i]))
-                        printfn "  Stack Ty %i: %A" i argStack.[i].TypeBlobOpt
-                    printfn "funRef type = %s" (LLVM.Extra.typeToString moduleRef (LGC.typeOf funRef))
-
                 let callResult = LC.buildCall bldr funRef (Array.ofList args) resultName
 
                 if call.Tail then LGC.setTailCall callResult true
@@ -826,11 +851,26 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                 goNextStackItem (StackItem.FromParameter bldr value paramDef)
 
             | Inst.Ldarga argIndex ->
-                let argIndex = int argIndex
-                let param = methDef.AllParameters.[argIndex]
-                let argaStackItem = StackItem.FromParameter bldr args.[argIndex] param
+                // TODO I think the logic for ldarga needs to act just like ldarg for
+                // any objects or complex value types...
 
-                goNextStackItem argaStackItem
+                let argIndex = int argIndex
+                let paramDef = methDef.AllParameters.[argIndex]
+                if not paramDef.CustomMods.IsEmpty then
+                    noImpl()
+                match paramDef.Type.pType with
+                | FAP.ParamType.TypedByRef -> noImpl()
+                | FAP.ParamType.MayByRefTy mayByRefTy ->
+                    if mayByRefTy.isByRef then
+                        noImpl()
+                    let ptrTy = TyBlob.PtrTo mayByRefTy.ty
+                    let value =
+                        if mayByRefTy.ty.IsObjOrVal then
+                            LGC.buildLoad bldr args.[int argIndex] ("tmpptr_" + paramDef.Name)
+                        else
+                            args.[argIndex]
+                    goNextStackItem (StackItem.FromTypeBlob bldr value ptrTy)
+
             | Inst.LdcI4 i ->
                 let constResult = LGC.constInt int32Ty (uint64 i) false // TODO correct me!!
                 goNextValRef constResult
@@ -861,7 +901,63 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             | Inst.Ldloca varIndex -> noImpl()
             | Inst.Ldnull -> noImpl()
             | Inst.Ldobj (unalignedOpt, volatilePrefix, ty) -> noImpl()
-            | Inst.Ldstr str -> noImpl()
+            | Inst.Ldstr str ->
+                // TODO the following is not done here
+                //
+                // Partition III 4.16:
+                //
+                // By default, the CLI guarantees that the result of two
+                // ldstr instructions referring to two metadata tokens that
+                // have the same sequence of characters, return precisely
+                // the same string object (a process known as "string interning").
+                // This behavior can be controlled using the
+                // System.Runtime.CompilerServices. CompilationRelaxationsAttribute
+                // and the System.Runtime.CompilerServices.
+                // CompilationRelaxations.NoStringInterning (see Partition IV).
+                match poppedStack with
+                | [] ->
+                    // allocate the string array
+                    let sizeInt = LGC.constInt nativeIntTy (uint64 str.Length) false
+                    let arrTy, arrVal = makeNewArray bldr assemGen.Mscorlib.CharTypeDef sizeInt
+
+                    // fill in the string array
+                    // TODO this is super-duper inefficient
+                    for i = 0 to str.Length - 1 do
+                        let iConst = LGC.constInt nativeIntTy (uint64 i) false
+                        let charConst = LGC.constInt int16Ty (uint64 <| str.Chars(i)) false
+                        storeArrayElem bldr charConst iConst arrVal
+
+                    // call the string constructor
+                    let ctorMatch (md:FAP.MethodDef) : bool =
+                        if md.IsCtor then
+                            match md.Parameters with
+                            | [|singleParam|] ->
+                                match singleParam.Type.pType with
+                                | FAP.ParamType.MayByRefTy mayByRef ->
+                                    //mayByRef.ty = TyBlob.I
+                                    match mayByRef.ty with
+                                    | TyBlob.SzArray ([], TyBlob.Char) ->
+                                        true
+                                    | _ ->
+                                        false
+                                | FAP.ParamType.TypedByRef ->
+                                    false
+                            | _ ->
+                                false
+                        else
+                            false
+                    let strTyDef = assemGen.Mscorlib.StringTypeDef
+                    let ctor =
+                        match Array.tryFind ctorMatch strTyDef.Methods with
+                        | None -> failwith "failed to find suitable String constructor"
+                        | Some ctor -> ctor
+                    let strStackItem = makeNewObj bldr ctor [StackItem.FromTypeBlob bldr arrVal TyBlob.String]
+
+                    goNextStackItem strStackItem
+
+                | _ ->
+                    noImpl()
+
             | Inst.Mul ->
                 // The mul instruction multiplies value1 by value2 and pushes
                 // the result on the stack. Integral operations silently
@@ -991,7 +1087,20 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             | Inst.Isinst ty -> noImpl()
             | Inst.ConvRUn -> noImpl()
             | Inst.Unbox ty -> noImpl()
-            | Inst.Throw -> noImpl()
+            | Inst.Throw ->
+                if not instTail.IsEmpty then
+                    failwith "the instruction stack should be empty after a throw"
+
+                // TODO actually implement this for real
+                let exitFun =
+                    match LC.tryGetNamedFunction moduleRef "exit" with
+                    | Some f -> f
+                    | None ->
+                        let exitFunTy = LC.functionType voidTy [|nativeIntTy|]
+                        LGC.addFunction moduleRef "exit" exitFunTy
+                let errCodeArg = LGC.constInt nativeIntTy 999uL false
+                LC.buildCall bldr exitFun [|errCodeArg|] "" |> ignore
+
             | Inst.Ldfld (unalignedOpt, volatilePrefix, field) ->
                 match poppedStack with
                 | [obj] ->
@@ -1007,27 +1116,33 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                     // the value for the field in its place. The field can be either an instance
                     // field (in which case obj shall not be null) or a static field.
                     let field = field.Resolve()
+                    let fieldName = field.Name
                     
                     if unalignedOpt.IsSome || volatilePrefix || field.IsStatic then
                         noImpl()
 
-                    let decTy = field.DeclaringType
+                    let fieldPtr =
+                        match obj.TypeBlobOpt with
+                        | Some (TyBlob.Ptr (custMods, Some pointeeTy)) when pointeeTy.IsPrimitive ->
+                            if not custMods.IsEmpty then
+                                noImpl()
 
-                    let fieldIndex = Array.findIndex (fun f -> f = field) decTy.InstanceFields
-                    let fieldIndex = fieldIndex + decTy.InheritedInstanceFields.Length
+                            if fieldName = "m_value" then
+                                // TODO must assure that it's the right primitive
+                                obj.ValueRef
+                            else
+                                noImpl()
+                        | _ ->
+                            let decTy = field.DeclaringType
+                            let fieldIndex = Array.findIndex (fun f -> f = field) decTy.InstanceFields
+                            let fieldIndex = fieldIndex + decTy.InheritedInstanceFields.Length
 
-                    // OK now we need to load the field
-                    // TODO this doesn't seem to work. Figure out why
-                    printfn "$$$$$$$$$$$$$$$$$$$$$$$$"
-                    let objPtrVal =
-                        // TODO !!!! this seems suspect. Note wording of "instance of a value type" above
-                        if decTy.IsValueType then
-                            obj.AsTypeBlob assemGen (TyBlob.PtrTo (decTy.AsTypeBlob( (*false*) ).Value))
-                        else
-                            obj.AsType assemGen decTy
-                    printfn "------------------------"
-                    let fieldName = field.Name
-                    let fieldPtr = LGC.buildStructGEP bldr objPtrVal (uint32 fieldIndex) (fieldName + "Ptr")
+                            // OK now we need to load the field
+                            let objPtrVal = obj.AsType assemGen decTy
+                            let fieldPtr = LGC.buildStructGEP bldr objPtrVal (uint32 fieldIndex) (fieldName + "Ptr")
+
+                            fieldPtr
+
                     let fieldValue = LGC.buildLoad bldr fieldPtr (fieldName + "Value")
                     let fieldStackItem = StackItem.FromField bldr fieldValue field
                     goNextStackItem fieldStackItem
@@ -1106,39 +1221,9 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             | Inst.Newarr elemTypeRef ->
                 match poppedStack with
                 | [numElems] ->
-                    // TODO should this be changed to signed??? I think not
-                    let numElemsValRef = numElems.AsNativeInt false
+                    let arrTy, newArrObj = makeNewArray bldr elemTypeRef (numElems.AsNativeInt false)
+                    goNextStackItem (StackItem.FromTypeBlob bldr newArrObj arrTy)
 
-                    // allocate the array to the heap
-                    // TODO it seems pretty lame to have this code here. need to think
-                    // about how this should really be structured
-                    let elemTy = TypeUtil.LLVMVarTypeOf assemGen elemTypeRef
-                    // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
-                    let elemTypeName = simpleTypeName elemTypeRef
-                    let newArr = LGC.buildArrayMalloc bldr elemTy numElemsValRef ("new" + elemTypeName + "Arr")
-
-                    // TODO I think we have to initialize the arrays
-
-                    let basicArrTy = LGC.pointerType elemTy 0u
-                    let arrObjTy = LC.structType [|nativeIntTy; basicArrTy|] false
-                    let newArrObj = LGC.buildMalloc bldr arrObjTy ("new" + elemTypeName + "ArrObj")
-
-                    // fill in the array object
-                    let lenAddr = LGC.buildStructGEP bldr newArrObj 0u "lenAddr"
-                    LGC.buildStore bldr numElemsValRef lenAddr |> ignore
-                    let arrPtrAddr = LGC.buildStructGEP bldr newArrObj 1u "arrPtrAddr"
-                    LGC.buildStore bldr newArr arrPtrAddr |> ignore
-
-                    // TODO "None" may be the wrong thing to do here
-                    //goNextValRef newArrObj
-                    
-                    let arrTy =
-                        match elemTypeRef.AsTypeBlob() with
-                        | None -> failwith "failed to convert array element type into a type"
-                        | Some ty -> TyBlob.SzArrayOf ty
-                    let arrStackItem = StackItem.FromTypeBlob bldr newArrObj arrTy
-
-                    goNextStackItem arrStackItem
                 | _ ->
                     unexpPop()
 
@@ -1185,13 +1270,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             | Inst.Stelem elemTyRef ->
                 match poppedStack with
                 | [value; index; arrObj] ->
-                    let arrPtrAddr = LGC.buildStructGEP bldr arrObj.ValueRef 1u "arrPtrAddr"
-                    let arrPtr = LGC.buildLoad bldr arrPtrAddr "arrPtr"
-                    // TODO: make sure that index.Value is good here... will work for all native ints or int32's
-                    let elemAddr = LC.buildGEP bldr arrPtr [|index.ValueRef|] "elemAddr"
-                    LGC.buildStore bldr (value.AsType assemGen elemTyRef) elemAddr |> ignore
-
-                    goNext stackTail
+                    storeArrayElem bldr (value.AsType assemGen elemTyRef) (index.AsNativeInt true) arrObj.ValueRef
                 | _ ->
                     unexpPop()
 
@@ -1257,14 +1336,13 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                                     | FAP.ParamType.MayByRefTy mayByRef ->
                                         mayByRef.ty = TyBlob.I
                                     | FAP.ParamType.TypedByRef ->
-
                                         false
                                 | _ ->
                                     false
                             else
                                 false
                         let ctor =
-                            let runtimeField = assemGen.RuntimeFieldHandleTypeDef
+                            let runtimeField = assemGen.Mscorlib.RuntimeFieldHandleTypeDef
                             match Array.tryFind ctorMatch runtimeField.Methods with
                             | None -> failwith "failed to find RuntimeFieldHandle constructor"
                             | Some ctor -> ctor
@@ -1300,7 +1378,28 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             | Inst.StindI (unalignedOpt, volatilePrefix) -> noImpl()
             | Inst.ConvU -> noImpl()
             | Inst.Arglist -> noImpl()
-            | Inst.Ceq -> noImpl()
+            | Inst.Ceq ->
+                let ceqInt i1 i2 =
+                    let cmpResult = LGC.buildICmp bldr LGC.IntPredicate.IntEQ i1 i2 "cmpResult"
+                    let cmpResult = LGC.buildZExt bldr cmpResult int32Ty "extCmpResult"
+                    let nextStackItem = StackItem.FromTypeBlob bldr cmpResult TyBlob.I4
+                    goNextStackItem nextStackItem
+
+                match poppedStack with
+                | [FAP.STyped FAP.NativeInt_ST as value2;
+                  (FAP.STyped FAP.NativeInt_ST | FAP.STyped FAP.Int32_ST) as value1]
+                | [(FAP.STyped FAP.NativeInt_ST | FAP.STyped FAP.Int32_ST) as value2;
+                  FAP.STyped FAP.NativeInt_ST as value1] ->
+                    // TODO should this be sign extended or not??
+                    let i1 = value1.AsNativeInt(false)
+                    let i2 = value2.AsNativeInt(false)
+                    ceqInt i1 i2
+                | [FAP.STyped FAP.Int32_ST as value2; FAP.STyped FAP.Int32_ST as value1]
+                | [FAP.STyped FAP.Int64_ST as value2; FAP.STyped FAP.Int64_ST as value1] ->
+                    ceqInt value1.ValueRef value2.ValueRef
+                | _ ->
+                    failwithf "ceq not yet implemented for types: %A" [for x in poppedStack -> (x :> FAP.StackTyped).StackType]
+
             | Inst.Cgt -> noImpl()
             | Inst.CgtUn -> noImpl()
             | Inst.Clt -> noImpl()
@@ -1393,6 +1492,7 @@ and TypeRep(typeDef:FAP.TypeDef, assemGen:AssemGen) =
         new DefAndImpl<LGC.TypeRef>() with
             member x.Define() = structNamed (typeDef.FullName + "Static")
             member x.Implement varsTy =
+                //printfn "## NUM FIELDS %i ##" typeDef.StaticFields.Length
                 let staticFields = [|
                     for f in typeDef.StaticFields ->
                         TypeUtil.LLVMVarTypeOfFieldDef assemGen f
@@ -1436,24 +1536,10 @@ and TypeRep(typeDef:FAP.TypeDef, assemGen:AssemGen) =
 and AssemGen (modRef:LGC.ModuleRef, assembly:FAP.Assembly, workQueue:WorkQueue) =
     let typeRepMap = new Dict<FAP.TypeDef, TypeRep>()
 
-    let mscorlibTypeDef (tyNamespaceOpt:option<string>) (tyName:string) =
-        let mscorlib = assembly.AssemblyResolution.Mscorlib
-        match mscorlib.TypeDefNamed tyNamespaceOpt tyName with
-        | None -> failwith "failed to located System.Object type definition"
-        | Some td -> td
-    let lazySysTyDef (tyName:string) =
-        lazy (mscorlibTypeDef (Some "System") tyName)
-    let objectTypeDef               = lazySysTyDef "Object"
-    let runtimeFieldHandleTypeDef   = lazySysTyDef "RuntimeFieldHandle"
-    let sysArrayTypeDef             = lazySysTyDef "Array"
-
     member x.WorkQueue = workQueue
 
-    member x.ObjectTypeDef : FAP.TypeDef = objectTypeDef.Value
-    member x.RuntimeFieldHandleTypeDef : FAP.TypeDef = runtimeFieldHandleTypeDef.Value
-    member x.SysArrayTypeDef : FAP.TypeDef = sysArrayTypeDef.Value
-
     member x.Assembly : FAP.Assembly = assembly
+    member x.Mscorlib : FAP.MscorlibAssembly = assembly.AssemblyResolution.Mscorlib
     member x.ModuleRef : LGC.ModuleRef = modRef
     member x.GetTypeRep (ty:FAP.TypeDefRefOrSpec) : TypeRep =
         match ty with

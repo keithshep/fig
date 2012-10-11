@@ -429,9 +429,59 @@ type MetadataTables = {
     typeSpecs : TypeSpecRow array}
 
 type IAssemblyResolution =
-    abstract Mscorlib : Assembly with get
+    abstract Mscorlib : MscorlibAssembly with get
     abstract ResolveAssembly : AssemblyRef -> Assembly
     abstract RegisterAssembly : Assembly -> unit
+
+and MscorlibAssembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
+    inherit Assembly(r, assemRes)
+
+    let mscorlibTypeDef (tyNamespaceOpt:option<string>) (tyName:string) =
+        match x.TypeDefNamed tyNamespaceOpt tyName with
+        | None -> failwith "failed to located System.Object type definition"
+        | Some td -> td
+    let lazySysTyDef (tyName:string) =
+        lazy (mscorlibTypeDef (Some "System") tyName)
+
+    let objectTypeDef               = lazySysTyDef "Object"
+    let stringTypeDef               = lazySysTyDef "String"
+    let runtimeFieldHandleTypeDef   = lazySysTyDef "RuntimeFieldHandle"
+    let sysArrayTypeDef             = lazySysTyDef "Array"
+
+    let booleanTypeDef  = lazySysTyDef "Boolean"
+    let charTypeDef     = lazySysTyDef "Char"
+    let singleTypeDef   = lazySysTyDef "Single"
+    let doubleTypeDef   = lazySysTyDef "Double"
+    let sByteTypeDef    = lazySysTyDef "SByte"
+    let int16TypeDef    = lazySysTyDef "Int16"
+    let int32TypeDef    = lazySysTyDef "Int32"
+    let int64TypeDef    = lazySysTyDef "Int64"
+    let intPtrTypeDef   = lazySysTyDef "IntPtr"
+    let uIntPtrTypeDef  = lazySysTyDef "UIntPtr"
+    let byteTypeDef     = lazySysTyDef "Byte"
+    let uInt16TypeDef   = lazySysTyDef "UInt16"
+    let uInt32TypeDef   = lazySysTyDef "UInt32"
+    let uInt64TypeDef   = lazySysTyDef "UInt64"
+
+    member x.ObjectTypeDef : TypeDef                = objectTypeDef.Value
+    member x.StringTypeDef : TypeDef                = stringTypeDef.Value
+    member x.RuntimeFieldHandleTypeDef : TypeDef    = runtimeFieldHandleTypeDef.Value
+    member x.SysArrayTypeDef : TypeDef              = sysArrayTypeDef.Value
+
+    member x.BooleanTypeDef : TypeDef               = booleanTypeDef.Value
+    member x.CharTypeDef : TypeDef                  = charTypeDef.Value
+    member x.SingleTypeDef : TypeDef                = singleTypeDef.Value
+    member x.DoubleTypeDef : TypeDef                = doubleTypeDef.Value
+    member x.SByteTypeDef : TypeDef                 = sByteTypeDef.Value
+    member x.Int16TypeDef : TypeDef                 = int16TypeDef.Value
+    member x.Int32TypeDef : TypeDef                 = int32TypeDef.Value
+    member x.Int64TypeDef : TypeDef                 = int64TypeDef.Value
+    member x.IntPtrTypeDef : TypeDef                = intPtrTypeDef.Value
+    member x.UIntPtrTypeDef : TypeDef               = uIntPtrTypeDef.Value
+    member x.ByteTypeDef : TypeDef                  = byteTypeDef.Value
+    member x.UInt16TypeDef : TypeDef                = uInt16TypeDef.Value
+    member x.UInt32TypeDef : TypeDef                = uInt32TypeDef.Value
+    member x.UInt64TypeDef : TypeDef                = uInt64TypeDef.Value
 
 and Assembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) as x =
     inherit AssemblyBase()
@@ -2131,7 +2181,7 @@ and TypeDef(assem : Assembly, rowIndex : int) =
 
     member x.StaticFields = Array.filter (fun (f : FieldDef) -> f.IsStatic) x.Fields
 
-    member x.Methods =
+    member x.Methods : MethodDef array =
         let lastMethodIndex =
             let isLastTypeDef = rowIndex = mt.typeDefs.Length - 1
             if isLastTypeDef then
@@ -2604,6 +2654,10 @@ and MethodDef (assem : Assembly, rowIndex : int) =
     member x.NoInlining     = isImplFlagSet 0x0008us
     member x.NoOptimization = isImplFlagSet 0x0040us
 
+    // according to 23.1.11 both of these are reserved but at least "internal call" is used
+    member x.IsInternalCall = isImplFlagSet 0x1000us
+    member x.PreserveSig    = isImplFlagSet 0x0080us
+
     member x.MemberAccess = MemberAccess.FromUShort mdRow.flags
 
     // Section 22.26 item 7. The following combined bit settings in Flags are invalid
@@ -2655,7 +2709,8 @@ and MethodDef (assem : Assembly, rowIndex : int) =
             // * Flags.Abstract = 1, or
             // * ImplFlags.Runtime = 1, or
             // * Flags.PinvokeImpl = 1
-            if not (x.IsAbstract || x.CodeType = CodeType.Runtime || x.HasPInvokeImpl) then
+            // NOTE: it seems that "internal call" is also used in practice (though it's non-standard)
+            if not (x.IsAbstract || x.CodeType = CodeType.Runtime || x.HasPInvokeImpl || x.IsInternalCall) then
                 failwith "bad method body RVA"
             None
         else
@@ -2714,10 +2769,18 @@ and MethodDef (assem : Assembly, rowIndex : int) =
         if x.HasMethodBody then
             simpleCheck()
         else
-            match x.CodeType, x.HasPInvokeImpl with
+            // TODO what was I thinking with IsInternalCall?? is it really needed somewhere
+            match x.CodeType, x.HasPInvokeImpl (*|| x.IsInternalCall*) with
             | CodeType.IL, true -> false
             | (ct, hasPI) ->
-                failwithf "no impl yet for HasThis where CodeType=%A and HasPInvokeImpl=%b" ct hasPI
+                if x.IsInternalCall then
+                    simpleCheck()
+                else
+                    failwithf
+                        "no impl yet for HasThis where CodeType=%A, HasPInvokeImpl=%b, IsInternalCall=%b"
+                        ct
+                        hasPI
+                        x.IsInternalCall
 
 
     member x.ThisParam : Parameter option =
@@ -4207,12 +4270,13 @@ and [<RequireQualifiedAccess>] TypeBlob =
                 failwithf "I have no clue what to do with %A" x
     
             let fromManagedPtr (pointeeType : TypeBlob) =
+                // TODO should this be ManagedPointer for struct types. I don't think so
                 match pointeeType with
-                | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 -> iHaveNoClue() //Int32_ST
-                | I8 | U8 -> iHaveNoClue() //Int64_ST
-                | R4 -> iHaveNoClue() //Float32_ST
-                | R8 -> iHaveNoClue() //Float64_ST
-                | I | U -> iHaveNoClue() //NativeInt_ST
+                | Boolean | Char | I1 | U1 | I2 | U2 | I4 | U4 -> NativeInt_ST
+                | I8 | U8 -> NativeInt_ST
+                | R4 -> NativeInt_ST
+                | R8 -> NativeInt_ST
+                | I | U -> NativeInt_ST
                 | _ -> ManagedPointer_ST
 
             match x with
@@ -4232,14 +4296,23 @@ and [<RequireQualifiedAccess>] TypeBlob =
                 // TODO I think this is probably completely bogus
                 ObjectRef_ST
             | Class _ ->
-                // TODO understand difference between object and class
-                // I think Object means the base object type
                 ObjectRef_ST
             | Var _ -> iHaveNoClue ()
             | Array _ | SzArray _ -> ObjectRef_ST
             | GenericInst _ -> iHaveNoClue ()
             | FnPtr _ -> iHaveNoClue ()
             | MVar _ -> iHaveNoClue ()
+
+        member x.IsObjOrVal : bool =
+            match x with
+            | Object | String | ValueType _ | Class _
+            | Array _ | SzArray _ ->
+                true
+            | Ptr _ | Boolean | Char
+            | I1 | U1 | I2 | U2 | I4 | U4
+            | I8 | U8 | R4 | R8 | I | U
+            | Var _ | GenericInst _ | FnPtr _ | MVar _ ->
+                false
 
         static member PtrTo (ty:TypeBlob) : TypeBlob = Ptr([], Some ty)
         static member SzArrayOf (ty:TypeBlob) : TypeBlob = SzArray([], ty)
