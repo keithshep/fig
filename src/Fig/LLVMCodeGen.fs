@@ -1271,6 +1271,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                 match poppedStack with
                 | [value; index; arrObj] ->
                     storeArrayElem bldr (value.AsType assemGen elemTyRef) (index.AsNativeInt true) arrObj.ValueRef
+                    goNext stackTail
                 | _ ->
                     unexpPop()
 
