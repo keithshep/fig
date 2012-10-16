@@ -6,6 +6,12 @@ module FPC = Fig.ParseCode
 module LC = LLVM.Core
 module LGC = LLVM.Generated.Core
 
+let addAndInitGlobal (modRef:LGC.ModuleRef) (ty:LGC.TypeRef) (name:string) : LGC.ValueRef =
+    let globalVal = LGC.addGlobal modRef ty name
+    LGC.setLinkage globalVal LGC.Linkage.InternalLinkage
+    LGC.setInitializer globalVal (LGC.constNull ty)
+    globalVal
+
 type Dict<'k, 'v> = System.Collections.Generic.Dictionary<'k, 'v>
 type WorkQueue = System.Collections.Generic.Queue<unit -> unit>
 
@@ -214,7 +220,7 @@ type TypeUtil =
 ///
 /// Storing to integers, booleans, and characters
 /// (stloc, stfld, stind.i1, stelem.i2, etc.) truncates. Use the conv.ovf.* instructions
-/// to detect when this truncation results in a value that doesn‘t correctly represent
+/// to detect when this truncation results in a value that doesn't correctly represent
 /// the original value.
 ///
 /// [Note: Short (i.e., 1- and 2-byte) integers are loaded as 4-byte numbers on all
@@ -962,7 +968,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                 // The mul instruction multiplies value1 by value2 and pushes
                 // the result on the stack. Integral operations silently
                 // truncate the upper bits on overflow (see mul.ovf).
-                // TODO: For floating-point types, 0 × infinity = NaN.
+                // TODO: For floating-point types, 0 x infinity = NaN.
                 match poppedStack with
                 | [value2; value1] ->
                     let pushTy = pushType()
@@ -1480,7 +1486,7 @@ and FieldRep(typeRep:TypeRep, fieldDef:FAP.FieldDef) =
                 LC.structSetBody metaTyRef [||] false
     }
     let metadataGlobal = lazy(
-        LGC.addGlobal modRef metadataType.Value (fieldDef.FullName + "MetadataGlobal")
+        addAndInitGlobal modRef metadataType.Value (fieldDef.FullName + "MetadataGlobal")
     )
     member x.MetadataGlobal : LGC.ValueRef = metadataGlobal.Value
 
@@ -1501,7 +1507,7 @@ and TypeRep(typeDef:FAP.TypeDef, assemGen:AssemGen) =
                 LC.structSetBody varsTy staticFields false
     }
     let staticVarsGlobal = lazy(
-        LGC.addGlobal modRef staticVarsType.Value (typeDef.FullName + "Global")
+        addAndInitGlobal modRef staticVarsType.Value (typeDef.FullName + "Global")
     )
     let instanceRef = {
         new DefAndImpl<LGC.TypeRef>() with
