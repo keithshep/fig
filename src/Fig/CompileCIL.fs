@@ -21,10 +21,7 @@ let main args =
         let assem =
             let gacPaths = [|"/Library/Frameworks/Mono.framework/Versions/2.10.9/lib/mono/gac/"|]
             new Assembly(r, new MonoAssemblyResolution(gacPaths, 4us, 0us, 0us, 0us))
-        //let llvmModuleRef = moduleCreateWithName "module"
-        let llvmModuleRef =
-            createMemoryBufferWithContentsOfFile "build/fig_runtime.bc"
-            |> parseBitcode
+        let llvmModuleRef = moduleCreateWithName "module"
         
         try
             genTypeDefs llvmModuleRef assem

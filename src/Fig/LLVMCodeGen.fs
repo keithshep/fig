@@ -589,7 +589,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             
             let allParams = ctor.AllParameters
             let stackItemToArg (i:int) (item:StackItem) =
-                item.AsParam assemGen allParams.[i].Type
+                item.AsParam assemGen allParams.[i + 1].Type
             let args = newObj :: List.mapi stackItemToArg args
 
             (*
@@ -879,13 +879,13 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
 
             | Inst.LdcI4 i ->
                 let constResult = LGC.constInt int32Ty (uint64 i) false // TODO correct me!!
-                goNextValRef constResult
+                goNextStackItem (StackItem.FromTypeBlob bldr constResult TyBlob.I4)
 
             | Inst.LdcI8 i -> noImpl()
             | Inst.LdcR4 r -> noImpl()
             | Inst.LdcR8 r ->
                 let constResult = LGC.constReal doubleTy r
-                goNextValRef constResult
+                goNextStackItem (StackItem.FromTypeBlob bldr constResult TyBlob.R8)
             | Inst.LdindI1 (unalignedOpt, volatilePrefix) -> noImpl()
             | Inst.LdindU1 (unalignedOpt, volatilePrefix) -> noImpl()
             | Inst.LdindI2 (unalignedOpt, volatilePrefix) -> noImpl()

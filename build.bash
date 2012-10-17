@@ -17,6 +17,3 @@ fsc --nologo --debug --out:build/CompileCIL.exe \
     src/Fig/LLVMCodeGen.fs \
     src/Fig/CompileCIL.fs
 
-clang -c src-c/fig_runtime.c -emit-llvm -o build/fig_runtime.bc
-#clang src-c/fig_runtime.c -S -emit-llvm -o -
-#clang -c src-c/fig_runtime.c -emit-llvm -o - | llvm-dis
