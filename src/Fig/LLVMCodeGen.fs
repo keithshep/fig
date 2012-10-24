@@ -6,18 +6,59 @@ module FPC = Fig.ParseCode
 module LC = LLVM.Core
 module LGC = LLVM.Generated.Core
 
-let addAndInitGlobal (modRef:LGC.ModuleRef) (ty:LGC.TypeRef) (name:string) : LGC.ValueRef =
-    let globalVal = LGC.addGlobal modRef ty name
-    LGC.setLinkage globalVal LGC.Linkage.InternalLinkage
-    LGC.setInitializer globalVal (LGC.constNull ty)
-    globalVal
-
 type Dict<'k, 'v> = System.Collections.Generic.Dictionary<'k, 'v>
 type WorkQueue = System.Collections.Generic.Queue<unit -> unit>
 
 type Inst = FAP.AbstInst
 type TyBlob = FAP.TypeBlob
 type StackType = FAP.StackType
+
+// an active patter that takes a parameter and extracts the TypeBlob
+// when there are no custom mods
+let (|SimplePTy|OtherPTy|) (p:FAP.Parameter) =
+    match p.Type with
+    | {FAP.Param.customMods=[]; FAP.Param.pType=FAP.MayByRefTy mayByTy} ->
+        if mayByTy.isByRef then
+            OtherPTy
+        else
+            SimplePTy mayByTy.ty
+    | _ ->
+        OtherPTy
+
+let tyBlobEqTy (mscorlib:FAP.MscorlibAssembly) (ty:FAP.TypeDefRefOrSpec) (tb:TyBlob) : bool =
+    let doTest (otherTy:FAP.TypeDef) =
+        match ty with
+        | :? FAP.TypeDefOrRef as ty ->
+            ty.Resolve() = otherTy
+        | _ ->
+            false
+
+    match tb with
+    | TyBlob.Object -> doTest mscorlib.ObjectTypeDef
+    | TyBlob.String -> doTest mscorlib.StringTypeDef
+    | TyBlob.Class blobTy | TyBlob.ValueType blobTy ->
+        match blobTy with
+        | :? FAP.TypeDefOrRef as blobTy ->
+            doTest(blobTy.Resolve())
+        | _ ->
+            false
+    | _ ->
+        false
+
+let (|EqTy|) (mscorlib:FAP.MscorlibAssembly) (ty:FAP.TypeDefRefOrSpec) (tb:TyBlob) =
+    if tyBlobEqTy mscorlib ty tb then
+        EqTy true
+    else
+        EqTy false
+
+let addAndInitGlobal (modRef:LGC.ModuleRef) (ty:LGC.TypeRef) (name:string) (initVal:LGC.ValueRef) : LGC.ValueRef =
+    let globalVal = LGC.addGlobal modRef ty name
+    LGC.setLinkage globalVal LGC.Linkage.InternalLinkage
+    LGC.setInitializer globalVal initVal
+    globalVal
+
+let addAndZeroInitGlobal (modRef:LGC.ModuleRef) (ty:LGC.TypeRef) (name:string) : LGC.ValueRef =
+    addAndInitGlobal modRef ty name (LGC.constNull ty)
 
 type [<AbstractClass>] DefAndImpl<'T> (?wq:WorkQueue) =
     let mutable valueOpt = None : 'T option
@@ -87,7 +128,40 @@ let simpleTypeName (ty : FAP.TypeDefRefOrSpec) =
     | _ ->
         failwithf "typeSimpleName: unexpected type %s" (ty.GetType().Name)
 
-type TypeUtil =
+type CodeGenUtil =
+    static member MakeNewArray (assemGen:AssemGen) (bldr:LGC.BuilderRef) (elemTypeRef:FAP.TypeDefRefOrSpec) (numElemsValRef:LGC.ValueRef) =
+        // TODO should this be changed to signed??? I think not
+        //let numElemsValRef = numElems.AsNativeInt false
+
+        // allocate the array to the heap
+        // TODO it seems pretty lame to have this code here. need to think
+        // about how this should really be structured
+        let elemTy = TypeUtil.LLVMVarTypeOf assemGen elemTypeRef
+        // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
+        let elemTypeName = simpleTypeName elemTypeRef
+        let newArr = LGC.buildArrayMalloc bldr elemTy numElemsValRef ("new" + elemTypeName + "Arr")
+
+        // TODO I think we have to initialize the arrays
+
+        let basicArrTy = LGC.pointerType elemTy 0u
+        let arrObjTy = LC.structType [|nativeIntTy; basicArrTy|] false
+        let newArrObj = LGC.buildMalloc bldr arrObjTy ("new" + elemTypeName + "ArrObj")
+
+        // fill in the array object
+        let lenAddr = LGC.buildStructGEP bldr newArrObj 0u "lenAddr"
+        LGC.buildStore bldr numElemsValRef lenAddr |> ignore
+        let arrPtrAddr = LGC.buildStructGEP bldr newArrObj 1u "arrPtrAddr"
+        LGC.buildStore bldr newArr arrPtrAddr |> ignore
+
+        let arrTy =
+            match elemTypeRef.AsTypeBlob() with
+            | None -> failwith "failed to convert array element type into a type"
+            | Some ty -> TyBlob.SzArrayOf ty
+
+        //StackItem.FromTypeBlob bldr newArrObj arrTy
+        (arrTy, newArrObj)
+
+and TypeUtil =
     static member LLVMVarTypeOfTypeBlob (assemGen : AssemGen) (tyBlob : TyBlob) : LGC.TypeRef =
         let noImpl() = failwithf "LLVMVarTypeOfTypeBlob: no impl for %A type yet" tyBlob
         let ptrTo (ty:FAP.TypeDefRefOrSpec) : LGC.TypeRef =
@@ -542,38 +616,6 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
         let elemAddr = LC.buildGEP bldr arrPtr [|index|] "elemAddr"
         LGC.buildStore bldr value elemAddr |> ignore
 
-    let makeNewArray (bldr:LGC.BuilderRef) (elemTypeRef:FAP.TypeDefRefOrSpec) (numElemsValRef:LGC.ValueRef) =
-        // TODO should this be changed to signed??? I think not
-        //let numElemsValRef = numElems.AsNativeInt false
-
-        // allocate the array to the heap
-        // TODO it seems pretty lame to have this code here. need to think
-        // about how this should really be structured
-        let elemTy = TypeUtil.LLVMVarTypeOf assemGen elemTypeRef
-        // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
-        let elemTypeName = simpleTypeName elemTypeRef
-        let newArr = LGC.buildArrayMalloc bldr elemTy numElemsValRef ("new" + elemTypeName + "Arr")
-
-        // TODO I think we have to initialize the arrays
-
-        let basicArrTy = LGC.pointerType elemTy 0u
-        let arrObjTy = LC.structType [|nativeIntTy; basicArrTy|] false
-        let newArrObj = LGC.buildMalloc bldr arrObjTy ("new" + elemTypeName + "ArrObj")
-
-        // fill in the array object
-        let lenAddr = LGC.buildStructGEP bldr newArrObj 0u "lenAddr"
-        LGC.buildStore bldr numElemsValRef lenAddr |> ignore
-        let arrPtrAddr = LGC.buildStructGEP bldr newArrObj 1u "arrPtrAddr"
-        LGC.buildStore bldr newArr arrPtrAddr |> ignore
-
-        let arrTy =
-            match elemTypeRef.AsTypeBlob() with
-            | None -> failwith "failed to convert array element type into a type"
-            | Some ty -> TyBlob.SzArrayOf ty
-
-        //StackItem.FromTypeBlob bldr newArrObj arrTy
-        (arrTy, newArrObj)
-
     let makeNewObj (bldr:LGC.BuilderRef) (ctor:FAP.Method) (args:StackItem list) =
         // TODO implement GC along with object/class initialization code
         // FIXME naming is all screwed up! fix it
@@ -656,7 +698,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                     let retTy = TypeUtil.LLVMVarTypeOfRetType assemGen methDef.ReturnType
                     let funcTy = LC.functionType retTy paramTys
                     let fn = LGC.addFunction moduleRef methDef.Name funcTy
-                    LGC.setLinkage fn LGC.Linkage.ExternalLinkage
+                    //LGC.setLinkage fn LGC.Linkage.ExternalLinkage
 
                     Seq.iteri (nameFunParam fn) methDef.Parameters
 
@@ -705,7 +747,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                 | [value] ->
                     // TODO would be more efficient to have custom test per size
                     let valToTest = value.AsInt false PrimSizeBytes.Eight
-                    let zero = LGC.constInt (LGC.int64Type()) 0uL false
+                    let zero = LC.constUInt64 0uL
                     let isZero = LGC.buildICmp bldr LGC.IntPredicate.IntEQ valToTest zero "isZero"
                     let nonZeroBlk = llvmBlocks.[nonZeroBB]
                     let zeroBlk = llvmBlocks.[zeroBB]
@@ -878,14 +920,12 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                     goNextStackItem (StackItem.FromTypeBlob bldr value ptrTy)
 
             | Inst.LdcI4 i ->
-                let constResult = LGC.constInt int32Ty (uint64 i) false // TODO correct me!!
-                goNextStackItem (StackItem.FromTypeBlob bldr constResult TyBlob.I4)
+                goNextStackItem (StackItem.FromTypeBlob bldr (LC.constInt32 i) TyBlob.I4)
 
             | Inst.LdcI8 i -> noImpl()
             | Inst.LdcR4 r -> noImpl()
             | Inst.LdcR8 r ->
-                let constResult = LGC.constReal doubleTy r
-                goNextStackItem (StackItem.FromTypeBlob bldr constResult TyBlob.R8)
+                goNextStackItem (StackItem.FromTypeBlob bldr (LC.constDouble r) TyBlob.R8)
             | Inst.LdindI1 (unalignedOpt, volatilePrefix) -> noImpl()
             | Inst.LdindU1 (unalignedOpt, volatilePrefix) -> noImpl()
             | Inst.LdindI2 (unalignedOpt, volatilePrefix) -> noImpl()
@@ -924,13 +964,13 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                 | [] ->
                     // allocate the string array
                     let sizeInt = LGC.constInt nativeIntTy (uint64 str.Length) false
-                    let arrTy, arrVal = makeNewArray bldr assemGen.Mscorlib.CharTypeDef sizeInt
+                    let arrTy, arrVal = CodeGenUtil.MakeNewArray assemGen bldr assemGen.Mscorlib.CharTypeDef sizeInt
 
                     // fill in the string array
                     // TODO this is super-duper inefficient
                     for i = 0 to str.Length - 1 do
                         let iConst = LGC.constInt nativeIntTy (uint64 i) false
-                        let charConst = LGC.constInt int16Ty (uint64 <| str.Chars(i)) false
+                        let charConst = LC.constUInt16 (uint16 str.[i])
                         storeArrayElem bldr charConst iConst arrVal
 
                     // call the string constructor
@@ -1078,9 +1118,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             
                 match poppedStack with
                 | [value] ->
-                    let caseInts =
-                        [|for i in 0 .. blockIndexes.Length - 1 ->
-                            LGC.constInt int32Ty (uint64 i) false|]
+                    let caseInts = [|for i in 0 .. blockIndexes.Length - 1 -> LC.constInt32 i|]
                     let caseBlocks = [|for b in blockIndexes -> llvmBlocks.[b]|]
                     let target = value.AsInt false PrimSizeBytes.Four
                     let fallthroughBlock = llvmBlocks.[blockIndex + 1]
@@ -1227,7 +1265,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             | Inst.Newarr elemTypeRef ->
                 match poppedStack with
                 | [numElems] ->
-                    let arrTy, newArrObj = makeNewArray bldr elemTypeRef (numElems.AsNativeInt false)
+                    let arrTy, newArrObj = CodeGenUtil.MakeNewArray assemGen bldr elemTypeRef (numElems.AsNativeInt false)
                     goNextStackItem (StackItem.FromTypeBlob bldr newArrObj arrTy)
 
                 | _ ->
@@ -1355,6 +1393,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
                             | Some ctor -> ctor
 
                         // the field metadata pointer should be our constructors single argument
+                        // (must be cast to a nativeint)
                         let fieldPtr =
                             let field = FAP.FieldDef.FromMetadataToken methDef.Assembly metaTok
                             let fieldRep = typeRep.GetFieldRep(field.Resolve())
@@ -1422,27 +1461,137 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             | Inst.Sizeof ty -> noImpl()
             | Inst.Refanytype -> noImpl()
 
-    let maybeGenMethodBody (methodVal : LGC.ValueRef) : unit =
+    let createEntryBlock (methodVal:LGC.ValueRef) =
+        let entryBlock = LGC.appendBasicBlock methodVal "entry"
+        use bldr = new LC.Builder(entryBlock)
+        let args = [|
+            for p in methDef.AllParameters ->
+                let llvmTy = TypeUtil.LLVMVarTypeOfParam assemGen p.Type
+                LGC.buildAlloca bldr llvmTy (p.Name + "_paramAlloca")
+        |]
+        for i = 0 to args.Length - 1 do
+            LGC.buildStore bldr (LGC.getParam methodVal (uint32 i)) args.[i] |> ignore
+        let locals =
+            match methDef.MethodBody with
+            | None -> [||]
+            | Some methBody ->
+                [|for localVarSig in methBody.locals ->
+                    let llvmTy = TypeUtil.LLVMVarTypeOfLocalVar assemGen localVarSig
+                    LGC.buildAlloca bldr llvmTy "localAlloca"|]
+
+        entryBlock, args, locals
+
+    let genStrCtorArrBody (methodVal:LGC.ValueRef) : unit =
+        //printfn "$$$$$$$$$$$$ %A $$$$$$$$$$$$" methDef
+        let entryBlock, args, _ = createEntryBlock methodVal
+        use bldr = new LC.Builder(entryBlock)
+        LGC.buildRetVoid bldr |> ignore
+
+    let genInternalInitArray (methodVal:LGC.ValueRef) : unit =
+        //printfn "############ %A ############" methDef
+        let entryBlock, args, _ = createEntryBlock methodVal
+        use bldr = new LC.Builder(entryBlock)
+
+        (*
+            static member MakeNewArray (assemGen:AssemGen) (bldr:LGC.BuilderRef) (elemTypeRef:FAP.TypeDefRefOrSpec) (numElemsValRef:LGC.ValueRef) =
+                // TODO should this be changed to signed??? I think not
+                //let numElemsValRef = numElems.AsNativeInt false
+
+                // allocate the array to the heap
+                // TODO it seems pretty lame to have this code here. need to think
+                // about how this should really be structured
+                let elemTy = TypeUtil.LLVMVarTypeOf assemGen elemTypeRef
+                // TODO: make sure that numElems.Value is good here... will work for all native ints or int32's
+                let elemTypeName = simpleTypeName elemTypeRef
+                let newArr = LGC.buildArrayMalloc bldr elemTy numElemsValRef ("new" + elemTypeName + "Arr")
+
+                // TODO I think we have to initialize the arrays
+
+                let basicArrTy = LGC.pointerType elemTy 0u
+                let arrObjTy = LC.structType [|nativeIntTy; basicArrTy|] false
+                let newArrObj = LGC.buildMalloc bldr arrObjTy ("new" + elemTypeName + "ArrObj")
+
+                // fill in the array object
+                let lenAddr = LGC.buildStructGEP bldr newArrObj 0u "lenAddr"
+                LGC.buildStore bldr numElemsValRef lenAddr |> ignore
+                let arrPtrAddr = LGC.buildStructGEP bldr newArrObj 1u "arrPtrAddr"
+                LGC.buildStore bldr newArr arrPtrAddr |> ignore
+
+                let arrTy =
+                    match elemTypeRef.AsTypeBlob() with
+                    | None -> failwith "failed to convert array element type into a type"
+                    | Some ty -> TyBlob.SzArrayOf ty
+
+                //StackItem.FromTypeBlob bldr newArrObj arrTy
+                (arrTy, newArrObj)
+        *)
+
+        (*
+            // method line 11237
+            .method private static hidebysig 
+                   default void InitializeArray (class System.Array 'array', native int fldHandle)  cil managed internalcall 
+            {
+                // Method begins at RVA 0x0
+            } // end of method RuntimeHelpers::InitializeArray
+        *)
+
+        (*
+        and FieldRep(typeRep:TypeRep, fieldDef:FAP.FieldDef) =
+            let modRef = typeRep.AssemGen.ModuleRef
+            let structNamed name = LGC.structCreateNamed (LGC.getModuleContext modRef) name
+            let data = match fieldDef.Data with None -> [||] | Some data -> data
+            let metadataType = {
+                new DefAndImpl<LGC.TypeRef>() with
+                    member x.Define() = structNamed (fieldDef.FullName + "MetadataType")
+                    member x.Implement metaTyRef =
+                        LC.structSetBody metaTyRef [|nativeIntTy; LGC.arrayType int8Ty (uint32 data.Length)|] false
+            }
+            let metadataGlobal = lazy(
+                let dataLenValRef = LGC.constInt nativeIntTy (uint64 data.Length) false
+                let dataArrVal = LC.constArray int8Ty (Array.map LC.constUInt8 data)
+                let metaConst = LC.constNamedStruct metadataType.Value [|dataLenValRef; dataArrVal|]
+
+                addAndInitGlobal modRef metadataType.Value (fieldDef.FullName + "MetadataGlobal") metaConst
+            )
+            member x.MetadataGlobal : LGC.ValueRef = metadataGlobal.Value
+        *)
+
+        //let block = LGC.appendBasicBlock methodVal "block_0"
+
+        LGC.buildRetVoid bldr |> ignore
+ 
+    let maybeGenMethodBody (methodVal:LGC.ValueRef) : unit =
 
         match methDef.MethodBody with
-        | None -> ()
+        | None ->
+            if methDef.IsInternalCall then
+                let noImpl() =
+                    failwithf "no implementation for internal call %s" (methDef.CilId assemGen.Assembly)
+                
+                let methParams = methDef.Parameters
+                let decTy = methDef.DeclaringType
+                if decTy = assemGen.Mscorlib.StringTypeDef then
+                    match methDef.IsCtor, methDef.Parameters with
+                    | true, [|SimplePTy (TyBlob.SzArray ([], TyBlob.Char))|] ->
+                        genStrCtorArrBody methodVal
+                    | _ ->
+                        noImpl()
+                elif decTy = assemGen.Mscorlib.RuntimeHelpersTypeDef then
+                    let mscor = assemGen.Mscorlib
+                    match methDef.IsStatic, methDef.Name, methDef.Parameters with
+                    | true, "InitializeArray", [|SimplePTy (EqTy mscor mscor.SysArrayTypeDef true); SimplePTy TyBlob.I|] ->
+                        genInternalInitArray methodVal
+                    | _ ->
+                        noImpl()
+                else
+                    noImpl()
+            else
+                ()
         | Some methBody ->
             printfn "== generating method body for: %s ==" (methDef.CilId assemGen.Assembly)
             
             // create the entry block
-            use bldr = new LC.Builder(LGC.appendBasicBlock methodVal "entry")
-            let args = [|
-                for p in methDef.AllParameters ->
-                    let llvmTy = TypeUtil.LLVMVarTypeOfParam assemGen p.Type
-                    LGC.buildAlloca bldr llvmTy (p.Name + "_paramAlloca")
-            |]
-            for i = 0 to args.Length - 1 do
-                LGC.buildStore bldr (LGC.getParam methodVal (uint32 i)) args.[i] |> ignore
-            let locals = [|
-                for localVarSig in methBody.locals ->
-                    let llvmTy = TypeUtil.LLVMVarTypeOfLocalVar assemGen localVarSig
-                    LGC.buildAlloca bldr llvmTy "localAlloca"
-            |]
+            let entryBlock, args, locals = createEntryBlock methodVal
 
             // declare all of the other blocks
             let blocks = methBody.blocks
@@ -1455,6 +1604,7 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
             |]
             
             // build instructions for all of the blocks
+            use bldr = new LC.Builder(entryBlock)
             LGC.buildBr bldr blockDecs.[0] |> ignore
             for i in 0 .. blocks.Length - 1 do
                 use bldr = new LC.Builder(blockDecs.[i])
@@ -1478,15 +1628,19 @@ and MethodRep(typeRep:TypeRep, methDef:FAP.MethodDef) =
 and FieldRep(typeRep:TypeRep, fieldDef:FAP.FieldDef) =
     let modRef = typeRep.AssemGen.ModuleRef
     let structNamed name = LGC.structCreateNamed (LGC.getModuleContext modRef) name
+    let data = match fieldDef.Data with None -> [||] | Some data -> data
     let metadataType = {
         new DefAndImpl<LGC.TypeRef>() with
             member x.Define() = structNamed (fieldDef.FullName + "MetadataType")
             member x.Implement metaTyRef =
-                // TODO implement me!
-                LC.structSetBody metaTyRef [||] false
+                LC.structSetBody metaTyRef [|nativeIntTy; LGC.arrayType int8Ty (uint32 data.Length)|] false
     }
     let metadataGlobal = lazy(
-        addAndInitGlobal modRef metadataType.Value (fieldDef.FullName + "MetadataGlobal")
+        let dataLenValRef = LGC.constInt nativeIntTy (uint64 data.Length) false
+        let dataArrVal = LC.constArray int8Ty (Array.map LC.constUInt8 data)
+        let metaConst = LC.constNamedStruct metadataType.Value [|dataLenValRef; dataArrVal|]
+
+        addAndInitGlobal modRef metadataType.Value (fieldDef.FullName + "MetadataGlobal") metaConst
     )
     member x.MetadataGlobal : LGC.ValueRef = metadataGlobal.Value
 
@@ -1499,7 +1653,6 @@ and TypeRep(typeDef:FAP.TypeDef, assemGen:AssemGen) =
         new DefAndImpl<LGC.TypeRef>() with
             member x.Define() = structNamed (typeDef.FullName + "Static")
             member x.Implement varsTy =
-                //printfn "## NUM FIELDS %i ##" typeDef.StaticFields.Length
                 let staticFields = [|
                     for f in typeDef.StaticFields ->
                         TypeUtil.LLVMVarTypeOfFieldDef assemGen f
@@ -1507,7 +1660,7 @@ and TypeRep(typeDef:FAP.TypeDef, assemGen:AssemGen) =
                 LC.structSetBody varsTy staticFields false
     }
     let staticVarsGlobal = lazy(
-        addAndInitGlobal modRef staticVarsType.Value (typeDef.FullName + "Global")
+        addAndZeroInitGlobal modRef staticVarsType.Value (typeDef.FullName + "Global")
     )
     let instanceRef = {
         new DefAndImpl<LGC.TypeRef>() with
@@ -1610,7 +1763,8 @@ let genMainFunction
         noRetTyImpl()
 
     match retTy.rType with
-    | FAP.RetTypeKind.Void -> LGC.buildRet bldr (LGC.constInt int32Ty 0uL false) |> ignore
+    // TODO I think I should return a native in here not int32 right??
+    | FAP.RetTypeKind.Void -> LGC.buildRet bldr (LC.constInt32 0) |> ignore
     | FAP.RetTypeKind.TypedByRef -> noRetTyImpl()
     | FAP.RetTypeKind.MayByRefTy mayByRef ->
         if mayByRef.isByRef then

@@ -445,8 +445,10 @@ and MscorlibAssembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) a
 
     let objectTypeDef               = lazySysTyDef "Object"
     let stringTypeDef               = lazySysTyDef "String"
-    let runtimeFieldHandleTypeDef   = lazySysTyDef "RuntimeFieldHandle"
     let sysArrayTypeDef             = lazySysTyDef "Array"
+    let runtimeFieldHandleTypeDef   = lazySysTyDef "RuntimeFieldHandle"
+    let runtimeHelpersTypeDef =
+        lazy mscorlibTypeDef (Some "System.Runtime.CompilerServices") "RuntimeHelpers"
 
     let booleanTypeDef  = lazySysTyDef "Boolean"
     let charTypeDef     = lazySysTyDef "Char"
@@ -465,8 +467,9 @@ and MscorlibAssembly(r : PosStackBinaryReader, assemRes : IAssemblyResolution) a
 
     member x.ObjectTypeDef : TypeDef                = objectTypeDef.Value
     member x.StringTypeDef : TypeDef                = stringTypeDef.Value
-    member x.RuntimeFieldHandleTypeDef : TypeDef    = runtimeFieldHandleTypeDef.Value
     member x.SysArrayTypeDef : TypeDef              = sysArrayTypeDef.Value
+    member x.RuntimeFieldHandleTypeDef : TypeDef    = runtimeFieldHandleTypeDef.Value
+    member x.RuntimeHelpersTypeDef : TypeDef        = runtimeHelpersTypeDef.Value
 
     member x.BooleanTypeDef : TypeDef               = booleanTypeDef.Value
     member x.CharTypeDef : TypeDef                  = charTypeDef.Value
@@ -2517,7 +2520,7 @@ and MethodRef (assem : Assembly, rowIndex : int) =
     override x.CilId(assemCtxt : AssemblyBase) = x.Resolve().CilId(assemCtxt)
     override x.ToString() = "MethodRef(" + x.CilId assem + ")"
 
-and MethodDef (assem : Assembly, rowIndex : int) =
+and MethodDef (assem : Assembly, rowIndex : int) as x =
     inherit Method()
 
     let mt = assem.MetadataTables
@@ -2589,6 +2592,31 @@ and MethodDef (assem : Assembly, rowIndex : int) =
                 blocks = AbstInst.toAbstInstBlocks assem insts
                 exceptionClauses = exceptionSecs
             }
+
+    let methodBody =
+        lazy (
+            if mdRow.rva = 0u then
+                // Section 22.26 item 33. If RVA = 0, then either:
+                // * Flags.Abstract = 1, or
+                // * ImplFlags.Runtime = 1, or
+                // * Flags.PinvokeImpl = 1
+                // NOTE: it seems that "internal call" is also used in practice (though it's non-standard)
+                if not (x.IsAbstract || x.CodeType = CodeType.Runtime || x.HasPInvokeImpl || x.IsInternalCall) then
+                    failwith "bad method body RVA"
+                None
+            else
+                // Section 22.26 item 34. If RVA != 0, then:
+                // a. Flags.Abstract shall be 0, and
+                // b. ImplFlags.CodeTypeMask shall have exactly one of the following values: Native,  CIL, or
+                //    Runtime, and
+                // c. RVA shall point into the CIL code stream in this file
+                // TODO check these conditions
+
+                let r = assem.Reader
+                r.BaseStream.Seek (assem.RVAToDiskPos mdRow.rva, SeekOrigin.Begin) |> ignore
+
+                Some (readMethodBody r)
+        )
 
     let signature =
         lazy (
@@ -2703,28 +2731,7 @@ and MethodDef (assem : Assembly, rowIndex : int) =
     member x.ReturnType = x.Signature.retType
 
     member x.HasMethodBody = mdRow.rva <> 0u
-    member x.MethodBody =
-        if mdRow.rva = 0u then
-            // Section 22.26 item 33. If RVA = 0, then either:
-            // * Flags.Abstract = 1, or
-            // * ImplFlags.Runtime = 1, or
-            // * Flags.PinvokeImpl = 1
-            // NOTE: it seems that "internal call" is also used in practice (though it's non-standard)
-            if not (x.IsAbstract || x.CodeType = CodeType.Runtime || x.HasPInvokeImpl || x.IsInternalCall) then
-                failwith "bad method body RVA"
-            None
-        else
-            // Section 22.26 item 34. If RVA != 0, then:
-            // a. Flags.Abstract shall be 0, and
-            // b. ImplFlags.CodeTypeMask shall have exactly one of the following values: Native,  CIL, or
-            //    Runtime, and
-            // c. RVA shall point into the CIL code stream in this file
-            // TODO check these conditions
-
-            let r = assem.Reader
-            r.BaseStream.Seek (assem.RVAToDiskPos mdRow.rva, SeekOrigin.Begin) |> ignore
-
-            Some (readMethodBody r)
+    member x.MethodBody = methodBody.Value
 
     member x.DeclaringType : TypeDef =
         let tdRows = mt.typeDefs
