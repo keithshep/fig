@@ -1,5 +1,10 @@
+Backup/
 mono-il-code/
 *.suo
 build/
 build-bck/
 *.dll
+UpgradeLog*
+UpgradeReport*
+*.userprefs
+temp/
